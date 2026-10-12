@@ -323,6 +323,7 @@ for (const theme of Object.keys(THEMES)) {
   await p.waitForTimeout(300);
   check(`[${theme}] the switched-to panel stays open once the switch settles`, (await p.$(".files-panel")) !== null);
   check(`[${theme}] dirty editor dot on the touched file`, (await p.$(".files-panel .file-row .dirty")) !== null);
+  check(`[${theme}] a list wholly inside the one workspace carries no group heads`, (await p.$(".files-panel .group-head")) === null);
   // files, never counts: a change is counted only on the edit that
   // reported it — the panel has no trustworthy "before" for a session
   check(`[${theme}] the files panel counts no lines`, !/\+\d|−\d|-\d/.test(await p.$eval(".files-panel", (el) => el.textContent)));
@@ -333,6 +334,34 @@ for (const theme of Object.keys(THEMES)) {
   await p.keyboard.press("Escape");
   check(`[${theme}] Escape closes the files panel`, await p.waitForSelector(".files-panel", { state: "detached", timeout: 3000 }).then(() => true, () => false));
   check(`[${theme}] focus returns to the chip that opened it`, await p.waitForFunction(() => document.activeElement?.classList.contains("files") === true, null, { timeout: 3000 }).then(() => true, () => false));
+
+  // ── files by root: an edit in an added root and one outside every root
+  // group apart from the workspace's, never interleaved in first-touch order ──
+  await p.evaluate(() =>
+    window.__patch([
+      { kind: "contextRootsChanged", patchbaySessionId: "s1", roots: ["/ext"] },
+      { kind: "toolCallUpserted", patchbaySessionId: "s1", blockId: "out1", title: "Write scratch", status: "completed", toolKind: "edit", locations: [{ path: "/tmp/scratch.txt", line: null }] },
+      { kind: "toolCallUpserted", patchbaySessionId: "s1", blockId: "ext1", title: "Edit lib", status: "completed", toolKind: "edit", locations: [{ path: "/ext/lib/b.ts", line: null }] },
+      // closes the run, so later steps' calls start their own
+      { kind: "agentTextDelta", patchbaySessionId: "s1", blockId: "sep0", text: "and elsewhere" },
+    ]),
+  );
+  await p.waitForFunction(() => document.querySelector(".readout-strip .chip.files")?.textContent.trim() === "3 files edited", null, { timeout: 3000 });
+  await p.click(".readout-strip .chip.files");
+  await p.waitForSelector(".files-panel .group-head", { timeout: 3000 });
+  const grouped = await p.$$eval(".files-panel .group-head, .files-panel .file-row", (els) =>
+    els.map((el) => (el.classList.contains("group-head") ? `# ${el.textContent.trim()}` : el.title)),
+  );
+  check(
+    `[${theme}] files group by root: workspace, added root, then outside (${JSON.stringify(grouped)})`,
+    JSON.stringify(grouped) === JSON.stringify(["# ws", "/ws/src/api.ts", "# ext", "/ext/lib/b.ts", "# Outside the roots", "/tmp/scratch.txt"]),
+  );
+  const extDir = await p.$eval('.files-panel .file-row[title="/ext/lib/b.ts"] .dir', (el) => el.textContent);
+  check(`[${theme}] an added root's file reads relative to that root ("${extDir}")`, extDir === "lib");
+  await p.locator(".files-panel").screenshot({ path: `${OUT}/readout-files-grouped-${theme}.png` });
+  await p.keyboard.press("Escape");
+  await p.waitForSelector(".files-panel", { state: "detached", timeout: 3000 });
+  await p.evaluate(() => window.__patch([{ kind: "contextRootsChanged", patchbaySessionId: "s1", roots: [] }]));
 
   // ── one switch per read-out: each hides on its own; the files chip is a
   // control and no switch reaches it ──

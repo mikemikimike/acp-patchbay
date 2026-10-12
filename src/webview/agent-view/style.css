@@ -364,6 +364,18 @@ body {
   min-width: 0;
 }
 
+/* the root a run of file rows lives under — workspace folder, added root,
+   or outside every root */
+.overlay-panel .group-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--pb-text-faint);
+  font-weight: 600;
+}
+
 .overlay-panel .file-row:hover {
   color: var(--pb-text);
   background: var(--pb-bg);

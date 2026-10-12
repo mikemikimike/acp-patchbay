@@ -7,6 +7,13 @@
   to the tokens under each reply. It now reads "Context … tokens · session
   cost …": how full the context window is now and what the session has
   cost so far, while the count under a reply stays that turn's. (#105)
+- **The edited-files panel keeps your project apart from everywhere else.**
+  It was one list in the order the agent first touched each file, so a
+  file in `/tmp` or another repo sat between two of your own. Files now
+  group under the root that holds them: your workspace folders first, then
+  folders you added to the session (read relative to that folder, no
+  longer as a full path), then "Outside the roots". A session that only
+  touched a single-folder workspace still shows a plain list. (#61)
 
 ## 0.86.0 — 2026-10-10
 

@@ -159,7 +159,8 @@ export function App({
           plan={state.activePlan[active.id] ?? null}
           files={derived.totals.files}
           openEditors={state.openEditors}
-          roots={state.workspaceRoots}
+          workspaceRoots={state.workspaceRoots}
+          contextRoots={state.contextRoots[active.id] ?? []}
         />
       )}
       {active !== null && (

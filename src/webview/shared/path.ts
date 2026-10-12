@@ -9,14 +9,31 @@ export function basename(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
 }
 
-/** Absolute path → { base, dir }, dir relative to the longest workspace root
- * that contains it (whole segments only: `/ws/app` never claims
- * `/ws/application`). Outside every root, dir stays absolute. */
+/** Absolute path → { base, dir }, dir relative to the root that contains it
+ * (`rootOf`). Outside every root, dir stays absolute. */
 export function splitPath(path: string, roots: readonly string[]): { base: string; dir: string } {
-  const root = roots.filter((r) => contains(r, path)).sort((a, b) => b.length - a.length)[0];
+  const root = rootOf(path, roots);
   const rel = root !== undefined ? path.slice(root.length).replace(/^[/\\]/, "") : path;
   const parts = rel.split(/[/\\]/);
   return { base: parts.pop() ?? rel, dir: parts.join("/") };
+}
+
+/** The longest root that contains the path, by whole segments only
+ * (`/ws/app` never claims `/ws/application`); undefined outside every root. */
+function rootOf(path: string, roots: readonly string[]): string | undefined {
+  return roots.filter((r) => contains(r, path)).sort((a, b) => b.length - a.length)[0];
+}
+
+/** Paths grouped by the root that contains them (`rootOf`): groups in the
+ * roots' order, paths outside every root last under `null`, each group
+ * keeping its paths' own order. A root that holds none has no group. */
+export function groupByRoot(
+  paths: readonly string[],
+  roots: readonly string[],
+): { root: string | null; paths: string[] }[] {
+  const groups = new Map<string | null, string[]>([...roots, null].map((r) => [r, []]));
+  for (const p of paths) groups.get(rootOf(p, roots) ?? null)!.push(p);
+  return [...groups].filter(([, ps]) => ps.length > 0).map(([root, ps]) => ({ root, paths: ps }));
 }
 
 function contains(root: string, path: string): boolean {

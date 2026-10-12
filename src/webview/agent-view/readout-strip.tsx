@@ -24,7 +24,9 @@ export function ReadoutStrip(props: {
   /** Distinct paths the agent touched this session (view-model totals). */
   files: readonly string[];
   openEditors: readonly OpenEditorView[];
-  roots: readonly string[];
+  workspaceRoots: readonly string[];
+  /** The session's added roots. */
+  contextRoots: readonly string[];
 }) {
   const [openId, setOpenId] = useState<PanelId | null>(null);
   const stripRef = useRef<HTMLDivElement>(null);
@@ -53,7 +55,8 @@ export function ReadoutStrip(props: {
           <FilesChip
             files={props.files}
             openEditors={props.openEditors}
-            roots={props.roots}
+            workspaceRoots={props.workspaceRoots}
+            contextRoots={props.contextRoots}
             open={openId === "files"}
             onOpenChange={openChange("files")}
             anchor={stripRef}
