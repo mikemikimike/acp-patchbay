@@ -78,12 +78,14 @@ function PlanGauge({ plan }: { plan: Readonly<Record<string, PlanUsageInfo>> }) 
 
 /** The context-window gauge: a bare ring, so its numbers live only in its
  * tooltip — the shared one, which the keyboard reaches too, and the ring
- * is labelled with the same words for a screen reader. */
+ * is labelled with the same words for a screen reader. Both numbers are the
+ * session's — the context as it stands, the cost so far — and say so, apart
+ * from the tokens a turn's footer counts. */
 function Gauge({ usage }: { usage: UsageInfo }) {
   const frac = Math.max(0, Math.min(1, usage.used / usage.size));
   const circumference = 37.7; // 2π·r at r=6
-  const tip = `${usage.used.toLocaleString()} / ${usage.size.toLocaleString()} tokens${
-    usage.cost !== undefined ? ` · ${usage.cost.amount.toFixed(2)} ${usage.cost.currency}` : ""
+  const tip = `Context ${usage.used.toLocaleString()} / ${usage.size.toLocaleString()} tokens${
+    usage.cost !== undefined ? ` · session cost ${usage.cost.amount.toFixed(2)} ${usage.cost.currency}` : ""
   }`;
   return (
     <TooltipProvider delayDuration={150}>

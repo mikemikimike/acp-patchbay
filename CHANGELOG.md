@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **The composer ring says its numbers are the session's.** Its tooltip
+  read "121,459 / 1,050,000 tokens · 0.02 USD", which looked like a rival
+  to the tokens under each reply. It now reads "Context … tokens · session
+  cost …": how full the context window is now and what the session has
+  cost so far, while the count under a reply stays that turn's. (#105)
+
 ## 0.86.0 — 2026-10-10
 
 A context compaction shows where it happened (#101) and an agent's notices
