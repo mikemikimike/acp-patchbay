@@ -74,7 +74,9 @@ panel: one row per file the agent edited, click opens it in the
 editor; rows group under the root that holds them — workspace folders, then
 the session's added roots, then "Outside the roots" — each group in the order
 the agent first touched its files, with no group heads while every file sits
-in a single-folder workspace; a dot marks a file whose open editor holds unsaved changes — editor
+in a single-folder workspace; a row reads relative to its workspace folder and
+by its full path anywhere else, an added root included — the rule every path
+in the view follows; a dot marks a file whose open editor holds unsaved changes — editor
 reality, never a stored flag. It lists files and never counts lines: a change is
 counted only on the tool card of the edit that reported it, because a file the
 agent writes itself leaves patchbay no trustworthy "before" to measure a

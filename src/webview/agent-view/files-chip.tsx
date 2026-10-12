@@ -14,6 +14,9 @@
 // changed in the project never interleaves with what changed elsewhere.
 // A list wholly inside a single-folder workspace reads as a plain list: a
 // header earns its row only once there is a second place to tell apart.
+// A row reads relative to its workspace folder and by its full path
+// anywhere else, an added root included — as every path in the view reads,
+// so one file never reads two ways.
 import { Fragment, type RefObject } from "react";
 import type { OpenEditorView } from "../../shared/protocol";
 import { useActions } from "../shared/actions";
@@ -41,8 +44,7 @@ export function FilesChip({
   anchor: RefObject<HTMLDivElement | null>;
 }) {
   const send = useActions();
-  const roots = [...workspaceRoots, ...contextRoots];
-  const groups = groupByRoot(files, roots);
+  const groups = groupByRoot(files, [...workspaceRoots, ...contextRoots]);
   const headed = !(groups.length === 1 && workspaceRoots.length === 1 && groups[0]!.root === workspaceRoots[0]);
   return (
     <ReadoutPanel
@@ -66,7 +68,7 @@ export function FilesChip({
             </div>
           )}
           {paths.map((path) => {
-            const { base, dir } = splitPath(path, roots);
+            const { base, dir } = splitPath(path, workspaceRoots);
             // Editor reality, not a stored flag: with agent writes landing
             // in the open buffer, dirty here means the
             // user's own unsaved edits sit on an agent-touched file.

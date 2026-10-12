@@ -357,7 +357,7 @@ for (const theme of Object.keys(THEMES)) {
     JSON.stringify(grouped) === JSON.stringify(["# ws", "/ws/src/api.ts", "# ext", "/ext/lib/b.ts", "# Outside the roots", "/tmp/scratch.txt"]),
   );
   const extDir = await p.$eval('.files-panel .file-row[title="/ext/lib/b.ts"] .dir', (el) => el.textContent);
-  check(`[${theme}] an added root's file reads relative to that root ("${extDir}")`, extDir === "lib");
+  check(`[${theme}] an added root's file reads by its full path, as outside the workspace ("${extDir}")`, extDir === "/ext/lib");
   await p.locator(".files-panel").screenshot({ path: `${OUT}/readout-files-grouped-${theme}.png` });
   await p.keyboard.press("Escape");
   await p.waitForSelector(".files-panel", { state: "detached", timeout: 3000 });

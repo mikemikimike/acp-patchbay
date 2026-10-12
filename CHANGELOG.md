@@ -11,9 +11,9 @@
   It was one list in the order the agent first touched each file, so a
   file in `/tmp` or another repo sat between two of your own. Files now
   group under the root that holds them: your workspace folders first, then
-  folders you added to the session (read relative to that folder, no
-  longer as a full path), then "Outside the roots". A session that only
-  touched a single-folder workspace still shows a plain list. (#61)
+  folders you added to the session, then "Outside the roots". A session
+  that only touched a single-folder workspace still shows a plain list.
+  (#61)
 
 ## 0.86.0 — 2026-10-10
 
