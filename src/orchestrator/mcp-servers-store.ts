@@ -683,8 +683,8 @@ export class McpServersStore {
     await this.refresh();
   }
 
-  /** Erase: the review goes with everything stored — its values were
-   * typed for servers that would be added. */
+  /** The stores are about to move under it (an erase, an import): the
+   * review goes — its values were typed for servers that would be added. */
   dropImport(): void {
     this.review = null;
   }

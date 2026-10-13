@@ -651,10 +651,14 @@ export class AgentsStore implements ConnectionOperations {
     );
   }
 
-  /** "Disconnect & erase all data" wiped the files: every agent the views
-   * show leaves them, and the config list republishes empty. */
-  async erased(shownPatchbayAgentIds: readonly PatchbayAgentId[]): Promise<void> {
-    for (const patchbayAgentId of shownPatchbayAgentIds) this.hooks.emit({ kind: "agentRemoved", patchbayAgentId });
+  /** The stores moved under the views (an erase, an import): an agent the
+   * views show that the store no longer holds leaves them, and every row
+   * and the config list republish from the store. */
+  async republish(shownPatchbayAgentIds: readonly PatchbayAgentId[]): Promise<void> {
+    const held = new Set(this.deps.configs.list().map((c) => c.id));
+    for (const patchbayAgentId of shownPatchbayAgentIds) {
+      if (!held.has(patchbayAgentId)) this.hooks.emit({ kind: "agentRemoved", patchbayAgentId });
+    }
     await this.publishAll();
   }
 

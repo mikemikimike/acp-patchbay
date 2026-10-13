@@ -232,6 +232,24 @@ describe("agents store", () => {
     expect(h.state().agents.some((a) => a.id === "gone")).toBe(false);
   });
 
+  it("once the stores move under the views, an agent they no longer hold leaves them and one they hold reads as stored", async () => {
+    const h = agentsHarness(dir);
+    await stored(h, fakeConfig("kept", {}));
+    await stored(h, fakeConfig("gone", {}));
+    await h.deps.configs.remove("gone" as PatchbayAgentId);
+    await h.deps.configs.upsert({ ...h.agents.config("kept" as PatchbayAgentId)!, name: "Renamed" });
+
+    const before = h.events.length;
+    await h.agents.republish(h.state().agents.map((a) => a.id));
+
+    expect(h.state().agents.map((a) => [a.id, a.name])).toEqual([["kept", "Renamed"]]);
+    // Only the gone one is removed: a removal takes the agent's open
+    // questions and knob rows with it, so a kept agent is never removed and
+    // re-added.
+    const removed = h.events.slice(before).flatMap((e) => (e.kind === "agentRemoved" ? [e.patchbayAgentId] : []));
+    expect(removed).toEqual(["gone"]);
+  });
+
   it("auth evidence for an agent with no saved config writes nothing", () => {
     const h = agentsHarness(dir);
     h.agents.noteAuthWireFact("ghost" as PatchbayAgentId, "session/new", "auth_required", new Date().toISOString(), "log in");

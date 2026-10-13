@@ -834,20 +834,12 @@ export class Orchestrator {
     }
   }
 
-  /** "Disconnect & erase all data": stop reality first —
-   * every agent's work ended and its process down (graceful ladder), every
-   * terminal tree — so nothing launches for an agent the sweep forgets, then
-   * the erase sweep (erase-all.ts owns the ordering constraint), then both
-   * channels catch up through ordinary events: agents and sessions leave
-   * row by row, configs/MCP servers/rules/audit republish empty. Never
-   * automatic; the Settings action is the only caller. */
+  /** "Disconnect & erase all data": everything stopped, the erase sweep
+   * (erase-all.ts owns the ordering constraint), everything republished —
+   * empty. Never automatic; the Settings action is the only caller. */
   private async eraseEverything(): Promise<void> {
     this.log.info("erase all data: stopping every process");
-    for (const pid of this.clientHost.runningPids()) killTree(pid, "SIGKILL");
-    this.clientHost.clear();
-    await Promise.all([this.gates.stopAll(), this.sessionGates.endAll(), this.mcpServerGates.endAll()]);
-    this.sessions.reset();
-
+    await this.stopEverything();
     await eraseAllData({
       agentConfigs: this.agentConfigs,
       mcpServerConfigs: this.mcpServerConfigs,
@@ -876,26 +868,45 @@ export class Orchestrator {
         },
       },
     });
+    await this.republishAll();
+    this.log.info("erase all data: complete — factory state");
+  }
 
+  /** Stops reality before the stores move under it: every terminal tree,
+   * every agent's work ended and its process down (graceful ladder), every
+   * MCP server's line — so nothing launches for a record the move forgets
+   * or replaces. The views see each session close and any pending connect
+   * or import review end. */
+  private async stopEverything(): Promise<void> {
+    for (const pid of this.clientHost.runningPids()) killTree(pid, "SIGKILL");
+    this.clientHost.clear();
+    await this.endAllWork();
+    this.sessions.reset();
     for (const session of this.agentView.current.sessions) {
       this.agentView.emit({ kind: "sessionClosed", patchbaySessionId: session.id });
     }
-    await this.agents.erased(this.agentView.current.agents.map((a) => a.id));
     this.agentView.emit({ kind: "chatConnectResolved" });
     this.mcpServers.dropImport();
+  }
+
+  /** The stores moved: both channels catch up from what they now hold,
+   * through ordinary events — agents, MCP servers, rules, saved roots,
+   * preferences, the audit and the Data page's inventory. The stores read
+   * on demand (composer knobs at a session's open, the startup pointers at
+   * a window's start) need no publish. */
+  private async republishAll(): Promise<void> {
+    await this.agents.republish(this.agentView.current.agents.map((a) => a.id));
     await this.mcpServers.refresh();
     this.publishRules();
     this.publishSavedRoots();
-    // An open Preferences page settles back to the defaults it now holds
-    // (and the agent view's composer stats with it).
+    // An open Preferences page settles on what the store now holds (and
+    // the agent view's composer stats with it).
     const preferences = this.preferences.get();
     this.settings.emit({ kind: "preferencesChanged", preferences });
     this.agentView.emit({ kind: "preferencesChanged", preferences });
     this.syncDetachContext();
     await this.refreshAuditTail();
-    // An open Data page should watch its own inventory hit zero.
     await this.publishDataInventory();
-    this.log.info("erase all data: complete — factory state");
   }
 
   /** deactivate's bounded best-effort: terminal trees get a
@@ -911,10 +922,12 @@ export class Orchestrator {
     // A Memento write is milliseconds; it must land inside the budget.
     await this.agents.stampRunning();
     for (const pid of this.clientHost.runningPids()) killTree(pid, "SIGKILL");
-    await Promise.race([
-      Promise.all([this.gates.stopAll(), this.sessionGates.endAll(), this.mcpServerGates.endAll()]),
-      new Promise<void>((resolve) => setTimeout(resolve, 2_000).unref()),
-    ]);
+    await Promise.race([this.endAllWork(), new Promise<void>((resolve) => setTimeout(resolve, 2_000).unref())]);
+  }
+
+  /** Every agent stopped, every session's and MCP server's line ended. */
+  private async endAllWork(): Promise<void> {
+    await Promise.all([this.gates.stopAll(), this.sessionGates.endAll(), this.mcpServerGates.endAll()]);
   }
 
   /** Startup: what the agents store says this window opens with is
