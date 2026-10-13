@@ -262,7 +262,12 @@ never on a schedule.
 
 ### MCP Servers
 
-Order is the working set first: **Connected servers** on top (dot · name ·
+**Built in** comes first: patchbay's own server (`patchbay`), read-only — name ·
+`built-in` chip · one line on what every session is given · the tool probe
+strip (checked the first time the section opens in a window; refresh reads
+again). Nothing to switch, copy, route, or remove.
+
+Then the working set: **Connected servers** (dot · name ·
 `curated`/`custom-*` chip · **active toggle** · `Copy config` · `Disconnect` for
 curated / `Remove` for custom · mono command/URL · routing · `Edit JSON…` for
 custom entries — the mcpServers entry, env values and a header key shown as

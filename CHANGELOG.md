@@ -14,6 +14,12 @@
   folders you added to the session, then "Outside the roots". A session
   that only touched a single-folder workspace still shows a plain list.
   (#61)
+- **Patchbay's own MCP server shows in Settings.** Every session is given
+  a server named `patchbay` (the editor's selection, open files and
+  problems, the session's roots, and a way to ask you a question), and
+  nothing showed it. MCP Servers now opens with it, read-only: what it
+  serves and whether it answers, checked the first time the page opens.
+  It reports the extension's version, no longer a fixed 0.0.1. (#43)
 
 ## 0.86.0 — 2026-10-10
 

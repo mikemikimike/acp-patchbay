@@ -196,6 +196,9 @@ deliverable.
 
 ### MCP servers
 
+- User can see the server patchbay itself gives every session — what it
+  serves and whether it answers — beside the servers they added, and can't
+  edit or remove it.
 - User can connect GitHub by pasting a token — one field, no app setup — and
   disconnect as easily. Curated entries whose registration is open connect with
   one-click OAuth instead.

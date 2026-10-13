@@ -29,6 +29,7 @@ import {
   type SavedRootScope,
   type SavedRootsView,
   type SettingsEvent,
+  type SettingsSectionId,
   type SettingsState,
 } from "../shared/protocol";
 import { askNotice } from "../shared/ask-notice";
@@ -1670,6 +1671,15 @@ export class Orchestrator {
     return askModal(message, "Download");
   }
 
+  /** Settings moves to a section. Opening MCP Servers reads what
+   * patchbay's own servers serve — once a window; the card's refresh reads
+   * again. */
+  private showSettingsSection(section: SettingsSectionId): void {
+    this.settings.emit({ kind: "sectionChanged", section });
+    if (section === "mcpServers")
+      void this.mcpServerGates.checkBuiltin().catch(this.logCatch("check the built-in MCP servers"));
+  }
+
   private handleAction(action: Action): void {
     switch (action.kind) {
       case "openSettings":
@@ -1679,12 +1689,11 @@ export class Orchestrator {
         void vscode.commands
           .executeCommand("acpPatchbay.openSettings")
           .then(() => {
-            if (action.section !== undefined)
-              this.settings.emit({ kind: "sectionChanged", section: action.section });
+            if (action.section !== undefined) this.showSettingsSection(action.section);
           }, this.logCatch("openSettings"));
         break;
       case "setSettingsSection":
-        this.settings.emit({ kind: "sectionChanged", section: action.section });
+        this.showSettingsSection(action.section);
         break;
       case "connectAgent":
         void this.connectFrom(action.source);

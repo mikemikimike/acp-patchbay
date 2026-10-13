@@ -1123,7 +1123,8 @@ flowchart TD
 ```
 - **Connect-time tool probe**: the orchestrator runs its own MCP handshake
   (initialize + tools/list — a free read, no agent, no LLM turn) on connect,
-  power-on, and manual refresh; the card shows "N tools" expandable, timestamped,
+  power-on, and manual refresh — and for the built-in editor server, the first
+  time Settings opens its page in a window; the card shows "N tools" expandable, timestamped,
   or the failure reason. Provider-side truth only — "reachable, these tools
   exist", never "working in an agent's session"; the same declared≠used
   discipline one layer down. Session-lived cache, never persisted: a fresh window
@@ -1135,7 +1136,11 @@ flowchart TD
   `mcpServers` entry carries none, so a probe-only cwd could pass where the real
   run fails. A stdio server run by npx/uvx has its package made ready first
   (launcher health, above), and the handshake has no limit of patchbay's own: it
-  ends with the server's answer, its exit, a network failure, or Stop.
+  ends with the server's answer, its exit, a network failure, or Stop. The
+  built-in server is probed through the very launch an attach hands an agent,
+  under a context token no attach minted: initialize and tools/list never reach
+  the IPC socket, so the probe proves the spawn and the tool list, and a tool
+  call under that token would be refused. Its version is the extension's.
 - **Routing is the user's, per agent.** "auto" (default) = every agent; an
   explicit id list pins exactly; "except" = every agent minus the listed. Routing
   is reach, not consent: which servers an agent receives is separate from whether

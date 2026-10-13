@@ -488,6 +488,18 @@ export interface CatalogEntryView {
     | null;
 }
 
+/** One of patchbay's own servers — given to every session, never stored,
+ * so nothing about it is the user's to edit. What it serves is read the
+ * way a user server's is: patchbay's own handshake with the spawn every
+ * agent is handed. */
+export interface BuiltinMcpServerView {
+  id: PatchbayMcpServerId;
+  name: string;
+  /** Absent = not checked yet this session. */
+  probe?: McpServerProbeView;
+  busy: readonly McpServerWork[];
+}
+
 /** What an MCP server's line can hold. */
 export type McpServerWork = "probe" | "remove";
 
@@ -2626,6 +2638,8 @@ export interface SettingsState {
   auditTail: readonly AuditEntryView[];
   mcpCatalog: readonly CatalogEntryView[];
   mcpServers: readonly McpServerView[];
+  /** Patchbay's own servers — read-only, above the user's. */
+  mcpBuiltinServers: readonly BuiltinMcpServerView[];
   mcpConnects: readonly McpServerConnectView[];
   mcpImportReview: McpImportReviewView | null;
   /** Agents (global, developer-env — never repo-committed): addable,
@@ -2685,6 +2699,7 @@ export const initialSettingsState: SettingsState = {
   auditTail: [],
   mcpCatalog: [],
   mcpServers: [],
+  mcpBuiltinServers: [],
   mcpConnects: [],
   mcpImportReview: null,
   agentConfigs: [],
@@ -2712,6 +2727,7 @@ export type SettingsEvent =
   | {
       kind: "mcpServersChanged";
       servers: readonly McpServerView[];
+      builtin: readonly BuiltinMcpServerView[];
       connects: readonly McpServerConnectView[];
       importReview: McpImportReviewView | null;
     }
@@ -2783,7 +2799,13 @@ export function reduceSettings(
     case "mcpCatalogLoaded":
       return { ...state, mcpCatalog: event.entries };
     case "mcpServersChanged":
-      return { ...state, mcpServers: event.servers, mcpConnects: event.connects, mcpImportReview: event.importReview };
+      return {
+        ...state,
+        mcpServers: event.servers,
+        mcpBuiltinServers: event.builtin,
+        mcpConnects: event.connects,
+        mcpImportReview: event.importReview,
+      };
     case "agentConfigsChanged":
       return { ...state, agentConfigs: event.configs };
     case "sessionStatsChanged":

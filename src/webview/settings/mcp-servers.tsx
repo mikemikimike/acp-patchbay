@@ -599,6 +599,29 @@ export function McpServersSection(props: {
         machine, never repo-committed; a copied config carries what you typed, never an OAuth token.
       </div>
 
+      {/* Patchbay's own servers: read-only — what they serve and whether they
+          answer, nothing to switch, route, or remove. */}
+      {state.mcpBuiltinServers.map((server) => (
+        <div key={server.id} className="card">
+          <div className="row flex-wrap">
+            <Icon name="server" />
+            <span className="nm min-w-0">{server.name}</span>
+            <Badge>built-in</Badge>
+          </div>
+          <div className="note mx-0 mt-1 mb-0">
+            Given to every session: the editor's selection, open files and problems, the session's
+            roots, and a way to ask you a question. Patchbay's own — nothing here to edit or remove.
+          </div>
+          <ProbeStrip
+            probe={server.probe}
+            probing={server.busy.includes("probe")}
+            probeable
+            expanded={openTools[server.id] === true}
+            onToggleTools={() => setOpenTools({ ...openTools, [server.id]: openTools[server.id] !== true })}
+            onProbe={() => props.onProbe(server.id)}
+          />
+        </div>
+      ))}
       {state.mcpServers.length === 0 && (
         <div className="card">
           <div className="note m-0">

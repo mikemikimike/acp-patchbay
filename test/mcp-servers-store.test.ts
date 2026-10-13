@@ -674,6 +674,68 @@ describe("McpServersStore — connect-time tool probe", () => {
   });
 });
 
+// Patchbay's own server: read-only in Settings, but what it serves is read
+// the way a user server's is — a handshake with the spawn agents are handed.
+describe("McpServersStore — the built-in editor server", () => {
+  const builtinOf = (h: ReturnType<typeof harness>) => {
+    const last = h.events.filter((e) => e.kind === "mcpServersChanged").at(-1);
+    return last?.kind === "mcpServersChanged" ? last.builtin : [];
+  };
+
+  it("is published read-only and unchecked until its page asks", async () => {
+    const h = harness([]);
+    await h.manager.refresh();
+    expect(builtinOf(h)).toEqual([{ id: "patchbay:editor", name: "patchbay", probe: undefined, busy: [] }]);
+    expect(h.probed).toEqual([]);
+  });
+
+  it("is checked through the launch every agent is handed, under a token no attach minted", async () => {
+    const h = harness([]);
+    await h.gates.checkBuiltin();
+    const { servers } = await h.manager.mcpServersFor("agent-a" as PatchbayAgentId, "ctx-7", false);
+    const attached = servers[0]!;
+    const probe = h.probed[0]!;
+    expect(probe).toMatchObject({ kind: "stdio", command: (attached as { command: string }).command, args: ["/mcp-server.js"], cwd: WORKSPACE_CWD });
+    const env = probe.kind === "stdio" ? probe.env : {};
+    expect(env).toMatchObject({ ELECTRON_RUN_AS_NODE: "1", ACP_PATCHBAY_IPC: "/sock" });
+    expect(env.ACP_PATCHBAY_CONTEXT_TOKEN).toMatch(/^[0-9a-f-]{36}$/);
+    // a check is no attach: nothing it carries is a value an agent was handed
+    expect(h.crossed).not.toContain(env.ACP_PATCHBAY_CONTEXT_TOKEN);
+    await h.manager.refresh();
+    expect(builtinOf(h)[0]?.probe).toMatchObject({ status: "ok", serverName: "fake-server", tools: [{ name: "t_one" }] });
+  });
+
+  it("opening its page again reads nothing new — a reading stays until refreshed", async () => {
+    const h = harness([]);
+    await h.gates.checkBuiltin();
+    await h.gates.checkBuiltin();
+    expect(h.probed).toHaveLength(1);
+    await h.gates.probe("patchbay:editor" as PatchbayMcpServerId);
+    expect(h.probed).toHaveLength(2);
+  });
+
+  it("a failed check is a reading too: it shows the reason, and the page doesn't retry it on its own", async () => {
+    const h = harness([]);
+    h.setProbeFn(async () => {
+      throw new Error("spawn ENOENT");
+    });
+    await h.gates.checkBuiltin();
+    await h.gates.checkBuiltin();
+    await h.manager.refresh();
+    expect(builtinOf(h)[0]?.probe).toMatchObject({ status: "failed", reason: `spawn ENOENT (ran in ${WORKSPACE_CWD})` });
+  });
+
+  it("is never removed — a remove naming it changes nothing", async () => {
+    const h = harness([]);
+    await h.gates.checkBuiltin();
+    await h.gates.remove("patchbay:editor" as PatchbayMcpServerId);
+    await h.manager.refresh();
+    expect(builtinOf(h)[0]?.probe).toMatchObject({ status: "ok" });
+    const { given } = await h.manager.mcpServersFor("agent-a" as PatchbayAgentId, "ctx-7", false);
+    expect(given[0]).toEqual({ id: "patchbay:editor", delivery: "stdio" });
+  });
+});
+
 describe("McpServersStore — JSON import and edit (the well-known mcpServers shape)", () => {
   it("an import reads its entries into a review and adds nothing; Add all adds each under the name chosen there", async () => {
     const h = harness([]);

@@ -782,6 +782,17 @@ for (const theme of Object.keys(THEMES)) {
   // ── settings: curated catalog filter (text × mechanism toggles) ──
   await p.click("text=MCP Servers");
   await p.waitForSelector(".cat-filter");
+
+  // ── settings: patchbay's own server shows above the user's, read-only (#43) ──
+  const builtin = p.locator(".card", { has: p.locator('.nm:text-is("patchbay")') });
+  check(`[${theme}] the built-in server has its card, marked built-in`, (await builtin.locator("text=built-in").count()) === 1);
+  check(
+    `[${theme}] the built-in card offers nothing to switch, copy, remove, or configure`,
+    (await builtin.locator('[role="switch"], button[aria-label="Copy config"], button:has-text("Remove"), button[aria-label="Settings"]').count()) === 0,
+  );
+  await builtin.locator('button[aria-expanded="false"]:has-text("2 tools")').click();
+  check(`[${theme}] the built-in card lists what the server serves`, (await builtin.locator(".font-mono", { hasText: "get_roots" }).count()) === 1);
+  await builtin.screenshot({ path: `${OUT}/settings-mcp-builtin-${theme}.png` });
   const rowsShown = () => p.$$eval(".cat-row", (rows) => rows.length);
   check(`[${theme}] catalog shows every entry unfiltered`, (await rowsShown()) === 4);
   await p.click('.cat-filter button[aria-pressed="false"]:has-text("local")');
@@ -805,7 +816,7 @@ for (const theme of Object.keys(THEMES)) {
   check(`[${theme}] the connect carries the name the user gave`, connect?.kind === "connectCatalogKey" && connect.name === "GitHub work");
   await p.evaluate(() =>
     window.__patch([{
-      kind: "mcpServersChanged", servers: [], connects: [],
+      kind: "mcpServersChanged", servers: [], builtin: [], connects: [],
       importReview: { id: 1, entries: [{ name: "My Files", summary: "npx -y files-server" }, { name: "My_Files", summary: "https://example.test/mcp" }] },
     }]),
   );

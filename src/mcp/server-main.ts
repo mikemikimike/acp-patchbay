@@ -8,6 +8,9 @@
 // IPC bridge (ipc-protocol.ts) via env vars this process is launched with.
 import { IpcClient } from "./ipc-client";
 import { callTool, TOOL_DEFS } from "./tools";
+// The extension's own version, folded in at build — the server ships inside
+// the extension and is never a version of its own.
+import { version } from "../../package.json";
 
 const socketPath = process.env.ACP_PATCHBAY_IPC;
 const contextToken = process.env.ACP_PATCHBAY_CONTEXT_TOKEN;
@@ -39,7 +42,7 @@ async function handleMessage(msg: JsonRpcMessage): Promise<void> {
           // adapt when the compatibility moment happens.
           protocolVersion: "2025-03-26",
           capabilities: { tools: {} },
-          serverInfo: { name: "acp-patchbay", version: "0.0.1" },
+          serverInfo: { name: "acp-patchbay", version },
         },
       });
       return;

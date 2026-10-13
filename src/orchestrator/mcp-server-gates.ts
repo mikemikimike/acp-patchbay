@@ -22,6 +22,7 @@ export class McpServerGates {
       readImport(json: string): Promise<void>;
       takeImport(importId: number): Promise<{ name: string; source: McpServerSourceView }[]>;
       dismiss(key: string): Promise<void>;
+      uncheckedBuiltin(): PatchbayMcpServerId[];
     },
     private readonly serverLine: Queue<McpServerWork>,
     private readonly connectLine: Queue<"connect">,
@@ -71,6 +72,12 @@ export class McpServerGates {
 
   probe(patchbayMcpServerId: PatchbayMcpServerId): Promise<void> {
     return this.serverLine.run(patchbayMcpServerId, "probe", (signal) => this.store.probe(patchbayMcpServerId, signal));
+  }
+
+  /** The built-in servers not checked yet this window are checked — what
+   * opening their page reads. A reading stays until refreshed. */
+  async checkBuiltin(): Promise<void> {
+    await Promise.all(this.store.uncheckedBuiltin().map((id) => this.probe(id)));
   }
 
   /** Disconnect is remove — the full clear; it cuts in on whatever the

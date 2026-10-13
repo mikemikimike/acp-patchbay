@@ -284,6 +284,16 @@ export function settingsState() {
     ],
     commandRules: [], machineCommandRules: [], fileWriteScope: "workspace",
     auditTail: [], mcpCatalog: catalogEntries, mcpServers: [], mcpConnects: [], mcpImportReview: null,
+    mcpBuiltinServers: [{
+      id: "patchbay:editor", name: "patchbay", busy: [],
+      probe: {
+        status: "ok", at: "2026-10-13T09:00:00.000Z", serverName: "acp-patchbay", serverVersion: "0.86.0",
+        tools: [
+          { name: "get_selection", description: "The user's current editor selection." },
+          { name: "get_roots", description: "The folders this session works in." },
+        ],
+      },
+    }],
     agentConfigs: [{
       id: "claude", name: "Claude Code", command: "claude-code-acp", args: [],
       env: { API_KEY: "sk-fixture" }, defaults: {}, registrySource: null, lastSeenVersion: null,

@@ -80,6 +80,15 @@ function ownScript(name: string, script: string, env: EnvVariable[]): McpServerS
   };
 }
 
+/** The editor server as one attach is handed it — the one launch both an
+ * agent's session and patchbay's own check of the server spawn. */
+function editorServer(wire: McpServerWire, contextToken: string): McpServerStdio {
+  return ownScript(EDITOR_SERVER.name, wire.editorServerScript, [
+    { name: "ACP_PATCHBAY_IPC", value: wire.socketPath() },
+    { name: "ACP_PATCHBAY_CONTEXT_TOKEN", value: contextToken },
+  ]);
+}
+
 /** The operations that take time — a connect, an add, a probe, a remove —
  * each reached only through the gates, which order them on their lines. */
 export type McpServerLineOperations = Pick<
@@ -344,6 +353,14 @@ export class McpServersStore {
       {
         kind: "mcpServersChanged",
         servers: await this.currentViews(),
+        builtin: [
+          {
+            id: EDITOR_SERVER.id,
+            name: EDITOR_SERVER.name,
+            probe: this.probes.get(EDITOR_SERVER.id),
+            busy: this.lines.busy(EDITOR_SERVER.id),
+          },
+        ],
         connects: this.connectViews(),
         importReview: this.importReviewView(),
       },
@@ -735,6 +752,7 @@ export class McpServersStore {
    * connect again. The non-destructive option is `setActive(false)`, which
    * keeps everything and only unroutes. */
   async remove(patchbayMcpServerId: PatchbayMcpServerId): Promise<void> {
+    if (patchbayMcpServerId === EDITOR_SERVER.id) return; // built in: never removed
     this.probes.delete(patchbayMcpServerId);
     this.failures.delete(connectKey.server(patchbayMcpServerId));
     await this.tokens.remove(patchbayMcpServerId);
@@ -771,17 +789,26 @@ export class McpServersStore {
     await this.refresh();
   }
 
+  /** The built-in servers with no reading yet this window. */
+  uncheckedBuiltin(): PatchbayMcpServerId[] {
+    return this.probes.has(EDITOR_SERVER.id) ? [] : [EDITOR_SERVER.id];
+  }
+
   /** Runs the connect-time tool probe and caches the outcome on the card
    * (protocol.ts McpServerProbeView — provider-side truth, timestamped).
-   * Explicit-trigger only (connect, power-on, refresh button): probing a
-   * custom-stdio server executes its command, and even http shouldn't fire
-   * on background sweeps — reality is read when the user acts on it. */
+   * Explicit-trigger only (connect, power-on, refresh button, the page of
+   * the built-in servers opened): probing a custom-stdio server executes
+   * its command, and even http shouldn't fire on background sweeps —
+   * reality is read when the user acts on it. The
+   * built-in editor server is probed the same way, through the launch every
+   * agent is handed — under a token no attach minted, which the handshake
+   * never presents: initialize and tools/list are the server's own. */
   async probe(patchbayMcpServerId: PatchbayMcpServerId, signal?: AbortSignal): Promise<void> {
     const config = this.configs.get(patchbayMcpServerId);
-    if (config === undefined) return;
+    if (config === undefined && patchbayMcpServerId !== EDITOR_SERVER.id) return;
     let target: ProbeTarget | null = null;
     try {
-      target = await this.probeTargetFor(config);
+      target = config !== undefined ? await this.probeTargetFor(config) : this.editorProbeTarget();
       if (target === null) {
         // Nothing reachable to probe (no endpoint / missing credential) —
         // the card's connected flag already tells that story.
@@ -815,6 +842,17 @@ export class McpServersStore {
   /** The probe's connection recipe for one server — same resolution as
    * mcpServersFor (catalog entry URL, header shape, fresh token), pointed
    * at patchbay's own MCP client instead of an agent's. */
+  private editorProbeTarget(): ProbeTarget {
+    const launch = editorServer(this.wire, randomUUID());
+    return {
+      kind: "stdio",
+      command: launch.command,
+      args: launch.args,
+      env: Object.fromEntries(launch.env.map(({ name, value }) => [name, value])),
+      cwd: this.workspaceCwd,
+    };
+  }
+
   private async probeTargetFor(config: McpServerConfig): Promise<ProbeTarget | null> {
     const source = config.source;
     if (source.kind === "custom-stdio") {
@@ -925,12 +963,7 @@ export class McpServersStore {
   ): Promise<{ servers: McpServer[]; given: AttachedServer[] }> {
     // McpServerStdio is the untagged union member — no discriminant needed
     // since it's the only variant every agent is guaranteed to accept.
-    const servers: McpServer[] = [
-      ownScript(EDITOR_SERVER.name, this.wire.editorServerScript, [
-        { name: "ACP_PATCHBAY_IPC", value: this.wire.socketPath() },
-        { name: "ACP_PATCHBAY_CONTEXT_TOKEN", value: contextToken },
-      ]),
-    ];
+    const servers: McpServer[] = [editorServer(this.wire, contextToken)];
     const given: AttachedServer[] = [{ id: EDITOR_SERVER.id, delivery: "stdio" }];
     for (const config of this.configs.list()) {
       if (!reaches(config, patchbayAgentId)) continue;

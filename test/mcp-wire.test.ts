@@ -15,6 +15,7 @@ import {
   type IpcResponse,
 } from "../src/mcp/ipc-protocol";
 import type { ElicitationAnswer } from "../src/shared/protocol";
+import { version as packageVersion } from "../package.json";
 
 const MCP_SERVER = join(process.cwd(), "out", "mcp-server.js");
 
@@ -159,6 +160,13 @@ describe("local MCP server (real bundled subprocess)", () => {
   it("initializes with tools capability", async () => {
     const result = (await client.initialize()) as { capabilities: { tools: unknown } };
     expect(result.capabilities.tools).toBeDefined();
+  });
+
+  // The server ships inside the extension: the version it names is the
+  // extension's, which Settings shows on the built-in server's card.
+  it("names itself by the extension's own version", async () => {
+    const result = (await client.initialize()) as { serverInfo: { name: string; version: string } };
+    expect(result.serverInfo).toEqual({ name: "acp-patchbay", version: packageVersion });
   });
 
   it("lists all seven tools", async () => {
