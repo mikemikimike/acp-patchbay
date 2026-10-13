@@ -8,10 +8,44 @@
 // shape is one). Stored as one partial record merged over defaults
 // on every read, so a version that adds a preference never invalidates an
 // older stored object and an absent key is honestly "the default".
-import { DEFAULT_PREFERENCES, type PreferencesView } from "../../shared/protocol";
+import { z } from "zod";
+import { DEFAULT_PREFERENCES, type PreferencesView, type ToolCallDisplay } from "../../shared/protocol";
+import { DISPLAY_LADDER } from "../../shared/tool-display";
 import type { KV, StoredEntry } from "./kv";
 
 const KEY = "acpPatchbay.preferences";
+
+/** Every knob source — a source added to the view is a missing key here. */
+const KNOB_SOURCES: Readonly<Record<PreferencesView["knobSource"], true>> = { "agent-default": true, "last-session": true };
+
+/** One schema per preference — a preference added to the view is a
+ * missing entry here until it has one. */
+const PREFERENCE_SCHEMAS: { [K in keyof PreferencesView]: z.ZodType<PreferencesView[K]> } = {
+  soundOnDone: z.boolean(),
+  doneSound: z.string(),
+  knobSource: z.custom<PreferencesView["knobSource"]>((v) => typeof v === "string" && Object.hasOwn(KNOB_SOURCES, v)),
+  idleCloseMinutes: z.number().finite(),
+  statsPrompts: z.boolean(),
+  statsToolCalls: z.boolean(),
+  statsContext: z.boolean(),
+  statsPlanUsage: z.boolean(),
+  detachWindows: z.boolean(),
+  attachmentMaxMB: z.number().finite(),
+  openThinking: z.boolean(),
+  executeCalls: z.custom<ToolCallDisplay>((v) => DISPLAY_LADDER.includes(v as ToolCallDisplay)),
+};
+
+/** What is stored, each preference read on its own: one in a shape this
+ * version doesn't take reads as its default, and the rest keep theirs. */
+function readStored(stored: unknown): Partial<PreferencesView> {
+  if (typeof stored !== "object" || stored === null) return {};
+  const out: Record<string, unknown> = {};
+  for (const [key, schema] of Object.entries(PREFERENCE_SCHEMAS)) {
+    const parsed = schema.safeParse((stored as Record<string, unknown>)[key]);
+    if (parsed.success) out[key] = parsed.data;
+  }
+  return out as Partial<PreferencesView>;
+}
 
 /** A stored record in any shape a released version wrote, brought to the
  * current one. The one transition so far: `composerStats` (one switch over
@@ -46,7 +80,7 @@ export class PreferencesStore implements StoredEntry {
 
   /** Always complete — defaults filled in at read time, never at write. */
   get(): PreferencesView {
-    return { ...DEFAULT_PREFERENCES, ...this.kv.get<Partial<PreferencesView>>(KEY) };
+    return { ...DEFAULT_PREFERENCES, ...readStored(this.kv.get<unknown>(KEY)) };
   }
 
   /** Patch-in, full-object-out — the emit after a set carries the whole

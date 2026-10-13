@@ -11,7 +11,9 @@
 // non-sensitive, machine-scoped like the agent configs they belong to.
 // Seeding through knobs.ts routing means a stale entry (agent dropped a
 // knob, renamed a value) is silently skipped at apply time, exactly like a
-// no-longer-offered configured default — no validation needed here.
+// no-longer-offered configured default. The shape is checked on read: an
+// agent's combination that isn't one reads as none.
+import { z } from "zod";
 import type { KnobSeed } from "../../shared/protocol";
 import type { KV, StoredEntry } from "./kv";
 import type { PatchbayAgentId } from "../../shared/ids";
@@ -21,6 +23,19 @@ import type { PatchbayAgentId } from "../../shared/ids";
 const KEY = "acpPatchbay.lastKnobs";
 
 type ComposerKnobsRecord = Readonly<Record<string, KnobSeed>>;
+
+const knobSeedSchema = z.record(z.string(), z.union([z.string(), z.boolean()]));
+
+/** Every agent's combination that reads as one. */
+function readStored(stored: unknown): ComposerKnobsRecord {
+  if (typeof stored !== "object" || stored === null || Array.isArray(stored)) return {};
+  const out: Record<string, KnobSeed> = {};
+  for (const [patchbayAgentId, seed] of Object.entries(stored)) {
+    const parsed = knobSeedSchema.safeParse(seed);
+    if (parsed.success) out[patchbayAgentId] = parsed.data;
+  }
+  return out;
+}
 
 export class ComposerKnobsStore implements StoredEntry {
   readonly key = KEY;
@@ -32,26 +47,29 @@ export class ComposerKnobsStore implements StoredEntry {
   }
 
   get(patchbayAgentId: PatchbayAgentId): KnobSeed | undefined {
-    return this.kv.get<ComposerKnobsRecord>(KEY)?.[patchbayAgentId];
+    return this.all()[patchbayAgentId];
   }
 
   async record(patchbayAgentId: PatchbayAgentId, seed: KnobSeed): Promise<void> {
-    const all = this.kv.get<ComposerKnobsRecord>(KEY) ?? {};
-    await this.kv.update(KEY, { ...all, [patchbayAgentId]: seed });
+    await this.kv.update(KEY, { ...this.all(), [patchbayAgentId]: seed });
   }
 
   /** Agent removal: the combination is a fact about *that* agent, so it
    * leaves with it. */
   async remove(patchbayAgentId: PatchbayAgentId): Promise<void> {
-    const all = this.kv.get<ComposerKnobsRecord>(KEY);
-    if (all === undefined || !(patchbayAgentId in all)) return;
+    const all = this.all();
+    if (!(patchbayAgentId in all)) return;
     const { [patchbayAgentId]: _, ...rest } = all;
     await this.kv.update(KEY, Object.keys(rest).length > 0 ? rest : undefined);
   }
 
   /** Data-page inventory: how many agents have a recorded combination. */
   count(): number {
-    return Object.keys(this.kv.get<ComposerKnobsRecord>(KEY) ?? {}).length;
+    return Object.keys(this.all()).length;
+  }
+
+  private all(): ComposerKnobsRecord {
+    return readStored(this.kv.get<unknown>(KEY));
   }
 
   /** "Disconnect & erase all data". */

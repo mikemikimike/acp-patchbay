@@ -10,16 +10,31 @@
 // everywhere"). Evaluation order is workspace first, then machine, then
 // ask (broker.ts): a workspace can tighten or loosen its own floor, and
 // the repo still can't grant anything — the machine layer never rides it.
+import { z } from "zod";
 import type { KV, StoredEntry } from "./kv";
 
-export type RuleVerdict = "allow" | "ask" | "deny";
+const ruleVerdictSchema = z.enum(["allow", "ask", "deny"]);
+export type RuleVerdict = z.infer<typeof ruleVerdictSchema>;
 
 export interface CommandRule {
   pattern: string; // glob-ish command pattern, e.g. "npm run *"
   verdict: RuleVerdict;
 }
 
-export type FileWriteScope = "workspace" | "workspace+temp" | "always-ask";
+const fileWriteScopeSchema = z.enum(["workspace", "workspace+temp", "always-ask"]);
+export type FileWriteScope = z.infer<typeof fileWriteScopeSchema>;
+
+const commandRuleSchema = z.object({ pattern: z.string().min(1), verdict: ruleVerdictSchema });
+
+/** The stored rules that are rules: anything else in the list — or a
+ * stored value that isn't a list — is skipped, never trusted blind. */
+function readRules(stored: unknown): CommandRule[] {
+  if (!Array.isArray(stored)) return [];
+  return stored.flatMap((rule) => {
+    const parsed = commandRuleSchema.safeParse(rule);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
 
 export interface PermissionRules {
   commandRules: CommandRule[];
@@ -37,12 +52,15 @@ const KEY = "acpPatchbay.permissionRules";
 export class PermissionRulesStore {
   constructor(private readonly kv: KV) {}
 
+  /** Each half read on its own: one stored in a shape this version
+   * doesn't take reads as its default. */
   get(): PermissionRules {
-    const stored = this.kv.get<Partial<PermissionRules>>(KEY);
+    const stored = this.kv.get<unknown>(KEY);
+    const { commandRules, fileWriteScope } = typeof stored === "object" && stored !== null ? (stored as Record<string, unknown>) : {};
+    const scope = fileWriteScopeSchema.safeParse(fileWriteScope);
     return {
-      commandRules: stored?.commandRules ?? DEFAULT_PERMISSION_RULES.commandRules,
-      fileWriteScope:
-        stored?.fileWriteScope ?? DEFAULT_PERMISSION_RULES.fileWriteScope,
+      commandRules: commandRules === undefined ? DEFAULT_PERMISSION_RULES.commandRules : readRules(commandRules),
+      fileWriteScope: scope.success ? scope.data : DEFAULT_PERMISSION_RULES.fileWriteScope,
     };
   }
 
@@ -67,7 +85,7 @@ export class MachineRulesStore implements StoredEntry {
   }
 
   get(): { commandRules: CommandRule[] } {
-    return { commandRules: this.kv.get<CommandRule[]>(MACHINE_KEY) ?? [] };
+    return { commandRules: readRules(this.kv.get<unknown>(MACHINE_KEY)) };
   }
 
   async set(commandRules: CommandRule[]): Promise<void> {

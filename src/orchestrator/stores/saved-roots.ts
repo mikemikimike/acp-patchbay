@@ -29,8 +29,11 @@ export class SavedRootsStore implements StoredEntry {
     return this.kv.get(this.key);
   }
 
+  /** Every stored path that is one: anything else in the list is skipped. */
   list(): string[] {
-    return this.kv.get<string[]>(this.key) ?? [];
+    const stored = this.kv.get<unknown>(this.key);
+    if (!Array.isArray(stored)) return [];
+    return stored.filter((p): p is string => typeof p === "string" && p !== "");
   }
 
   async add(path: string): Promise<void> {

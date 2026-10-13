@@ -23,6 +23,7 @@ import { PreferencesStore } from "../src/orchestrator/stores/preferences";
 import { DEFAULT_PREFERENCES } from "../src/shared/protocol";
 import {
   DEFAULT_PERMISSION_RULES,
+  MachineRulesStore,
   PermissionRulesStore,
 } from "../src/orchestrator/stores/permission-rules";
 import { SpawnRegistryStore } from "../src/orchestrator/stores/spawn-registry";
@@ -168,6 +169,66 @@ describe("PermissionRulesStore", () => {
     expect(store.get().commandRules).toHaveLength(1);
     expect(store.get().fileWriteScope).toBe("always-ask");
   });
+
+  it("each half stored in a shape this version doesn't take reads as its default; a stray rule is skipped", () => {
+    const kv = new MemoryKV();
+    void kv.update("acpPatchbay.permissionRules", {
+      commandRules: [{ pattern: "npm test", verdict: "allow" }, { pattern: "x", verdict: "maybe" }],
+      fileWriteScope: "anywhere",
+    });
+    expect(new PermissionRulesStore(kv).get()).toEqual({
+      commandRules: [{ pattern: "npm test", verdict: "allow" }],
+      fileWriteScope: DEFAULT_PERMISSION_RULES.fileWriteScope,
+    });
+    void kv.update("acpPatchbay.permissionRules", "always-ask");
+    expect(new PermissionRulesStore(kv).get()).toEqual(DEFAULT_PERMISSION_RULES);
+  });
+});
+
+// The stores an import reads through: a file can hold anything, so what
+// isn't a stored shape is skipped piece by piece, never trusted blind.
+describe("MachineRulesStore", () => {
+  it("a stored rule that isn't one is skipped; the rest hold", () => {
+    const kv = new MemoryKV();
+    void kv.update("acpPatchbay.machineCommandRules", [
+      { pattern: "git status", verdict: "allow" },
+      { pattern: "", verdict: "allow" },
+      { pattern: "rm *", verdict: "maybe" },
+      "npm test",
+      null,
+    ]);
+    expect(new MachineRulesStore(kv).get().commandRules).toEqual([{ pattern: "git status", verdict: "allow" }]);
+  });
+
+  it("a stored value that isn't a list holds no rules", () => {
+    for (const junk of ["git status", 42, { pattern: "x", verdict: "allow" }, null]) {
+      const kv = new MemoryKV();
+      void kv.update("acpPatchbay.machineCommandRules", junk);
+      expect(new MachineRulesStore(kv).get().commandRules).toEqual([]);
+    }
+  });
+});
+
+describe("ComposerKnobsStore", () => {
+  it("an agent's stored combination that isn't one reads as none; the others hold", async () => {
+    const kv = new MemoryKV();
+    void kv.update("acpPatchbay.lastKnobs", { a: { mode: "plan", thinking: true }, b: "plan", c: { mode: 3 }, d: null });
+    const store = new ComposerKnobsStore(kv);
+    expect(store.get("a" as PatchbayAgentId)).toEqual({ mode: "plan", thinking: true });
+    expect(["b", "c", "d"].map((id) => store.get(id as PatchbayAgentId))).toEqual([undefined, undefined, undefined]);
+    expect(store.count()).toBe(1);
+    // The next write keeps only what read as a combination.
+    await store.record("e" as PatchbayAgentId, { model: "opus" });
+    expect(kv.get("acpPatchbay.lastKnobs")).toEqual({ a: { mode: "plan", thinking: true }, e: { model: "opus" } });
+  });
+
+  it("a stored value that isn't a record holds no combinations", () => {
+    for (const junk of ["plan", 42, [{ mode: "plan" }], null]) {
+      const kv = new MemoryKV();
+      void kv.update("acpPatchbay.lastKnobs", junk);
+      expect(new ComposerKnobsStore(kv).count()).toBe(0);
+    }
+  });
 });
 
 describe("SavedRootsStore — the roots every new session starts with", () => {
@@ -196,6 +257,16 @@ describe("SavedRootsStore — the roots every new session starts with", () => {
     expect(store.list()).toEqual(["/a", "/b2", "/c"]);
     await store.replace("/a", "/c");
     expect(store.list()).toEqual(["/b2", "/c"]);
+  });
+
+  it("a stored entry that isn't a path is skipped; a stored value that isn't a list holds none", () => {
+    const kv = new MemoryKV();
+    void kv.update("acpPatchbay.machineSavedRoots", ["/a", 3, "", null, "/b"]);
+    expect(new SavedRootsStore(kv, "machine").list()).toEqual(["/a", "/b"]);
+    for (const junk of ["/a", 42, { path: "/a" }, null]) {
+      void kv.update("acpPatchbay.machineSavedRoots", junk);
+      expect(new SavedRootsStore(kv, "machine").list()).toEqual([]);
+    }
   });
 });
 
@@ -355,12 +426,25 @@ describe("PreferencesStore — machine-scoped behavior defaults", () => {
     expect(shown.get("acpPatchbay.preferences")).toEqual({});
   });
 
-  it("a stored value that isn't an object never throws at construction", () => {
+  it("a stored value that isn't an object never throws, and reads as the defaults", () => {
     for (const junk of ["composerStats", 42, null]) {
       const kv = new MemoryKV();
       void kv.update("acpPatchbay.preferences", junk);
-      expect(() => new PreferencesStore(kv)).not.toThrow();
+      expect(new PreferencesStore(kv).get()).toEqual(DEFAULT_PREFERENCES);
     }
+  });
+
+  it("a stored preference in a shape this version doesn't take reads as its default; the others keep theirs", () => {
+    const kv = new MemoryKV();
+    void kv.update("acpPatchbay.preferences", {
+      soundOnDone: "yes",
+      knobSource: "sometimes",
+      idleCloseMinutes: "5",
+      executeCalls: "uncollapsed",
+      doneSound: "Glass",
+      unknownLater: true,
+    });
+    expect(new PreferencesStore(kv).get()).toEqual({ ...DEFAULT_PREFERENCES, executeCalls: "uncollapsed", doneSound: "Glass" });
   });
 
   it("wipe returns to factory defaults", async () => {

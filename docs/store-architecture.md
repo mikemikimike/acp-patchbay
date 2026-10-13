@@ -418,7 +418,10 @@ when it takes facts only a later moment has (the startup lists), at that
 moment. Every migration consumes what triggers it: the rewrite itself, or
 a record that it ran where the old value can't be rewritten (an
 unregistered setting), so none runs twice and none undoes what the user
-did since. Live code reads only the current shape.
+did since. Live code reads only the current shape, and reads it through
+its schema piece by piece — a record, a rule, a root, a preference that
+isn't the shape is skipped (a preference reads as its default), never
+trusted blind: disk is a trust boundary, and an imported file more so.
 
 **An exported file is a saved shape too.** Export carries the machine
 store's entries as stored, under their keys, so the migration that moves a
