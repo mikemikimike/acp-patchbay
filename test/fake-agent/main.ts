@@ -52,6 +52,8 @@ export type TurnStep =
   | { type: "usage"; used: number; size: number }
   | { type: "commands"; names: string[] }
   | { type: "crash" }
+  /** Says who the client said it was at initialize. */
+  | { type: "echoClientInfo" }
   | { type: "writeFile"; path: string; content: string }
   | { type: "readFile"; path: string }
   | { type: "runCommand"; command: string; args?: string[]; env?: Record<string, string>; cwd?: string }
@@ -272,6 +274,12 @@ async function runTurn(
     switch (step.type) {
       case "crash":
         process.exit(1);
+        break;
+      case "echoClientInfo":
+        await emitUpdate(cx, sessionId, cwd, {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: `client: ${clientInfo?.name} ${clientInfo?.version}` },
+        });
         break;
       case "chunk":
         await emitUpdate(cx, sessionId, cwd, {
@@ -670,11 +678,13 @@ let authenticated = false;
 /** What the client declared at initialize — an agent may only use a
  * capability the client claimed, so the scripted steps check it. */
 let clientCapabilities: acp.ClientCapabilities | null = null;
+let clientInfo: acp.Implementation | null = null;
 
 const app = acp
   .agent({ name: script.name ?? "fake-agent" })
   .onRequest("initialize", (ctx): acp.InitializeResponse => {
     clientCapabilities = ctx.params.clientCapabilities ?? null;
+    clientInfo = ctx.params.clientInfo ?? null;
     if (script.exitAfterMs !== undefined) setTimeout(() => process.exit(1), script.exitAfterMs);
     return {
       protocolVersion: acp.PROTOCOL_VERSION,

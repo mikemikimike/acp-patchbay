@@ -10,6 +10,7 @@ import type { AgentStatus } from "../src/shared/protocol";
 import type { FakeAgentScript } from "./fake-agent/main";
 import { stubFsTerminalHooks } from "./support/stub-hooks";
 import type { PatchbayAgentId } from "../src/shared/ids";
+import { name as packageName, version as packageVersion } from "../package.json";
 
 const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
 
@@ -115,6 +116,18 @@ describe("AgentPool", () => {
       .filter((u) => u.sessionId === sessionId)
       .map((u) => agentText(u.update));
     expect(texts.join("")).toBe("part one part two");
+    await pool.stop("fake" as PatchbayAgentId);
+  });
+
+  // Patchbay names itself to an agent by the extension's own name and
+  // version — never a fixed string that outlives the release it was typed in.
+  it("introduces itself at initialize by the extension's name and version", async () => {
+    const { pool, rec } = makePool();
+    await pool.connect(spec({ turn: [{ type: "echoClientInfo" }] }));
+    const { sessionId } = await pool.newSession("fake" as PatchbayAgentId, cwd);
+    await pool.prompt("fake" as PatchbayAgentId, sessionId, [{ type: "text", text: "who?" }]);
+    const said = rec.updates.filter((u) => u.sessionId === sessionId).map((u) => agentText(u.update)).join("");
+    expect(said).toBe(`client: ${packageName} ${packageVersion}`);
     await pool.stop("fake" as PatchbayAgentId);
   });
 

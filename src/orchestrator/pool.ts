@@ -49,6 +49,7 @@ import { readSessionUpdate, type SessionUpdateFact } from "./readers/session-upd
 import { resolveSpawn } from "./spawn-resolve";
 import { commandOf, killTree, treeSpawnOptions } from "./process-tree";
 import type { PatchbayAgentId } from "../shared/ids";
+import { PRODUCT } from "../shared/product";
 
 /** Launch-phase seam (runtime-resolver.ts): given the spec about to spawn,
  * returns the spec that actually spawns — the same spec when the system
@@ -490,7 +491,7 @@ export class AgentPool {
       ];
     };
     const connection = acp
-      .client({ name: "acp-patchbay" })
+      .client({ name: PRODUCT.name })
       .onRequest(
         ...proven(acp.methods.client.session.requestPermission, async (ctx): Promise<acp.RequestPermissionResponse> => {
           const answer = (await this.hooks.onPermissionRequest?.(patchbayAgentId, readPermissionRequest(ctx.params), ctx.signal)) ?? {
@@ -586,7 +587,7 @@ export class AgentPool {
         acp.methods.agent.initialize,
         {
           protocolVersion: acp.PROTOCOL_VERSION,
-          clientInfo: { name: "acp-patchbay", version: "0.0.1" },
+          clientInfo: PRODUCT,
           clientCapabilities: clientCapabilitiesWire(),
         },
         readInitialize,

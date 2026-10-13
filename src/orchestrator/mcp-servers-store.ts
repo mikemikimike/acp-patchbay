@@ -28,6 +28,7 @@ import { unlessAborted } from "./abort";
 import { probeMcpServer, type ProbeFn, type ProbeTarget } from "./mcp-probe";
 import { formatCommandLine, parseCommandLine } from "../shared/command-line";
 import { EDITOR_SERVER_NAME } from "../shared/names";
+import { PRODUCT } from "../shared/product";
 import { loggableUrl, nullLogger, type Logger } from "./logger";
 import { connectMcpOAuth, refreshMcpOAuth, type OAuthUserAgent } from "./mcp-oauth";
 import { McpServerTokenStore, type StoredToken } from "./stores/mcp-server-tokens";
@@ -123,7 +124,7 @@ export interface AttachedServer {
 }
 
 const CLIENT_INFO = {
-  clientName: "acp-patchbay",
+  clientName: PRODUCT.name,
   clientUri: "https://github.com/solutionsunity/acp-patchbay",
 };
 

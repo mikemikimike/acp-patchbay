@@ -19,7 +19,9 @@
   problems, the session's roots, and a way to ask you a question), and
   nothing showed it. MCP Servers now opens with it, read-only: what it
   serves and whether it answers, checked the first time the page opens.
-  It reports the extension's version, no longer a fixed 0.0.1. (#43)
+  Patchbay now names itself by the extension's version everywhere — to
+  agents, to the servers it checks, and from its own server — no longer a
+  fixed 0.0.1. (#43)
 
 ## 0.86.0 — 2026-10-10
 

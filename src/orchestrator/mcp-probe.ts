@@ -14,6 +14,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { prepareLauncher } from "./launcher-health";
 import { nullLogger, type Logger } from "./logger";
+import { PRODUCT } from "../shared/product";
 
 export type ProbeTarget =
   | { kind: "http"; url: string; header: { name: string; value: string } | null }
@@ -65,7 +66,7 @@ export async function probeMcpServer(target: ProbeTarget, signal?: AbortSignal, 
           cwd: target.cwd,
           stderr: "ignore",
         });
-  const client = new Client({ name: "acp-patchbay", version: "0" });
+  const client = new Client(PRODUCT);
   try {
     await client.connect(transport, { timeout: NO_LIMIT_MS, signal });
     const serverInfo = client.getServerVersion();
