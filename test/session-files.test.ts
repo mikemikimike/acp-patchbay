@@ -104,9 +104,9 @@ describe("adoptStashedChips — chips staged before sessions kept their own file
     await continuity.patch(A, "s1", "/ws", {
       chips: [
         { kind: "image", id: "chip-1", label: "Image", mimeType: "image/png", path: join(stash, "chip-1.png") },
-        { kind: "attachment", id: "chip-2", label: "File: notes.txt", path: join(stash, "chip-2-notes.txt") },
+        { kind: "attachment", id: "chip-2", label: "File: notes.txt", name: "notes.txt", path: join(stash, "chip-2-notes.txt") },
         { kind: "image", id: "chip-3", label: "Gone", mimeType: "image/png", path: join(stash, "chip-3.png") },
-        { kind: "attachment", id: "chip-4", label: "Picked", path: "/home/user/report.pdf" },
+        { kind: "attachment", id: "chip-4", label: "Picked", name: "report.pdf", path: "/home/user/report.pdf" },
         { kind: "selection", id: "chip-5", label: "Selection", content: "x" },
       ],
     });
@@ -116,8 +116,8 @@ describe("adoptStashedChips — chips staged before sessions kept their own file
     const folder = files.dirOf(A, "s1", "/ws");
     expect(continuity.read(A, "s1")?.chips).toEqual([
       { kind: "image", id: "chip-1", label: "Image", mimeType: "image/png", path: join(folder, "chip-1.png") },
-      { kind: "attachment", id: "chip-2", label: "File: notes.txt", path: join(folder, "chip-2-notes.txt") },
-      { kind: "attachment", id: "chip-4", label: "Picked", path: "/home/user/report.pdf" },
+      { kind: "attachment", id: "chip-2", label: "File: notes.txt", name: "notes.txt", path: join(folder, "chip-2-notes.txt") },
+      { kind: "attachment", id: "chip-4", label: "Picked", name: "report.pdf", path: "/home/user/report.pdf" },
       { kind: "selection", id: "chip-5", label: "Selection", content: "x" },
     ]);
     expect(await readFile(join(folder, "chip-1.png"), "utf8")).toBe("png-bytes");

@@ -1402,6 +1402,7 @@ describe("SessionsStore", () => {
       id: "chip-att",
       kind: "attachment",
       label: "File: report.pdf",
+      name: "report.pdf",
       path: "/ws/docs/report.pdf",
       mimeType: "application/pdf",
     });
@@ -1409,6 +1410,7 @@ describe("SessionsStore", () => {
       id: "chip-att-2",
       kind: "attachment",
       label: "File: blob.bin",
+      name: "blob.bin",
       path: "/ws/blob.bin",
       // no mimeType: the producer didn't know one — absent stays absent
     });
@@ -3617,6 +3619,7 @@ describe("chunk rendering honesty (G4/G10/G11)", () => {
       id: "att-1",
       kind: "attachment",
       label: "notes.md",
+      name: "notes.md",
       path: "/ws/notes.md",
     });
     await h.sessions.addContext(patchbaySessionId, {
@@ -3912,7 +3915,7 @@ describe("a session's files live with the session", () => {
     await h.pool.stop("f78b" as PatchbayAgentId);
   });
 
-  it("a dropped file lands in the session's folder, and its chip links it there", async () => {
+  it("a dropped file lands in the session's folder, and its chip links it there — under its own name", async () => {
     const h = harness();
     await h.pool.connect(spec({ turn: [{ type: "echoBlockKinds" }] }, "f78c"));
     const patchbaySessionId = await h.sessions.createSession("f78c" as PatchbayAgentId, "Fake Agent", cwd);
@@ -3925,11 +3928,15 @@ describe("a session's files live with the session", () => {
     const path = join(h.files.dirOf("f78c" as PatchbayAgentId, h.sessions.sessionIdOf(patchbaySessionId)!, cwd), "chip-f78c-my_notes.txt");
     expect(await readFile(path, "utf8")).toBe("notes");
     expect(h.state().contextChips[patchbaySessionId]).toEqual([
-      { id: "chip-f78c", kind: "attachment", label: "File: my notes.txt", path, mimeType: "text/plain" },
+      { id: "chip-f78c", kind: "attachment", label: "File: my notes.txt", name: "my notes.txt", path, mimeType: "text/plain" },
     ]);
 
     await h.gates.prompt(patchbaySessionId, { text: "read it" });
-    expect(echoedKinds(h, patchbaySessionId)[0]).toMatchObject({ type: "resource_link", uri: pathToFileURL(path).toString() });
+    // the copy's name keeps two drops apart; the prompt and the agent read
+    // the file's own
+    expect(echoedKinds(h, patchbaySessionId)[0]).toMatchObject({ type: "resource_link", uri: pathToFileURL(path).toString(), name: "my notes.txt" });
+    const sent = h.state().transcripts[patchbaySessionId]!.find((b) => b.kind === "user");
+    expect(sent?.kind === "user" && sent.parts[0]).toEqual({ kind: "attachment", name: "my notes.txt", path });
     await h.pool.stop("f78c" as PatchbayAgentId);
   });
 
@@ -3941,8 +3948,8 @@ describe("a session's files live with the session", () => {
     await writeFile(notes, "notes");
     const gonePath = join(tmpdir(), `patchbay-f59a-gone-${Date.now()}.txt`);
     await h.sessions.addContext(patchbaySessionId, { id: "chip-f59a-img", kind: "image", label: "Image", content: PNG, mimeType: "image/png" });
-    await h.sessions.addContext(patchbaySessionId, { id: "chip-f59a-file", kind: "attachment", label: "File: notes", path: notes });
-    await h.sessions.addContext(patchbaySessionId, { id: "chip-f59a-gone", kind: "attachment", label: "File: gone", path: gonePath });
+    await h.sessions.addContext(patchbaySessionId, { id: "chip-f59a-file", kind: "attachment", label: "File: notes", name: basename(notes), path: notes });
+    await h.sessions.addContext(patchbaySessionId, { id: "chip-f59a-gone", kind: "attachment", label: "File: gone", name: basename(gonePath), path: gonePath });
     await h.sessions.addContext(patchbaySessionId, { id: "chip-f59a-sel", kind: "selection", label: "a.ts:1-2", content: "x" });
     await h.gates.prompt(patchbaySessionId, { text: "look" });
     expect(h.state().contextChips[patchbaySessionId] ?? []).toEqual([]);

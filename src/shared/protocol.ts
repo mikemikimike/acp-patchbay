@@ -372,7 +372,7 @@ export interface QueuedPrompt {
 export type PersistedChip =
   | { kind: "selection" | "file" | "diagnostics"; id: string; label: string; content: string; sourceUri?: string }
   | { kind: "image"; id: string; label: string; mimeType: string; path: string }
-  | { kind: "attachment"; id: string; label: string; path: string; mimeType?: string };
+  | { kind: "attachment"; id: string; label: string; name: string; path: string; mimeType?: string };
 
 /** The survives-reload family: session-scoped state the wire cannot
  * re-report (agents reset knobs on load; roots are the list this client
@@ -1738,10 +1738,14 @@ export type ContextChip =
     })
   | (ContextChipBase & {
       kind: "attachment";
-      /** A real file on this machine — an IDE drop's own path, or the temp
-       * file an external drop was staged to at ingress. Rides the prompt as
-       * a resource_link (the baseline every agent MUST accept); the agent
-       * reads the content itself through the brokered fs path. */
+      /** The file's own name, as the user knows it — what the prompt and
+       * the agent call it. Never read off `path`: a dropped file's copy is
+       * named apart by its chip id. */
+      name: string;
+      /** A real file on this machine — a picked file's own path, or the
+       * copy a dropped file landed as in the session's folder. Rides the
+       * prompt as a resource_link (the baseline every agent MUST accept);
+       * the agent reads the content itself through the brokered fs path. */
       path: string;
       /** Present only when the producer knew it — never guessed. */
       mimeType?: string;

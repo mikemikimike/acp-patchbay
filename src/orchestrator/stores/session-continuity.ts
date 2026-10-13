@@ -21,10 +21,10 @@
 // and for an agent that cannot list, its next connect drops the rows of
 // this workspace no session of the window holds — no list will ever name
 // them again. A zero-turn re-mint moves the row to the session's new id.
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { z } from "zod";
 import type { SessionContinuity } from "../../shared/protocol";
-import { ATTACHMENTS_DIR } from "../attachments";
+import { ATTACHMENTS_DIR, fileChipLabel } from "../attachments";
 import { RecordStore } from "./global-record-store";
 import type { KV } from "./kv";
 import type { PatchbayAgentId } from "../../shared/ids";
@@ -51,6 +51,7 @@ const persistedChipSchema = z.discriminatedUnion("kind", [
     kind: z.literal("attachment"),
     id: z.string().min(1),
     label: z.string(),
+    name: z.string(),
     path: z.string(),
     mimeType: z.string().optional(),
   }),
@@ -124,14 +125,17 @@ const isRow = (row: SessionContinuityEntry, patchbayAgentId: PatchbayAgentId, se
 export class SessionContinuityStore extends RecordStore<SessionContinuityEntry> {
   constructor(kv: KV) {
     super(kv, KEY, sessionContinuityEntrySchema);
-    // Once, at construction, two older shapes are rewritten — read as they
+    // Once, at construction, older shapes are rewritten — read as they
     // were, the rows would fail their schema and be dropped. A row stored
     // before the pair had fields of its own carries it as one composite
     // `id` — the agent, a NUL, the agent's id for the session — next to an
-    // `agentId`: rewritten as `patchbayAgentId` and `sessionId`. A row
-    // stored before a session kept its own files names an image chip's
-    // file in the temp stash (`file`): rewritten as that file's `path`.
-    // Every other field as stored.
+    // `agentId`: rewritten as `patchbayAgentId` and `sessionId`. Two chip
+    // shapes are rewritten wherever a row holds chips — staged, or held
+    // with a queued prompt: an image chip stored before a session kept its
+    // own files names its file in the temp stash (`file`), rewritten as
+    // that file's `path`; an attached file stored before a chip kept the
+    // file's own name has none, and takes it from its label, which every
+    // such chip spelled "File: <name>". Every other field as stored.
     const stored = kv.get<unknown>(KEY);
     const composite = (r: unknown): r is { id: string; agentId: string } =>
       typeof r === "object" &&
@@ -143,9 +147,34 @@ export class SessionContinuityStore extends RecordStore<SessionContinuityEntry> 
       r.id.startsWith(`${r.agentId}\u0000`);
     const stashedImage = (c: unknown): c is { kind: "image"; file: string } =>
       typeof c === "object" && c !== null && "kind" in c && c.kind === "image" && "file" in c && typeof c.file === "string";
+    const unnamedFile = (c: unknown): c is { kind: "attachment"; label: string; path: string } =>
+      typeof c === "object" &&
+      c !== null &&
+      "kind" in c &&
+      c.kind === "attachment" &&
+      !("name" in c) &&
+      "label" in c &&
+      typeof c.label === "string" &&
+      "path" in c &&
+      typeof c.path === "string";
+    const stale = (c: unknown) => stashedImage(c) || unnamedFile(c);
     const chipsOf = (r: unknown): unknown[] =>
       typeof r === "object" && r !== null && "chips" in r && Array.isArray(r.chips) ? r.chips : [];
-    if (Array.isArray(stored) && stored.some((r) => composite(r) || chipsOf(r).some(stashedImage))) {
+    const queueOf = (r: unknown): unknown[] =>
+      typeof r === "object" && r !== null && "queue" in r && Array.isArray(r.queue) ? r.queue : [];
+    const fileLabel = fileChipLabel("");
+    const rewrite = (c: unknown): unknown => {
+      if (stashedImage(c)) {
+        const { file, ...chip } = c;
+        return { ...chip, path: join(ATTACHMENTS_DIR, file) };
+      }
+      if (unnamedFile(c)) {
+        return { ...c, name: c.label.startsWith(fileLabel) ? c.label.slice(fileLabel.length) : basename(c.path) };
+      }
+      return c;
+    };
+    const holdsStale = (r: unknown) => chipsOf(r).some(stale) || queueOf(r).some((q) => chipsOf(q).some(stale));
+    if (Array.isArray(stored) && stored.some((r) => composite(r) || holdsStale(r))) {
       void kv.update(
         KEY,
         stored.map((r: unknown) => {
@@ -154,13 +183,13 @@ export class SessionContinuityStore extends RecordStore<SessionContinuityEntry> 
             const { id, agentId, ...rest } = row;
             row = { patchbayAgentId: agentId, sessionId: id.slice(agentId.length + 1), ...rest };
           }
-          if (!chipsOf(row).some(stashedImage)) return row;
-          const chips = chipsOf(row).map((c) => {
-            if (!stashedImage(c)) return c;
-            const { file, ...chip } = c;
-            return { ...chip, path: join(ATTACHMENTS_DIR, file) };
-          });
-          return { ...(row as object), chips };
+          if (!holdsStale(row)) return row;
+          const queue = queueOf(row).map((q) => (chipsOf(q).some(stale) ? { ...(q as object), chips: chipsOf(q).map(rewrite) } : q));
+          return {
+            ...(row as object),
+            ...(chipsOf(row).some(stale) ? { chips: chipsOf(row).map(rewrite) } : {}),
+            ...(queue.length > 0 ? { queue } : {}),
+          };
         }),
       );
     }

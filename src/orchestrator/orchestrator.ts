@@ -2385,6 +2385,7 @@ export class Orchestrator {
         id: chipId(),
         kind: "attachment",
         label: fileChipLabel(name),
+        name,
         path: uri.fsPath,
       });
     }

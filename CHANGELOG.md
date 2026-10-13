@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **A dropped file keeps its own name.** Patchbay stores a dropped file as
+  `chip-…-name` so two drops of the same name never meet, and the prompt
+  took the file's name from that stored copy: the chat showed
+  `chip-…-my_notes.txt`, and the agent was told the same. Both now read
+  `my notes.txt`. Files staged in an open session before this update get
+  their name back from their chip.
 - **Earlier prompts can be reached again.** A long session's prompts could
   be found only by scrolling. A prompts chip now sits beside the
   edited-files chip: it lists what you asked, newest first; a prompt's words

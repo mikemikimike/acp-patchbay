@@ -183,6 +183,7 @@ function persistChip(chip: Exclude<ContextChip, { kind: "image" }>): PersistedCh
       kind: "attachment",
       id: chip.id,
       label: chip.label,
+      name: chip.name,
       path: chip.path,
       ...(chip.mimeType !== undefined ? { mimeType: chip.mimeType } : {}),
     };
@@ -1563,6 +1564,7 @@ export class SessionsStore {
       id: file.chipId,
       kind: "attachment",
       label: fileChipLabel(file.name),
+      name: file.name,
       path,
       // "" = the platform didn't know the type; absent stays absent.
       ...(file.mimeType !== "" ? { mimeType: file.mimeType } : {}),
@@ -1599,7 +1601,13 @@ export class SessionsStore {
         }
         case "attachment":
           if (await access(part.path).then(() => true, () => false)) {
-            await this.addContext(patchbaySessionId, { id: chipId(), kind: "attachment", label: fileChipLabel(part.name), path: part.path });
+            await this.addContext(patchbaySessionId, {
+              id: chipId(),
+              kind: "attachment",
+              label: fileChipLabel(part.name),
+              name: part.name,
+              path: part.path,
+            });
           } else missed.push(`${part.name}, no longer at ${part.path}`);
           break;
         case "context":
@@ -1975,7 +1983,7 @@ export class SessionsStore {
     const userParts: UserPart[] = chips.map((c): UserPart => {
       if (c.kind === "image") return { kind: "image", mimeType: c.mimeType, file: imageFileName(c.id, c.mimeType) };
       if (c.kind === "attachment") {
-        return { kind: "attachment", name: basename(c.path), path: c.path };
+        return { kind: "attachment", name: c.name, path: c.path };
       }
       return { kind: "context", label: c.label, text: boundedText(c.content) };
     });
@@ -2032,7 +2040,7 @@ export class SessionsStore {
         prompt.push({
           type: "resource_link",
           uri: pathToFileURL(c.path).toString(),
-          name: basename(c.path),
+          name: c.name,
           ...(c.mimeType !== undefined ? { mimeType: c.mimeType } : {}),
         });
       } else if (acceptsEmbedded) {
@@ -2196,6 +2204,7 @@ export class SessionsStore {
           kind: "attachment",
           id: chip.id,
           label: chip.label,
+          name: chip.name,
           path: chip.path,
           ...(chip.mimeType !== undefined ? { mimeType: chip.mimeType } : {}),
         });

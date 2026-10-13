@@ -562,12 +562,38 @@ describe("SessionContinuityStore", () => {
     const store = new SessionContinuityStore(kv);
     expect(store.read("claude" as PatchbayAgentId, "s1")?.chips).toEqual([
       { kind: "image", id: "chip-1", label: "Image", mimeType: "image/png", path: join(ATTACHMENTS_DIR, "chip-1.png") },
-      { kind: "attachment", id: "chip-2", label: "File: a.txt", path: "/home/u/a.txt" },
+      { kind: "attachment", id: "chip-2", label: "File: a.txt", name: "a.txt", path: "/home/u/a.txt" },
     ]);
     expect(store.read("auggie" as PatchbayAgentId, "s2")?.chips).toEqual([
       { kind: "image", id: "chip-3", label: "Image", mimeType: "image/png", path: join(ATTACHMENTS_DIR, "chip-3.png") },
     ]);
     expect(JSON.stringify(kv.get("acpPatchbay.sessionContinuity"))).not.toContain("\"file\"");
+  });
+
+  it("an attached file stored without its own name takes it from its label — staged or held, nothing dropped", async () => {
+    const kv = new MemoryKV();
+    const unnamed = (id: string, label: string, path: string) => ({ kind: "attachment", id, label, path });
+    await kv.update("acpPatchbay.sessionContinuity", [
+      {
+        patchbayAgentId: "claude",
+        sessionId: "s1",
+        chips: [unnamed("chip-1", "File: my notes.txt", "/s/chip-1-my_notes.txt")],
+        queue: [
+          { id: "q1", text: "held", chips: [unnamed("chip-2", "File: report.pdf", "/s/chip-2-report.pdf")] },
+          { id: "q2", text: "no chips" },
+        ],
+      },
+      // a label some other hand spelled: the path's own name, the one left
+      { patchbayAgentId: "claude", sessionId: "s2", chips: [unnamed("chip-3", "Picked", "/home/u/plan.md")] },
+    ]);
+    const store = new SessionContinuityStore(kv);
+    const s1 = store.read("claude" as PatchbayAgentId, "s1");
+    expect(s1?.chips).toEqual([{ ...unnamed("chip-1", "File: my notes.txt", "/s/chip-1-my_notes.txt"), name: "my notes.txt" }]);
+    expect(s1?.queue).toEqual([
+      { id: "q1", text: "held", chips: [{ ...unnamed("chip-2", "File: report.pdf", "/s/chip-2-report.pdf"), name: "report.pdf" }] },
+      { id: "q2", text: "no chips" },
+    ]);
+    expect(store.read("claude" as PatchbayAgentId, "s2")?.chips).toEqual([{ ...unnamed("chip-3", "Picked", "/home/u/plan.md"), name: "plan.md" }]);
   });
 
   const ws = "/ws/a";
