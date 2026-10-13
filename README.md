@@ -83,6 +83,27 @@ orchestrator layer on top:
 Settings (gear icon) is where the capability matrix, MCP servers, permission
 rules, and agent / session management live.
 
+## Where your configuration lives
+
+Nothing goes into `settings.json`, so Settings Sync carries none of it.
+
+- **Agents, MCP servers, preferences, machine-wide permission rules, saved
+  roots and composer choices** are in `state.json`, in the extension's
+  global storage folder:
+  - Linux: `~/.config/Code/User/globalStorage/solutionsunity.acp-patchbay/`
+  - macOS: `~/Library/Application Support/Code/User/globalStorage/solutionsunity.acp-patchbay/`
+  - Windows: `%APPDATA%\Code\User\globalStorage\solutionsunity.acp-patchbay\`
+  - Remote, WSL: `~/.vscode-server/data/User/globalStorage/solutionsunity.acp-patchbay/` on the remote side
+
+  Other editors built on VS Code use their own folder in place of `Code`.
+  The same folder holds patchbay's caches: downloaded agents, the registry,
+  and session files.
+- **Env values and API keys** are in VS Code's secret storage, encrypted by
+  your OS keychain and scoped to the extension's ID. Copying `state.json` to
+  another machine moves the configuration without them.
+- **This workspace's own rules and saved roots** are in VS Code's
+  per-workspace storage.
+
 ## Uninstalling cleanly
 
 VS Code has no uninstall hook, and secrets can survive uninstall — so a clean
