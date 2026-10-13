@@ -142,9 +142,11 @@ export type Action =
   /** Writes the picked parts of this machine's configuration to a file the
    * user names in a save dialog. */
   | { kind: "exportConfiguration"; parts: readonly ExportPart[] }
-  /** Opens a configuration file to import: read, then set against this
-   * machine for review. */
-  | { kind: "pickConfigImport" }
+  /** A configuration file the user picked or dropped on the Import card,
+   * read where they sit — in a remote window, the machine the editor runs
+   * on, which the host's own open dialog can't reach. The host reads it and
+   * sets it against this machine for review. */
+  | { kind: "readConfigImport"; fileName: string; text: string }
   /** Lands the ticked items of a reviewed import — `take` names them. */
   | { kind: "applyConfigImport"; importId: number; take: readonly string[] }
   | { kind: "dismissConfigImport"; importId: number }

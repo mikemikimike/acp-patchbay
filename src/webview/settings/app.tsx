@@ -127,7 +127,7 @@ export function App({ state }: { state: SettingsState }) {
           <ImportExportSection
             state={state}
             onExport={(parts) => send({ kind: "exportConfiguration", parts })}
-            onPickImport={() => send({ kind: "pickConfigImport" })}
+            onReadImport={(fileName, text) => send({ kind: "readConfigImport", fileName, text })}
             onApplyImport={(importId, take) => send({ kind: "applyConfigImport", importId, take })}
             onDismissImport={(importId) => send({ kind: "dismissConfigImport", importId })}
           />

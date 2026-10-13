@@ -1435,8 +1435,22 @@ for (const theme of Object.keys(THEMES)) {
   check("[narrow] with nothing ticked, Export is off", await p.locator('button:has-text("Export…")').isDisabled());
 
   // ── Import: reviewed item by item; new ones start ticked, different ones don't ──
-  await p.click('button:has-text("Import…")');
-  check("[narrow] Import asks the host for a file", (await p.evaluate(() => window.__actions.at(-1)))?.kind === "pickConfigImport");
+  // The file is read here, where the user sits — picked or dropped — and
+  // its text handed to the host.
+  const [chooser] = await Promise.all([p.waitForEvent("filechooser"), p.click('button:has-text("Import…")')]);
+  await chooser.setFiles({ name: "picked.json", mimeType: "application/json", buffer: Buffer.from('{"patchbay":"configuration"}') });
+  await p.waitForFunction(() => window.__actions.at(-1)?.kind === "readConfigImport");
+  const picked = await p.evaluate(() => window.__actions.at(-1));
+  check("[narrow] Import… reads the picked file here and hands its text to the host", picked.fileName === "picked.json" && picked.text === '{"patchbay":"configuration"}');
+  await p.evaluate(() => {
+    const data = new DataTransfer();
+    data.items.add(new File(['{"dropped":true}'], "dropped.json", { type: "application/json" }));
+    const card = document.querySelector("[data-import-card]");
+    card.dispatchEvent(new DragEvent("dragover", { dataTransfer: data, bubbles: true, cancelable: true }));
+    card.dispatchEvent(new DragEvent("drop", { dataTransfer: data, bubbles: true, cancelable: true }));
+  });
+  await p.waitForFunction(() => window.__actions.at(-1)?.fileName === "dropped.json");
+  check("[narrow] a file dropped on the Import card is read the same way", (await p.evaluate(() => window.__actions.at(-1))).text === '{"dropped":true}');
   const item = (id, part, kind, label, fate, differs = [], flags = []) => ({ id, part, kind, label, fate, differs, flags });
   await p.evaluate((items) =>
     window.__patch([{

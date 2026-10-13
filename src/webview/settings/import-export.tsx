@@ -4,8 +4,10 @@
 // Import/Export: this machine's configuration carried to a file, picked by
 // part, and a file carried back in. What is ticked is this page's own
 // render state; reading, planning and landing are the host's — an import
-// is reviewed here, item by item, before anything moves.
-import { useState } from "react";
+// is reviewed here, item by item, before anything moves. The file to
+// import is picked or dropped here, on the machine the user sits at: in a
+// remote window the host's own open dialog reaches only the remote side.
+import { useRef, useState } from "react";
 import { count } from "../../shared/count";
 import type { ConfigImportView, ExportPart, ImportItemView, SettingsState } from "../../shared/protocol";
 import { Icon } from "../shared/icon";
@@ -22,7 +24,7 @@ const PART_LABELS: Readonly<Record<ExportPart, string>> = {
 export function ImportExportSection(props: {
   state: SettingsState;
   onExport(parts: readonly ExportPart[]): void;
-  onPickImport(): void;
+  onReadImport(fileName: string, text: string): void;
   onApplyImport(importId: number, take: readonly string[]): void;
   onDismissImport(importId: number): void;
 }) {
@@ -49,6 +51,13 @@ export function ImportExportSection(props: {
       else next.delete(part);
       return next;
     });
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [dropping, setDropping] = useState(false);
+  const takes = state.configImport?.stage !== "applying";
+  const readFile = async (file: File | undefined) => {
+    if (file !== undefined && takes) props.onReadImport(file.name, await file.text());
+  };
+  const pickFile = () => fileInput.current?.click();
 
   return (
     <section className="section">
@@ -81,15 +90,44 @@ export function ImportExportSection(props: {
         </Button>
       </div>
 
-      <div className="card mt-3">
+      <div
+        className={`card mt-3 ${dropping ? "border-brand" : ""}`}
+        data-import-card
+        onDragOver={(e) => {
+          if (!takes) return;
+          e.preventDefault();
+          setDropping(true);
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropping(false);
+        }}
+        onDrop={(e) => {
+          setDropping(false);
+          if (!takes) return;
+          e.preventDefault();
+          void readFile(e.dataTransfer.files[0]);
+        }}
+      >
         <h2 className="mt-0">Import</h2>
+        <input
+          ref={fileInput}
+          type="file"
+          accept=".json,application/json"
+          className="hidden"
+          data-import-file
+          onChange={(e) => {
+            void readFile(e.target.files?.[0]);
+            // The same file picked again is a new read.
+            e.target.value = "";
+          }}
+        />
         {state.configImport === null ? (
           <>
             <div className="note mx-0 mt-0 mb-2.5">
               Reads a file patchbay exported and shows what it would bring, item by item. Nothing changes until you
-              apply, and nothing here is ever removed by an import.
+              apply, and nothing here is ever removed by an import. Pick the file, or hold Shift and drop it here.
             </div>
-            <Button size="sm" variant="outline" onClick={props.onPickImport}>
+            <Button size="sm" variant="outline" onClick={pickFile}>
               Import…
             </Button>
           </>
@@ -97,7 +135,7 @@ export function ImportExportSection(props: {
           <ImportStage
             key={state.configImport.id}
             view={state.configImport}
-            onPick={props.onPickImport}
+            onPick={pickFile}
             onApply={(take) => props.onApplyImport(state.configImport!.id, take)}
             onDismiss={() => props.onDismissImport(state.configImport!.id)}
           />

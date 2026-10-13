@@ -925,29 +925,11 @@ export class Orchestrator {
     );
   }
 
-  /** Import, first half: the file the user picks, read and set against
+  /** Import, first half: the file the user picked, read and set against
    * this machine for review — or refused, saying why. Nothing moves yet. */
-  private async pickConfigImport(): Promise<void> {
-    const [target] =
-      (await vscode.window.showOpenDialog({
-        title: "Import patchbay configuration",
-        canSelectMany: false,
-        filters: { JSON: ["json"] },
-      })) ?? [];
-    if (target === undefined) return;
+  private async readConfigImport(fileName: string, text: string): Promise<void> {
     const id = ++this.importCount;
-    const fileName = basename(target.path);
     this.configImport = null;
-    let text: string;
-    try {
-      // Through the editor's file system: from a remote window the file may
-      // be on the machine the editor runs on.
-      text = Buffer.from(await vscode.workspace.fs.readFile(target)).toString("utf8");
-    } catch (err) {
-      const reason = `The file can't be read — ${err instanceof Error ? err.message : String(err)}`;
-      this.settings.emit({ kind: "configImportChanged", configImport: { id, stage: "refused", fileName, reason } });
-      return;
-    }
     const outcome = readConfiguration(text);
     if (!outcome.ok) {
       this.settings.emit({ kind: "configImportChanged", configImport: { id, stage: "refused", fileName, reason: outcome.reason } });
@@ -1903,8 +1885,8 @@ export class Orchestrator {
       case "exportConfiguration":
         void this.exportToFile(action.parts);
         break;
-      case "pickConfigImport":
-        void this.pickConfigImport().catch(this.logCatch("import: read"));
+      case "readConfigImport":
+        void this.readConfigImport(action.fileName, action.text).catch(this.logCatch("import: read"));
         break;
       case "applyConfigImport":
         void this.applyConfigImport(action.importId, action.take).catch(this.logCatch("import: apply"));

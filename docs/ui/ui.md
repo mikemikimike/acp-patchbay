@@ -381,8 +381,12 @@ WSL), which takes that machine's usual permissions. The outcome is a
 notification, as Copy config's is.
 
 The **Import** card reads a file in three stages. `Import…` opens the file
-dialog; a file that isn't one patchbay can read is refused in the card, with
-why and `Choose another file…`. A read file is reviewed: its name, when and by
+picker of the machine the user sits at — the webview's own, since in a remote
+window (WSL, SSH) the extension's open dialog reaches only the remote side —
+and the file can be dropped on the card too (holding Shift, as any OS drop
+into a webview); the file's text goes to the host to read. A file that isn't
+one patchbay can read is refused in the card, with why and `Choose another
+file…`. A read file is reviewed: its name, when and by
 which version it was exported (a newer version is warned of: something in it
 may not work here), anything it holds that didn't read, then each part with a
 checkbox ticking all of its items and each item beside its own — `new` (starts
