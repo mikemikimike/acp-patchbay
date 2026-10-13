@@ -180,7 +180,7 @@ const unlistedMatrix = Object.fromEntries(
 /** Complete stored-preferences object, as every snapshot carries. */
 export const preferences = {
   soundOnDone: false, doneSound: "", knobSource: "agent-default", idleCloseMinutes: 60,
-  statsPrompts: true, statsToolCalls: true, statsContext: true, statsPlanUsage: true,
+  statsToolCalls: true, statsContext: true, statsPlanUsage: true,
   detachWindows: true, attachmentMaxMB: 10, openThinking: false, executeCalls: "grouped",
 };
 

@@ -153,6 +153,12 @@ deliverable.
   agent reports them. What the agent's engine does with roots is the
   agent's business — patchbay passes, it does not index.
 - Slash commands the agent advertises are discoverable and invokable in the input.
+- Every prompt the session asked is one click away: listed newest first, it
+  takes the chat to where it was asked, and from any prompt the previous and
+  next are one step. An earlier prompt can be reused — put back in an empty
+  composer, its mentions and files with it, ready to change and send — and
+  what can't come back with it (a snapshot of its moment, a file since gone)
+  is named, never dropped silently.
 - Permission requests appear inline with the choices the requester actually
   offers — the agent's own options verbatim, patchbay's own for the gates it
   runs — and are impossible to miss when the view is hidden.

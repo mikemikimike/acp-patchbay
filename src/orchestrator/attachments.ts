@@ -9,12 +9,22 @@
 // preview degrades to a label chip, never an error. What a session was
 // given, and an agent may read again, lives with the session instead
 // (stores/session-files.ts).
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { classify, wireImageExtension, wireImageMimeOf } from "../shared/attachment-policy";
 
 export const ATTACHMENTS_DIR = join(tmpdir(), "acp-patchbay-attachments");
+
+/** Context-chip id mint. A staged chip is saved with its session, so it
+ * outlives the window, and a chip names its stash file in the one folder
+ * every window shares — so the id is random: a timestamp collides within a
+ * multi-file drop, and a counter restarts with every window. */
+export const chipId = (): string => `chip-${randomUUID()}`;
+
+/** A chip for a file attached whole, labeled by the file's own name. */
+export const fileChipLabel = (name: string): string => `File: ${name}`;
 
 /** Deterministic filename for an image — callers put it on the transcript
  * part before (or without awaiting) the bytes landing. An image chip can't

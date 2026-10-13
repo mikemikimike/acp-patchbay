@@ -16,7 +16,8 @@
 // view state, updated only through the shared reducer — disposable, rebuilt
 // by replay, never merged.
 import { randomUUID } from "node:crypto";
-import { basename, sep } from "node:path";
+import { access } from "node:fs/promises";
+import { basename, join, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ContentBlock, McpServer } from "@agentclientprotocol/sdk";
 import {
@@ -33,9 +34,11 @@ import {
   type SessionSummary,
   type ToolCallBlock,
   type TurnUsage,
+  type UserBlock,
   type UserPart,
+  unrenderedLabel,
 } from "../shared/protocol";
-import { imageFileName, readBase64, stashPreview } from "./attachments";
+import { ATTACHMENTS_DIR, chipId, fileChipLabel, imageFileName, readBase64, stashPreview } from "./attachments";
 import {
   applyConfigUpdate,
   applyModeUpdate,
@@ -1559,11 +1562,58 @@ export class SessionsStore {
     await this.addContext(patchbaySessionId, {
       id: file.chipId,
       kind: "attachment",
-      label: `File: ${file.name}`,
+      label: fileChipLabel(file.name),
       path,
       // "" = the platform didn't know the type; absent stays absent.
       ...(file.mimeType !== "" ? { mimeType: file.mimeType } : {}),
     });
+  }
+
+  /** A sent prompt's files staged again for the next prompt — its words go
+   * back into the composer, which is the view's. An image comes back from
+   * the copy the transcript shows, an attached file from its path. What
+   * can't come back is returned, one phrase each: a snapshot (selection,
+   * problems) was of its moment and is taken afresh, never re-sent from the
+   * transcript's bounded copy; a file that's gone is gone. */
+  async restagePromptFiles(patchbaySessionId: PatchbaySessionId, blockId: string): Promise<string[]> {
+    const prompt = (this.hooks.currentTranscript?.(patchbaySessionId) ?? []).find(
+      (b): b is UserBlock => b.kind === "user" && b.id === blockId,
+    );
+    if (prompt === undefined || !this.known.has(patchbaySessionId)) return [];
+    const missed: string[] = [];
+    for (const part of prompt.parts) {
+      switch (part.kind) {
+        case "image": {
+          const content = part.file === undefined ? null : await readBase64(join(ATTACHMENTS_DIR, part.file));
+          if (content === null) missed.push("an image patchbay holds no copy of");
+          else {
+            await this.addContext(patchbaySessionId, {
+              id: chipId(),
+              kind: "image",
+              label: `Image (${part.mimeType})`,
+              content,
+              mimeType: part.mimeType,
+            });
+          }
+          break;
+        }
+        case "attachment":
+          if (await access(part.path).then(() => true, () => false)) {
+            await this.addContext(patchbaySessionId, { id: chipId(), kind: "attachment", label: fileChipLabel(part.name), path: part.path });
+          } else missed.push(`${part.name}, no longer at ${part.path}`);
+          break;
+        case "context":
+          missed.push(`the snapshot "${part.label}" — take a fresh one`);
+          break;
+        case "unrendered":
+          missed.push(unrenderedLabel(part.type));
+          break;
+        case "text":
+        case "mention":
+          break; // the words — the composer's
+      }
+    }
+    return missed;
   }
 
   removeContext(patchbaySessionId: PatchbaySessionId, chipId: string): void {

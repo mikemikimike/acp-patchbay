@@ -13,6 +13,7 @@ import type { QueuedPrompt } from "../../shared/protocol";
 import { useActions } from "../shared/actions";
 import { Icon } from "../shared/icon";
 import { useCopy } from "../shared/use-copy";
+import { COMPOSER_HAS_TEXT } from "./composer/composer-controls";
 import type { PatchbaySessionId } from "../../shared/ids";
 
 export function QueueBand({
@@ -78,7 +79,7 @@ function QueueRow({
           className="act"
           role="button"
           aria-disabled={!composerEmpty}
-          title={composerEmpty ? "Edit — take it back into the composer" : "Composer has text — send or clear it first, or Copy"}
+          title={composerEmpty ? "Edit — take it back into the composer" : COMPOSER_HAS_TEXT}
           onClick={() => {
             if (composerEmpty) send({ kind: "reclaimQueuedPrompt", patchbaySessionId, promptId: prompt.id });
           }}

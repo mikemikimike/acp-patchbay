@@ -478,6 +478,9 @@ sees the window's top edge.** With `H` = viewport height:
   exactly what the render-only rule assigns to the UI. The full transcript still
   rides the snapshot from the orchestrator; only *mounting* is windowed. No
   protocol change, no new actions.
+- **Going to a prompt** (the prompts chip, a prompt's ↑/↓) is a jump to a known
+  item: the window grows to hold it in one render, then the view lands on it —
+  no chunked fill, since the target, not the top, is the destination.
 - **Self-scoping**: when the window is larger than the transcript it renders
   everything and the mechanism is a no-op — it only engages for sessions long
   enough to hurt.
@@ -514,7 +517,8 @@ intent** (upward wheel, touch drag), not position: under a fast stream the first
 few upward pixels are still inside the bottom band, so a threshold-only unpin loses
 the race — the next re-stick yanks the gesture back and the user can never escape.
 **Re-pin on position**, direction-guarded: reaching the bottom band while not
-moving up re-pins. Programmatic sticks scroll downward, so they re-affirm an
+moving up re-pins. Going to a prompt is intent too — the user asked to read
+back — so it unpins before it lands. Programmatic sticks scroll downward, so they re-affirm an
 existing pin but can never re-pin over a user's upward intent; the wheel gesture's
 own scroll event moves up, so it can't undo the unpin it just caused. Whenever
 unpinned, a "jump to latest" control floats at the scrollport's bottom corner — the

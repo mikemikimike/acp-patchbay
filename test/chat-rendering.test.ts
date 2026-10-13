@@ -429,7 +429,11 @@ describe("deriveTranscript: per-turn rollups", () => {
     ];
     const { totals } = deriveTranscript(blocks, true, DEFAULT_PREFERENCES);
     // files list is deduped in first-touch order — the read-out strip's panel
-    expect(totals).toEqual({ prompts: 3, toolCalls: 4, files: ["/ws/a.ts", "/ws/b.ts"] });
+    expect({ ...totals, prompts: totals.prompts.map((p) => p.id) }).toEqual({
+      prompts: ["u1", "u2", "u3"],
+      toolCalls: 4,
+      files: ["/ws/a.ts", "/ws/b.ts"],
+    });
   });
 
   it("edited files: edit calls by location, gate writes only once accepted", () => {
@@ -465,7 +469,7 @@ describe("deriveTranscript: per-turn rollups", () => {
       user("u2"),
     ];
     const { totals, rollups } = deriveTranscript(blocks, false, DEFAULT_PREFERENCES);
-    expect(totals.prompts).toBe(2);
+    expect(totals.prompts.map((p) => p.id)).toEqual(["u1", "u2"]);
     // the injected boundary still scopes the turn segment
     expect(rollups.get("e2")).toEqual({ toolCalls: 1, filesTouched: 1, byKind: { edit: 1 } });
   });

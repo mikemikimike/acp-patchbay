@@ -21,7 +21,20 @@ import { Icon } from "../../shared/icon";
 import { count } from "../../../shared/count";
 import { formatDuration, type TranscriptView, type TurnRollup } from "./view-model";
 import { Disclosure } from "../../shared/disclosure";
-import { CarriedUpdate, CompactionDivider, ContentPartView, InjectedUser, NoticeLine, TerminalBlocks, Thought, ToolCallCard, ToolDisplayPrefs, ToolRunCard, UserMessage } from "./blocks";
+import {
+  CarriedUpdate,
+  CompactionDivider,
+  ContentPartView,
+  InjectedUser,
+  NoticeLine,
+  PromptNav,
+  TerminalBlocks,
+  Thought,
+  ToolCallCard,
+  ToolDisplayPrefs,
+  ToolRunCard,
+  UserMessage,
+} from "./blocks";
 import { AgentMarkdown } from "./markdown";
 import { DiffCard, PermissionCard, TerminalCard } from "./cards";
 import { ElicitationCard } from "../../shared/question-card";
@@ -142,7 +155,7 @@ function Block({
       return block.injected === true ? (
         <InjectedUser text={userPartsText(block.parts)} />
       ) : (
-        <UserMessage parts={block.parts} />
+        <UserMessage id={block.id} parts={block.parts} />
       );
     case "text":
       return (
@@ -218,13 +231,17 @@ export function Chat(props: {
   activeSession: SessionSummary | null;
   /** The active session's blocks and their derived view — App owns the one
    * transcript read and the one derivation (view-model.ts) because the
-   * composer's stats strip consumes the same pass's session totals; passing
+   * read-out strip and the composer's stats strip consume the same pass's
+   * session totals; passing
    * both keeps them in lockstep by construction. */
   blocks: readonly ChatBlock[];
   derived: TranscriptView;
   /** The shell's smart "+": zero agents → Settings, one → straight
    * to it, several → the picker. */
   onNewChat(): void;
+  /** A request from outside the transcript (the prompts chip) to bring a
+   * prompt into view — a new `seq` is the request. */
+  goTo: { seq: number; id: string } | null;
 }) {
   const send = useActions();
   const { agents } = props.state;
@@ -280,9 +297,46 @@ export function Chat(props: {
     }
   }, []);
 
+  // Going to a prompt: the window first grows to hold it, then the view
+  // lands on it once it is mounted — unpinned, since the user is reading
+  // back — and the bubble flashes once so the eye finds it.
+  const [landing, setLanding] = useState<string | null>(null);
+  const goTo = useCallback(
+    (id: string) => {
+      const index = derived.items.findIndex((item) => item.kind === "single" && item.block.id === id);
+      if (index < 0) return;
+      setMounted((c) => Math.max(c, derived.items.length - index));
+      setLanding(id);
+    },
+    [derived.items],
+  );
+  useLayoutEffect(() => {
+    if (landing === null) return;
+    // One shot: the window grew in the same render, so a prompt that isn't
+    // mounted now never will be — a landing left pending would yank the
+    // view at some later, unasked moment.
+    setLanding(null);
+    const el = chatRef.current?.querySelector(`[data-prompt="${CSS.escape(landing)}"]`);
+    if (el === null || el === undefined) return;
+    setPin(false);
+    el.scrollIntoView({ block: "start" });
+    el.querySelector(".msg-user")?.animate(
+      [{ boxShadow: "0 0 0 2px var(--pb-accent)" }, { boxShadow: "0 0 0 2px transparent" }],
+      { duration: 900, easing: "ease-out" },
+    );
+  }, [landing, mounted, setPin]);
+  const seenGoTo = useRef(props.goTo?.seq);
+  useEffect(() => {
+    if (props.goTo === null || props.goTo.seq === seenGoTo.current) return;
+    seenGoTo.current = props.goTo.seq;
+    goTo(props.goTo.id);
+  }, [props.goTo, goTo]);
+  const promptNav = useMemo(() => ({ order: derived.totals.prompts.map((p) => p.id), goTo }), [derived.totals.prompts, goTo]);
+
   // Session switch: fresh window, pinned, jump to the tail.
   useLayoutEffect(() => {
     setMounted(INITIAL_WINDOW);
+    setLanding(null);
     setPin(true);
     lastScrollTop.current = 0;
     stick();
@@ -432,6 +486,7 @@ export function Chat(props: {
   return (
     <TerminalBlocks.Provider value={terminalBlocks}>
     <ToolDisplayPrefs.Provider value={props.state.preferences}>
+    <PromptNav.Provider value={promptNav}>
     <div
       className="chat"
       ref={chatRef}
@@ -517,6 +572,7 @@ export function Chat(props: {
         </div>
       )}
     </div>
+    </PromptNav.Provider>
     </ToolDisplayPrefs.Provider>
     </TerminalBlocks.Provider>
   );

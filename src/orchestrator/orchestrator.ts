@@ -4,7 +4,6 @@
 // Orchestrator: the Node process in the extension host — single source of
 // truth for sessions, capability tables, permission rules, secrets,
 // configuration. Webviews only ever see its snapshots and patches.
-import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -36,7 +35,7 @@ import { askNotice } from "../shared/ask-notice";
 import { openAsks, type OpenAsk } from "../shared/attention";
 import { AgentGates, endQuestion, type AgentOperation } from "./agent-gates";
 import { AgentsStore, type ConnectionOperations } from "./agents-store";
-import { ATTACHMENTS_DIR, pickedFileForm } from "./attachments";
+import { ATTACHMENTS_DIR, chipId, fileChipLabel, pickedFileForm } from "./attachments";
 import { AsksStore, type AskPlace } from "./asks-store";
 import { sessionOwner, type SessionOwner } from "./session-owner";
 import { PermissionBroker } from "./broker";
@@ -99,12 +98,6 @@ import { sessionsActiveToday } from "./session-stats";
 import { statusBarContent } from "./status-bar";
 import { editorLineOf } from "./tool-locations";
 import type { PatchbayAgentId, PatchbayAskId, PatchbayMcpServerId, PatchbaySessionId } from "../shared/ids";
-
-/** Context-chip id mint. A staged chip is saved with its session, so it
- * outlives the window, and a chip names its stash file in the one folder
- * every window shares — so the id is random: a timestamp collides within a
- * multi-file drop, and a counter restarts with every window. */
-const chipId = () => `chip-${randomUUID()}`;
 
 /** What the download prompt says of the check — only what is known: held
  * to a published digest, nothing published, or the registry unreadable. */
@@ -1750,8 +1743,8 @@ export class Orchestrator {
         detail: (() => {
           const p = this.preferences.get();
           const idle = p.idleCloseMinutes <= 0 ? "never" : `${p.idleCloseMinutes} min`;
-          const stats = [p.statsPrompts, p.statsToolCalls, p.statsContext, p.statsPlanUsage].filter(Boolean).length;
-          return `sound ${p.soundOnDone ? "on" : "off"} · knobs: ${p.knobSource === "last-session" ? "last used" : "agent defaults"} · idle release ${idle} · composer stats ${stats}/4 shown`;
+          const stats = [p.statsToolCalls, p.statsContext, p.statsPlanUsage].filter(Boolean).length;
+          return `sound ${p.soundOnDone ? "on" : "off"} · knobs: ${p.knobSource === "last-session" ? "last used" : "agent defaults"} · idle release ${idle} · composer stats ${stats}/3 shown`;
         })(),
       },
       { id: "composer-knobs", label: "Composer knobs (last used)", placement: "globalStorage file", detail: count(this.composerKnobs.count(), "agent record") },
@@ -1970,6 +1963,11 @@ export class Orchestrator {
         break;
       case "reclaimQueuedPrompt":
         this.sessions.takeBack(action.patchbaySessionId, action.promptId);
+        break;
+      case "restagePromptFiles":
+        void this.sessions.restagePromptFiles(action.patchbaySessionId, action.blockId).then((missed) => {
+          if (missed.length > 0) void vscode.window.showWarningMessage(`Reused without ${missed.join("; ")}.`);
+        }, this.logCatch(`restage prompt files ${action.patchbaySessionId}`));
         break;
       case "setSessionDraft":
         // The composer's debounced durable save.
@@ -2386,7 +2384,7 @@ export class Orchestrator {
       await this.sessions.addContext(patchbaySessionId, {
         id: chipId(),
         kind: "attachment",
-        label: `File: ${name}`,
+        label: fileChipLabel(name),
         path: uri.fsPath,
       });
     }

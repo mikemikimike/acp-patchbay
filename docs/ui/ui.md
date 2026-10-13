@@ -57,19 +57,32 @@ never split panels.
 One row between chat and composer — live-turn read-outs at the eye's resting
 point, deliberately **outside** the composer: its binding rule ("above the input =
 what the agent will see") stays intact because nothing here is context. The strip
-holds what the agent has done this session — its plan and the files it edited;
-it is absent while neither exists — no placeholder.
+holds what this session has been through — the agent's plan, what you asked it,
+and the files it edited; it is absent while none exists — no placeholder.
 
 | Chip | Where | Behavior |
 |---|---|---|
 | Plan | left | `▸ Plan n/m — current step`, truncating; present only while the agent maintains a plan with >1 tasks; a task completing mid-turn pulses the chip — expand is manual, never forced |
-| Files | right | `✎ n files edited` — present once the agent has touched a file; a way in, not a read-out, so no preference hides it |
+| Prompts | right | `💬 n prompts` — present once you have asked something; counts your prompts, never a message the agent's harness injected; a way in, not a read-out, so no preference hides it |
+| Files | right, after Prompts | `✎ n files edited` — present once the agent has touched a file; a way in, not a read-out, so no preference hides it |
 
 A chip opens its panel overlaying the chat, growing up from the strip at the
 strip's full width (the drawers' mechanic, mirrored) — X, Escape, re-click, or a
 click elsewhere closes; one panel is open at a time, so opening the other chip's
 panel closes this one. Plan panel: the full checklist (✓ done, ▸ active, ○
-pending, ⊘ cancelled; any other status word shows beside its task). Files
+pending, ⊘ cancelled; any other status word shows beside its task). Prompts
+panel: the session's prompts newest first, each numbered in the order asked
+and shown at most three lines long; its words take the chat to that prompt
+(the prompt lands at the top, the view unpinned, the bubble flashing once);
+**Copy** takes its readable form; **Reuse** puts it back in the composer —
+words, line breaks and `@file` mentions as tokens, the cursor after them,
+**Undo** taking them out again — and stages its images and attached files
+again as chips. Reuse lands only in an empty composer, as taking a held
+prompt back does, and says so on the button rather than hiding; what can't
+come back is named in a warning: a selection or problems snapshot was of
+its moment (take a fresh one), a file no longer where it was is gone.
+Prompts reach as far as the transcript does — an agent's replay brings back
+what it keeps. Files
 panel: one row per file the agent edited, click opens it in the
 editor; rows group under the root that holds them — workspace folders, then
 the session's added roots, then "Outside the roots" — each group in the order
@@ -86,7 +99,7 @@ session's worth of change against.
 
 | Block | Glyph | Behavior |
 |---|---|---|
-| User message | right-aligned bubble | plain content |
+| User message | right-aligned bubble | plain content; on hover, to its left: ↑ previous prompt, ↓ next prompt (each absent where there is none, its place kept), copy. A step lands the prompt at the top of the chat, unpinned. No Up/Down history in the composer: there the arrow keys move the cursor in a multi-line prompt — the prompts chip is the way back |
 | Agent text | flat, no bubble | markdown, streams live |
 | Thought | 💭 collapsed line | click to expand; dimmed; never rendered as answer text. While it streams: `Thinking…` + its newest line, one row (opens instead under Preferences › Thinking); after: `Thought` |
 | Meant for the model | dim line | content the agent addressed to the model alone (its audience names no user) — `meant for the model`, and the content as it renders on a click; never woven into the agent's prose |
@@ -141,7 +154,7 @@ Action row (below):
 | Control | Glyph | Behavior |
 |---|---|---|
 | Model / Mode / Effort | ◈ ⚙ ⚡ pills | **only the knobs this agent offers** — an unoffered knob does not render; a change shows ⏳ until the agent's state confirms; display never optimistic. Each option's description shows under it in the list; options sharing a name carry their description in the label (`Sonnet · Deep`), so the pill tells them apart — the Settings defaults list too |
-| Stats strip | 💬 🛠 counts + ring + plan usage | the one read-out in the dials row: whole-session prompt / tool-call counts, the context gauge — ring, orange arc = `used/size`, live mid-turn; hover or keyboard focus: context tokens + session cost — and the plan-usage gauge (the most severe plan window, labeled; hover: every window). Gauges are **absent** (not grayed) until the agent reports them; counts hide at zero. Each of the four has its own switch (Preferences › Composer stats, all shown by default) |
+| Stats strip | 🛠 count + ring + plan usage | the one read-out in the dials row: the whole-session tool-call count, the context gauge — ring, orange arc = `used/size`, live mid-turn; hover or keyboard focus: context tokens + session cost — and the plan-usage gauge (the most severe plan window, labeled; hover: every window). Gauges are **absent** (not grayed) until the agent reports them; the count hides at zero. The prompt count is the read-out strip's prompts chip — one number, one surface. Each of the three has its own switch (Preferences › Composer stats, all shown by default) |
 | Send / Stop | ↑ / ■ | send prompt / stop the turn underway — mid-stream, or still waiting for its session to attach. A stopped turn waits for its agent's answer, the button spinning ("Stopping"); pressed again, it ends the turn here |
 
 ### 6 · Drawers
@@ -336,10 +349,10 @@ the stored truth — the page never assumes its own write landed:
   read fresh every sweep, applies without reconnect. The card restates the close
   guards: replayable history only, never the open session, an unseen result, or a
   turn in flight.
-- **Composer stats** — one switch per read-out: prompts, tool calls, context
-  window, plan usage (all shown by default). Pure render furniture: hiding one
-  changes nothing else. The files chip is not among them — it is a way in, not
-  a read-out, and lives in the read-out strip.
+- **Composer stats** — one switch per read-out: tool calls, context window,
+  plan usage (all shown by default). Pure render furniture: hiding one changes
+  nothing else. The prompts and files chips are not among them — they are
+  ways in, not read-outs, and live in the read-out strip.
 - **Thinking** — whether a thought opens on its own while it streams (default
   off: one row, `Thinking…` and its newest line). It folds once the turn moves
   on either way; a click opens it.

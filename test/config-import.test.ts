@@ -50,7 +50,9 @@ describe("reading a configuration file", () => {
       ["context7", "catalog"],
       ["github", "catalog"],
     ]);
-    expect(r.preferences).toMatchObject({ statsPrompts: false, knobSource: "last-session", idleCloseMinutes: 45 });
+    expect(r.preferences).toMatchObject({ knobSource: "last-session", idleCloseMinutes: 45 });
+    // Retired since the file was written: read past, not reported unread.
+    expect(r.preferences).not.toHaveProperty("statsPrompts");
     expect(r.machineCommandRules).toEqual([
       { pattern: "git status", verdict: "allow" },
       { pattern: "rm -rf *", verdict: "deny" },
@@ -108,7 +110,7 @@ describe("reading a configuration file", () => {
     expect(r.agents[0]?.defaults).toEqual({ options: { [MODE_KNOB_ID]: "plan" } });
     expect(r.agents[0]).not.toHaveProperty("processPolicy");
     expect(r.mcpServers[0]?.source).toEqual({ kind: "catalog", catalogId: "github", authMode: "oauth" });
-    expect(r.preferences).toEqual({ statsPrompts: false, statsToolCalls: false, statsContext: false, statsPlanUsage: false });
+    expect(r.preferences).toEqual({ statsToolCalls: false, statsContext: false, statsPlanUsage: false });
   });
 
   it("names what it holds that didn't read — never dropped in silence — and reads the rest", () => {

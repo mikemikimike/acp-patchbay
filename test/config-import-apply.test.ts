@@ -76,7 +76,7 @@ describe("landing an import", () => {
     expect((await m.stores.mcpServerTokens.get("keyed" as PatchbayMcpServerId))?.accessToken).toBe("secret-abc");
     expect(await m.stores.mcpServerTokens.get("github" as PatchbayMcpServerId)).toBeNull();
     expect(await m.stores.mcpServerEnv.get("local")).toEqual({ TOKEN: "t-1" });
-    expect(m.stores.preferences.get()).toMatchObject({ statsPrompts: false, knobSource: "last-session", idleCloseMinutes: 45 });
+    expect(m.stores.preferences.get()).toMatchObject({ knobSource: "last-session", idleCloseMinutes: 45 });
     expect(m.stores.machineRules.get().commandRules).toEqual(read.machineCommandRules);
     expect(m.stores.machineSavedRoots.list()).toEqual(["/home/me/notes"]);
   });

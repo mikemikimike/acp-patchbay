@@ -25,7 +25,6 @@ const PREFERENCE_SCHEMAS: { [K in keyof PreferencesView]: z.ZodType<PreferencesV
   doneSound: z.string(),
   knobSource: z.custom<PreferencesView["knobSource"]>((v) => typeof v === "string" && Object.hasOwn(KNOB_SOURCES, v)),
   idleCloseMinutes: z.number().finite(),
-  statsPrompts: z.boolean(),
   statsToolCalls: z.boolean(),
   statsContext: z.boolean(),
   statsPlanUsage: z.boolean(),
@@ -48,15 +47,16 @@ function readStored(stored: unknown): Partial<PreferencesView> {
 }
 
 /** A stored record in any shape a released version wrote, brought to the
- * current one. The one transition so far: `composerStats` (one switch over
- * the whole strip) split into a switch per read-out — a stored "hidden"
- * hides all of them, so nobody's strip reappears on upgrade. */
+ * current one. Two transitions so far: `composerStats` (one switch over the
+ * whole strip) split into a switch per read-out — a stored "hidden" hides
+ * all of them, so nobody's strip reappears on upgrade; then `statsPrompts`
+ * retired, the prompt count having moved to the read-out strip's prompts
+ * chip, which has no switch. */
+const RETIRED = ["composerStats", "statsPrompts"] as const;
+
 function migrate(stored: Record<string, unknown>): Partial<PreferencesView> {
-  const { composerStats, ...rest } = stored;
-  const split =
-    composerStats === false
-      ? { statsPrompts: false, statsToolCalls: false, statsContext: false, statsPlanUsage: false }
-      : {};
+  const { composerStats, statsPrompts: _retired, ...rest } = stored;
+  const split = composerStats === false ? { statsToolCalls: false, statsContext: false, statsPlanUsage: false } : {};
   return { ...split, ...(rest as Partial<PreferencesView>) };
 }
 
@@ -68,7 +68,7 @@ export class PreferencesStore implements StoredEntry {
     // write settles, so no read ever sees the old shape. Disk is a trust
     // boundary: a non-object value is left for get() to read as it always has.
     const stored = kv.get<unknown>(KEY);
-    if (typeof stored === "object" && stored !== null && "composerStats" in stored) {
+    if (typeof stored === "object" && stored !== null && RETIRED.some((key) => key in stored)) {
       void kv.update(KEY, migrate(stored as Record<string, unknown>));
     }
   }

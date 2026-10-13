@@ -54,3 +54,8 @@ export function composerControls(
         : "Connect an agent to start";
   return { enabled, stop, placeholder };
 }
+
+/** Why a sent prompt can't come back into the composer — taking a held one
+ * back, or reusing an earlier one: it lands only in an empty box, since
+ * merging two messages into one is the user's call, made with Copy. */
+export const COMPOSER_HAS_TEXT = "Composer has text — send or clear it first, or Copy";

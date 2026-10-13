@@ -17,12 +17,13 @@ import {
   type SessionKnobView,
   type SessionSummary,
   type UsageInfo,
+  type UserBlock,
 } from "../../../shared/protocol";
 import { useActions } from "../../shared/actions";
 import { Icon } from "../../shared/icon";
 import type { SessionTotals } from "../chat/view-model";
 import { ingestFiles } from "./ingress";
-import { composerControls } from "./composer-controls";
+import { COMPOSER_HAS_TEXT, composerControls } from "./composer-controls";
 import type { RootsControls } from "./roots-controls";
 import { Knobs } from "./knobs";
 import { ComposerStats } from "./stats";
@@ -55,6 +56,9 @@ export function Composer(props: {
   /** The active session's durable draft copy (state.drafts) — handed to the
    * editor, which reads it only at session switch/mount. */
   draft: string;
+  /** A sent prompt to put back in the box (the prompts chip's Reuse) — a
+   * new `seq` is the request. */
+  reuse: { seq: number; prompt: UserBlock } | null;
   /** The stored preferences — the stats strip gates each read-out on its
    * own; the ingress cap (attachmentMaxMB) is host-owned policy the webview
    * only applies at the admission point. */
@@ -99,6 +103,12 @@ export function Composer(props: {
   // too easy to trip once sending mid-turn is legal.
   const onSubmit = (text: string, parts: readonly PromptPart[] | undefined, draft: string): void =>
     send({ kind: "sendPrompt", patchbaySessionId, text, parts, draft });
+  // The words land in the box (the editor's own); what rode beside them is
+  // the host's to stage again — only once the words did land.
+  const onReused = (prompt: UserBlock, landed: boolean): void => {
+    if (landed) send({ kind: "restagePromptFiles", patchbaySessionId, blockId: prompt.id });
+    else props.onNotice(COMPOSER_HAS_TEXT);
+  };
 
   /** The adder's entries — also reused by the `@` mention picker's fixed rows. */
   const addSelection = () => send({ kind: "addSelectionContext", patchbaySessionId });
@@ -275,6 +285,8 @@ export function Composer(props: {
           placeholder={placeholder}
           patchbaySessionId={patchbaySessionId}
           draft={props.draft}
+          reuse={props.reuse}
+          onReused={onReused}
           commands={props.commands}
           openEditors={props.openEditors}
           workspaceFiles={props.workspaceFiles}

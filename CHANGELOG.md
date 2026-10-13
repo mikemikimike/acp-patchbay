@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Earlier prompts can be reached again.** A long session's prompts could
+  be found only by scrolling. A prompts chip now sits beside the
+  edited-files chip: it lists what you asked, newest first; a prompt's words
+  take the chat to it, and **Reuse** puts it back in an empty composer —
+  words, `@file` mentions and attached files — for you to change and send.
+  Each prompt in the chat also steps to the previous and next one. The
+  prompt count left the stats under the composer, along with its switch in
+  Preferences: the chip carries it now. (#59)
 - **The composer ring says its numbers are the session's.** Its tooltip
   read "121,459 / 1,050,000 tokens · 0.02 USD", which looked like a rival
   to the tokens under each reply. It now reads "Context … tokens · session

@@ -4,23 +4,30 @@
 // The read-out strip between chat and composer: what the agent has done this
 // session, at the eye's resting point, deliberately OUTSIDE the composer — its
 // binding rule ("above the input = what the agent will see") stays intact
-// because nothing here is context. Two chips: the plan (left) and the edited
-// files (right, files-chip.tsx). Absent when neither has anything to show.
-// Each opens a panel growing up from the strip over the chat
-// (readout-panel.tsx); the two are sibling overlays, so they share one
-// open-state here. Expand is manual, never forced — a task completing
+// because nothing here is context. Three chips: the plan (left), then the
+// prompts (prompts-chip.tsx) and the edited files (files-chip.tsx) on the
+// right. Absent when none has anything to show. Each opens a panel growing
+// up from the strip over the chat (readout-panel.tsx); they are sibling
+// overlays, so they share one open-state here. Expand is manual, never forced — a task completing
 // mid-turn pulses the collapsed plan chip as a peripheral signal instead of
 // yanking the view open.
 import { useEffect, useRef, useState, type RefObject } from "react";
-import type { OpenEditorView, PlanEntry } from "../../shared/protocol";
+import type { OpenEditorView, PlanEntry, UserBlock } from "../../shared/protocol";
 import { Icon } from "../shared/icon";
 import { FilesChip } from "./files-chip";
+import { PromptsChip } from "./prompts-chip";
 import { ReadoutPanel } from "./readout-panel";
 
-type PanelId = "plan" | "files";
+type PanelId = "plan" | "prompts" | "files";
 
 export function ReadoutStrip(props: {
   plan: readonly PlanEntry[] | null;
+  /** The session's prompts, in order (view-model totals). */
+  prompts: readonly UserBlock[];
+  /** The durable draft is empty — the only state a reuse lands in. */
+  composerEmpty: boolean;
+  onGoTo(prompt: UserBlock): void;
+  onReuse(prompt: UserBlock): void;
   /** Distinct paths the agent touched this session (view-model totals). */
   files: readonly string[];
   openEditors: readonly OpenEditorView[];
@@ -43,13 +50,24 @@ export function ReadoutStrip(props: {
   useEffect(() => {
     if (!hasPlan) setOpenId((current) => (current === "plan" ? null : current));
   }, [hasPlan]);
-  if (!hasPlan && props.files.length === 0) return null;
+  if (!hasPlan && props.prompts.length === 0 && props.files.length === 0) return null;
 
   return (
     <div className="readout-strip" ref={stripRef}>
       <div className="chips">
         {hasPlan && (
           <PlanChip plan={props.plan!} open={openId === "plan"} onOpenChange={openChange("plan")} anchor={stripRef} />
+        )}
+        {props.prompts.length > 0 && (
+          <PromptsChip
+            prompts={props.prompts}
+            composerEmpty={props.composerEmpty}
+            onGoTo={props.onGoTo}
+            onReuse={props.onReuse}
+            open={openId === "prompts"}
+            onOpenChange={openChange("prompts")}
+            anchor={stripRef}
+          />
         )}
         {props.files.length > 0 && (
           <FilesChip

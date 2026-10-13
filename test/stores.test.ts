@@ -412,18 +412,26 @@ describe("PreferencesStore — machine-scoped behavior defaults", () => {
     expect(new PreferencesStore(hidden).get()).toEqual({
       ...DEFAULT_PREFERENCES,
       soundOnDone: true,
-      statsPrompts: false,
       statsToolCalls: false,
       statsContext: false,
       statsPlanUsage: false,
     });
     expect(hidden.get("acpPatchbay.preferences")).not.toHaveProperty("composerStats");
 
+    expect(hidden.get("acpPatchbay.preferences")).not.toHaveProperty("statsPrompts");
+
     // "shown" was the default — it maps to nothing but the key's removal.
     const shown = new MemoryKV();
     void shown.update("acpPatchbay.preferences", { composerStats: true });
     expect(new PreferencesStore(shown).get()).toEqual(DEFAULT_PREFERENCES);
     expect(shown.get("acpPatchbay.preferences")).toEqual({});
+  });
+
+  it("a stored statsPrompts is retired — the prompt count moved to the prompts chip", () => {
+    const kv = new MemoryKV();
+    void kv.update("acpPatchbay.preferences", { statsPrompts: false, statsContext: false });
+    expect(new PreferencesStore(kv).get()).toEqual({ ...DEFAULT_PREFERENCES, statsContext: false });
+    expect(kv.get("acpPatchbay.preferences")).toEqual({ statsContext: false });
   });
 
   it("a stored value that isn't an object never throws, and reads as the defaults", () => {

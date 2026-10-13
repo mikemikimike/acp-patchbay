@@ -30,15 +30,9 @@ import { useCopy } from "../../shared/use-copy";
 import { attachmentUri } from "../../shared/attachments-base";
 import { AgentMarkdown } from "./markdown";
 import { DiffStatText } from "./diff-stat";
+import { MENTION_LINK } from "./prompt-pieces";
 import { compactionLine, diffTotal, noticeLook, thoughtTail, toolFileRows, type ToolFileRow } from "./view-model";
 import type { PatchbaySessionId } from "../../../shared/ids";
-
-/** Mention spelling some agents flatten replayed mentions into as *text*:
- * `[@name](file://… | zed://…)`. Structured mentions arrive as their own
- * part; this regex only recovers ones an agent baked into prose. Anchored
- * to those schemes on purpose: a user's own `[label](url)` markdown stays
- * the literal text they typed (user prompts are never markdown-rendered). */
-const MENTION_LINK = /\[@([^\]\n]+)\]\((?:file|zed):\/\/[^()\s]*\)/g;
 
 /** Literal prompt prose, with agent-flattened mention links recovered as
  * tokens — everything else renders exactly as typed. */
@@ -144,27 +138,54 @@ function MentionToken({ part }: { part: Extract<UserPart, { kind: "mention" }> }
   );
 }
 
+/** The session's prompts in order and the move to one — the transcript's
+ * (chat.tsx), so a prompt can step to its neighbours. */
+export const PromptNav = createContext<{ order: readonly string[]; goTo(id: string): void }>({
+  order: [],
+  goTo: () => {},
+});
+
 /** The human's own prompt bubble — a part sequence rendered in the wire's
- * own vocabulary (text, mentions, images, attachments, context), with a
- * hover-revealed copy affordance to its left — outside the bubble so it
- * never overlaps the text; while the check-mark feedback shows, it stays
- * visible regardless of hover. Copy hands back the flattened readable
- * form (userPartsText). */
-export function UserMessage({ parts }: { parts: readonly UserPart[] }) {
+ * own vocabulary (text, mentions, images, attachments, context), with
+ * hover-revealed affordances to its left — outside the bubble so they never
+ * overlap the text: the previous and next prompt (each absent where there
+ * is none, its place kept so the copy button never shifts) and copy, which
+ * stays visible while its check-mark feedback shows. Copy hands back the
+ * flattened readable form (userPartsText). */
+export function UserMessage({ id, parts }: { id: string; parts: readonly UserPart[] }) {
   const { copied, copy } = useCopy();
+  const { order, goTo } = useContext(PromptNav);
+  const at = order.indexOf(id);
+  const prev = at > 0 ? order[at - 1] : undefined;
+  const next = at >= 0 && at < order.length - 1 ? order[at + 1] : undefined;
+  const affordance = "cursor-pointer border-none bg-transparent p-0.5 text-muted-foreground hover:text-foreground";
+  const step = (target: string | undefined, icon: string, label: string) => (
+    <button
+      type="button"
+      className={`${affordance} ${target === undefined ? "invisible" : "opacity-0 group-hover:opacity-100"}`}
+      title={label}
+      aria-label={label}
+      disabled={target === undefined}
+      onClick={() => target !== undefined && goTo(target)}
+    >
+      <Icon name={icon} size={12} />
+    </button>
+  );
   return (
-    <div className="group flex max-w-[85%] items-start gap-1.5 self-end">
-      <button
-        type="button"
-        className={`mt-1.5 cursor-pointer border-none bg-transparent p-0.5 text-muted-foreground hover:text-foreground ${
-          copied ? "" : "opacity-0 group-hover:opacity-100"
-        }`}
-        title="Copy prompt"
-        aria-label="Copy prompt"
-        onClick={() => copy(userPartsText(parts))}
-      >
-        <Icon name={copied ? "check" : "copy"} size={12} />
-      </button>
+    <div className="group flex max-w-[85%] items-start gap-1.5 self-end" data-prompt={id}>
+      <span className="mt-1.5 flex shrink-0 items-center">
+        {step(prev, "arrow-up", "Previous prompt")}
+        {step(next, "arrow-down", "Next prompt")}
+        <button
+          type="button"
+          className={`${affordance} ${copied ? "" : "opacity-0 group-hover:opacity-100"}`}
+          title="Copy prompt"
+          aria-label="Copy prompt"
+          onClick={() => copy(userPartsText(parts))}
+        >
+          <Icon name={copied ? "check" : "copy"} size={12} />
+        </button>
+      </span>
       {/* max-w-full neutralizes .msg-user's own 85% cap (style.css) — the
           wrapper already carries it; 85% of 85% would double-shrink. */}
       <div className="msg-user max-w-full">

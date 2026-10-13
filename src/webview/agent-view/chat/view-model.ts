@@ -23,6 +23,7 @@ import {
   type PreferencesView,
   type ToolCallBlock,
   type ToolCallKind,
+  type UserBlock,
 } from "../../../shared/protocol";
 import { joinsRuns, toolCallDisplay, type ToolDisplayPreference } from "../../../shared/tool-display";
 import type { PatchbaySessionId } from "../../../shared/ids";
@@ -41,12 +42,14 @@ export interface TurnRollup {
   byKind: Partial<Record<ToolCallKind, number>>;
 }
 
-/** Whole-session counters (composer stats strip) — accumulated in the same
- * forward pass as the per-turn rollups, never a second traversal. */
+/** Whole-session totals (the composer's stats strip, the read-out strip's
+ * chips) — accumulated in the same forward pass as the per-turn rollups,
+ * never a second traversal. */
 export interface SessionTotals {
-  /** User prompts in the transcript — what the wire replayed or streamed;
-   * an externally-continued session honestly shows only what came back. */
-  prompts: number;
+  /** The human's prompts in the transcript, in order — what the wire
+   * replayed or streamed; an externally-continued session honestly shows
+   * only what came back. A harness-injected envelope is no prompt. */
+  prompts: readonly UserBlock[];
   /** Total tool_call blocks across the session. */
   toolCalls: number;
   /** Distinct file paths across edit/delete/move calls, deduped across the
@@ -77,7 +80,7 @@ export const EMPTY_TRANSCRIPT: TranscriptView = {
   items: [],
   rollups: new Map(),
   liveRollup: { toolCalls: 0, filesTouched: 0, byKind: {} },
-  totals: { prompts: 0, toolCalls: 0, files: [] },
+  totals: { prompts: [], toolCalls: 0, files: [] },
   liveBlockId: null,
 };
 
@@ -174,7 +177,7 @@ export function deriveTranscript(
   };
 
   // whole-session counters — never reset at turn boundaries
-  let prompts = 0;
+  const prompts: UserBlock[] = [];
   let totalCalls = 0;
   const allFiles = new Set<string>();
 
@@ -213,7 +216,7 @@ export function deriveTranscript(
     if (block.kind === "user") {
       // A harness-injected envelope started a real turn (the agent answered
       // it), so it still resets the segment — but it isn't a human prompt.
-      if (block.injected !== true) prompts++;
+      if (block.injected !== true) prompts.push(block);
       resetTurn();
     }
     if (block.kind === "turnEnd") {

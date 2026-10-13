@@ -111,7 +111,7 @@ async function machine() {
     transport: "auto",
   });
   await mcpServerEnv.set("local", { TOKEN: "t-1" });
-  await preferences.set({ statsPrompts: false, knobSource: "last-session", idleCloseMinutes: 45 });
+  await preferences.set({ statsToolCalls: false, knobSource: "last-session", idleCloseMinutes: 45 });
   await machineRules.set([
     { pattern: "git status", verdict: "allow" },
     { pattern: "rm -rf *", verdict: "deny" },

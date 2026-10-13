@@ -7,7 +7,7 @@
 // furniture (which drawer is open, the toast); components own their markup
 // and send their own actions; everything durable comes from snapshots.
 import { useMemo, useState } from "react";
-import { attaching, type AgentViewState } from "../../shared/protocol";
+import { attaching, type AgentViewState, type UserBlock } from "../../shared/protocol";
 import { elsewhere, sessionMark, waitingOn } from "../../shared/attention";
 import { useActions } from "../shared/actions";
 import { Icon } from "../shared/icon";
@@ -40,6 +40,10 @@ export function App({
   const send = useActions();
   const [drawer, setDrawer] = useState<Drawer>(null);
   const [toast, setToast] = useState<{ msg: string; kind: "info" | "warning" } | null>(null);
+  // A prompt the prompts chip asked for — brought into view in the
+  // transcript, or put back in the composer. A new `seq` is the request.
+  const [goTo, setGoTo] = useState<{ seq: number; id: string } | null>(null);
+  const [reuse, setReuse] = useState<{ seq: number; prompt: UserBlock } | null>(null);
 
   const pinned = pinnedPatchbaySessionId !== undefined;
   // A new chat in flight leaves no session active: the pane is the connect
@@ -56,9 +60,9 @@ export function App({
   // The open session's agent — what its roots chip is judged against.
   const activeMatrix = active !== null ? activeAgent?.capabilities : undefined;
 
-  // The one transcript derivation (view-model.ts), hoisted here because two
-  // siblings consume it: Chat renders the items/rollups, the composer's
-  // stats strip the same pass's session totals.
+  // The one transcript derivation (view-model.ts), hoisted here because
+  // siblings consume it: Chat renders the items/rollups, the read-out strip
+  // and the composer's stats strip the same pass's session totals.
   const blocks = active !== null ? (state.transcripts[active.id] ?? []) : [];
   const activeLive = active !== null && turnLive(state, active.id);
   const derived = useMemo(
@@ -66,6 +70,9 @@ export function App({
     [blocks, activeLive, state.preferences],
   );
   const detach = state.preferences?.detachWindows ?? true;
+  // The durable draft is empty — the only state a held prompt is taken back
+  // into, or an earlier one reused into.
+  const composerEmpty = active === null || (state.drafts[active.id] ?? "") === "";
 
   // A pinned panel whose session closed is about to be disposed by the host
   // (AgentPanelHost follows the sessions list) — say so for the render or
@@ -150,13 +157,17 @@ export function App({
           )}
         </div>
       )}
-      <Chat state={state} activeSession={active} blocks={blocks} derived={derived} onNewChat={newChat} />
+      <Chat state={state} activeSession={active} blocks={blocks} derived={derived} onNewChat={newChat} goTo={goTo} />
       {active !== null && (
         // keyed by session: which panel is open is per-session render state,
         // not something a session switch should inherit
         <ReadoutStrip
           key={active.id}
           plan={state.activePlan[active.id] ?? null}
+          prompts={derived.totals.prompts}
+          composerEmpty={composerEmpty}
+          onGoTo={(prompt) => setGoTo((g) => ({ seq: (g?.seq ?? 0) + 1, id: prompt.id }))}
+          onReuse={(prompt) => setReuse((r) => ({ seq: (r?.seq ?? 0) + 1, prompt }))}
           files={derived.totals.files}
           openEditors={state.openEditors}
           workspaceRoots={state.workspaceRoots}
@@ -167,7 +178,7 @@ export function App({
         <QueueBand
           patchbaySessionId={active.id}
           queued={state.promptQueue[active.id] ?? []}
-          composerEmpty={(state.drafts[active.id] ?? "") === ""}
+          composerEmpty={composerEmpty}
         />
       )}
       <Composer
@@ -191,6 +202,7 @@ export function App({
         workspaceFiles={state.workspaceFiles}
         knobs={active !== null ? (state.sessionKnobs[active.id] ?? []) : []}
         draft={active !== null ? (state.drafts[active.id] ?? "") : ""}
+        reuse={reuse}
         preferences={state.preferences}
         totals={derived.totals}
         usage={active !== null ? (state.sessionUsage[active.id] ?? null) : null}

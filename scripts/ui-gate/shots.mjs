@@ -231,7 +231,7 @@ for (const theme of Object.keys(THEMES)) {
   await termCard.screenshot({ path: `${OUT}/tool-card-terminal-${theme}.png` });
 
   // ── injected user-role envelope: dim collapsed line, never a bubble,
-  // and it must not tick the prompt count (stats row stays "2 6") ──
+  // and it must not tick the prompt count (the prompts chip stays "2 prompts") ──
   check(`[${theme}] injected envelope renders collapsed, labeled by tag`, (await p.$('.injected:has-text("task-notification")')) !== null);
   // ── an update kind with no surface: a dim line naming it, what the agent
   // sent one click away — shown, never dropped ──
@@ -273,11 +273,11 @@ for (const theme of Object.keys(THEMES)) {
   check(`[${theme}] user bubble renders the mention part as a token`, userTokens.includes("@api.ts"));
   check(`[${theme}] user bubble renders the attachment part as a chip`, userTokens.some((t) => t.includes("notes.md")));
 
-  // ── composer stats strip: whole-session counts (2 prompts, 5 tool calls
-  // in the fixture) — read-outs only, the files chip lives in the read-out
-  // strip; no usage reported → no gauge ──
+  // ── composer stats strip: whole-session counts (6 tool calls in the
+  // fixture) — read-outs only; the prompt count and the files chip live in
+  // the read-out strip; no usage reported → no gauge ──
   const stats = await p.$eval(".composer-stats", (el) => el.textContent.replace(/\s+/g, " ").trim());
-  check(`[${theme}] composer stats counts prompts+tools ("${stats}")`, stats === "2 6");
+  check(`[${theme}] composer stats counts tool calls, and no prompts ("${stats}")`, stats === "6" && (await p.$(".composer-stats .codicon-comment")) === null);
   check(`[${theme}] no files chip in the composer`, (await p.$(".composer .chip.files")) === null);
   check(`[${theme}] no gauge without usage reported`, (await p.$(".composer-stats .gauge")) === null);
 
@@ -363,6 +363,88 @@ for (const theme of Object.keys(THEMES)) {
   await p.waitForSelector(".files-panel", { state: "detached", timeout: 3000 });
   await p.evaluate(() => window.__patch([{ kind: "contextRootsChanged", patchbaySessionId: "s1", roots: [] }]));
 
+  // ── prompts chip (#59): the human's prompts, newest first — the words go
+  // to the prompt in the transcript, Copy takes them, Reuse puts them back
+  // in an empty composer; each bubble steps to its neighbours ──
+  const promptsChip = await p.$eval(".readout-strip .chip.prompts", (el) => el.textContent.trim());
+  check(`[${theme}] prompts chip counts the human's prompts, never an injected one ("${promptsChip}")`, promptsChip === "2 prompts");
+  const chipOrder = await p.$$eval(".readout-strip .chip", (els) => els.map((el) => ["plan", "prompts", "files"].find((c) => el.classList.contains(c))));
+  check(`[${theme}] prompts chip sits beside the files chip (${chipOrder})`, JSON.stringify(chipOrder) === JSON.stringify(["plan", "prompts", "files"]));
+  await p.click(".readout-strip .chip.prompts");
+  await p.waitForSelector(".prompts-panel .prompt-row", { timeout: 3000 });
+  const promptRows = await p.$$eval(".prompts-panel .prompt-row", (els) =>
+    els.map((el) => [el.querySelector(".n").textContent, el.querySelector(".words").textContent]),
+  );
+  check(
+    `[${theme}] prompts list newest first, numbered as asked (${JSON.stringify(promptRows)})`,
+    JSON.stringify(promptRows) === JSON.stringify([["2", "keep going"], ["1", "find foo in @api.ts and fix it@notes.md"]]),
+  );
+  check(`[${theme}] a prompt shows a few lines at most`, (await p.$eval(".prompts-panel .prompt-row .words", (el) => getComputedStyle(el).webkitLineClamp)) === "3");
+  await p.waitForTimeout(250);
+  await p.locator(".prompts-panel").screenshot({ path: `${OUT}/readout-prompts-${theme}.png` });
+  const landedAtTop = (id) =>
+    p.waitForFunction(
+      (prompt) => {
+        const top = document.querySelector(`[data-prompt="${prompt}"]`)?.getBoundingClientRect().top;
+        return top !== undefined && Math.abs(top - document.querySelector(".chat").getBoundingClientRect().top) <= 2;
+      },
+      id,
+      { timeout: 3000 },
+    ).then(() => true, () => false);
+  await p.click('.prompts-panel .prompt-row[data-prompt-row="u1"] .words');
+  check(`[${theme}] going to a prompt closes the panel`, await p.waitForSelector(".prompts-panel", { state: "detached", timeout: 3000 }).then(() => true, () => false));
+  check(`[${theme}] the words go to the prompt — it lands at the top of the chat`, await landedAtTop("u1"));
+  check(`[${theme}] reading back unpins the view`, (await p.$(".chat-jump")) !== null);
+  const first = p.locator('[data-prompt="u1"]');
+  await first.hover();
+  check(
+    `[${theme}] the first prompt has no previous, its place kept`,
+    await first.locator('button[aria-label="Previous prompt"]').evaluate((el) => getComputedStyle(el).visibility === "hidden"),
+  );
+  await p.mouse.move(0, 0);
+  await first.screenshot({ path: `${OUT}/prompt-steps-${theme}.png` });
+  await first.hover();
+  await first.locator('button[aria-label="Next prompt"]').click();
+  check(
+    `[${theme}] Next brings the next prompt into view`,
+    await p.waitForFunction(() => {
+      const chat = document.querySelector(".chat").getBoundingClientRect();
+      const el = document.querySelector('[data-prompt="u2"]').getBoundingClientRect();
+      return el.top >= chat.top - 2 && el.bottom <= chat.bottom + 2;
+    }, null, { timeout: 3000 }).then(() => true, () => false),
+  );
+  const last = p.locator('[data-prompt="u2"]');
+  await last.hover();
+  check(`[${theme}] the last prompt has no next`, await last.locator('button[aria-label="Next prompt"]').evaluate((el) => getComputedStyle(el).visibility === "hidden"));
+  await last.locator('button[aria-label="Previous prompt"]').click();
+  check(`[${theme}] Previous steps back to the first prompt`, await landedAtTop("u1"));
+
+  // Reuse refuses a composer with words in it, and says why — Copy is the
+  // way to merge two messages
+  await p.evaluate(() => window.__patch([{ kind: "sessionDraftChanged", patchbaySessionId: "s1", draft: "x" }]));
+  await p.click(".readout-strip .chip.prompts");
+  const reuseFirst = p.locator('.prompts-panel .prompt-row[data-prompt-row="u1"] button[aria-label="Reuse"]');
+  await p.waitForFunction(() => document.querySelector('.prompts-panel .prompt-row[data-prompt-row="u1"] button[aria-label="Reuse"]')?.getAttribute("aria-disabled") === "true", null, { timeout: 3000 });
+  check(`[${theme}] Reuse into a composer with text is refused, saying why`, (await reuseFirst.getAttribute("title")).startsWith("Composer has text"));
+  const sentBeforeReuse = await p.evaluate(() => window.__actions.length);
+  await reuseFirst.click({ force: true });
+  check(`[${theme}] a refused Reuse sends nothing`, (await p.evaluate(() => window.__actions.length)) === sentBeforeReuse);
+  await p.evaluate(() => window.__patch([{ kind: "sessionDraftChanged", patchbaySessionId: "s1", draft: "" }]));
+  await p.waitForFunction(() => document.querySelector('.prompts-panel .prompt-row[data-prompt-row="u1"] button[aria-label="Reuse"]')?.getAttribute("aria-disabled") === "false", null, { timeout: 3000 });
+  await reuseFirst.click();
+  await p.waitForSelector(".prompts-panel", { state: "detached", timeout: 3000 });
+  await p.waitForSelector(".prompt-editor .mention-token", { timeout: 3000 });
+  const reused = await p.$eval(".prompt-editor", (el) => el.textContent);
+  check(`[${theme}] Reuse puts the words back, the mention a token again ("${reused}")`, reused === "find foo in @api.ts and fix it");
+  check(
+    `[${theme}] Reuse asks the host to stage the prompt's files again`,
+    await p.waitForFunction(() => window.__actions.some((a) => a.kind === "restagePromptFiles" && a.blockId === "u1" && a.patchbaySessionId === "s1"), null, { timeout: 3000 }).then(() => true, () => false),
+  );
+  check(`[${theme}] Reuse hands the composer the keyboard`, await p.waitForFunction(() => document.activeElement?.closest(".prompt-editor") !== null, null, { timeout: 3000 }).then(() => true, () => false));
+  await p.screenshot({ path: `${OUT}/prompt-reused-${theme}.png` });
+  await p.keyboard.press("Control+z");
+  check(`[${theme}] Undo takes a reuse back out`, await p.waitForFunction(() => document.querySelector(".prompt-editor").textContent === "", null, { timeout: 3000 }).then(() => true, () => false));
+
   // ── one switch per read-out: each hides on its own; the files chip is a
   // control and no switch reaches it ──
   await p.evaluate(() =>
@@ -375,19 +457,19 @@ for (const theme of Object.keys(THEMES)) {
     p.waitForFunction(
       (w) => {
         const n = (sel) => document.querySelectorAll(`.composer-stats ${sel}`).length;
-        return JSON.stringify({ prompts: n(".codicon-comment"), tools: n(".codicon-tools"), context: n(".gauge"), plan: n(".codicon-pulse") }) === w;
+        return JSON.stringify({ tools: n(".codicon-tools"), context: n(".gauge"), plan: n(".codicon-pulse") }) === w;
       },
       JSON.stringify(want),
       { timeout: 3000 },
     ).then(() => true, () => false);
   const prefsWith = (patch) => p.evaluate((prefs) => window.__patch([{ kind: "preferencesChanged", preferences: prefs }]), { ...preferences, ...patch });
-  check(`[${theme}] all four read-outs show by default`, await readoutsAre({ prompts: 1, tools: 1, context: 1, plan: 1 }));
-  await prefsWith({ statsPrompts: false, statsContext: false });
-  check(`[${theme}] hiding prompts + context leaves tool calls + plan usage`, await readoutsAre({ prompts: 0, tools: 1, context: 0, plan: 1 }));
-  await prefsWith({ statsPrompts: false, statsToolCalls: false, statsContext: false, statsPlanUsage: false });
-  check(`[${theme}] all read-outs hidden`, await readoutsAre({ prompts: 0, tools: 0, context: 0, plan: 0 }));
+  check(`[${theme}] all three read-outs show by default`, await readoutsAre({ tools: 1, context: 1, plan: 1 }));
+  await prefsWith({ statsContext: false });
+  check(`[${theme}] hiding context leaves tool calls + plan usage`, await readoutsAre({ tools: 1, context: 0, plan: 1 }));
+  await prefsWith({ statsToolCalls: false, statsContext: false, statsPlanUsage: false });
+  check(`[${theme}] all read-outs hidden`, await readoutsAre({ tools: 0, context: 0, plan: 0 }));
   check(`[${theme}] nothing to read out renders no strip at all`, (await p.$(".composer-stats")) === null);
-  check(`[${theme}] the files chip survives every read-out hidden`, (await p.$(".readout-strip .chip.files")) !== null);
+  check(`[${theme}] the prompts and files chips survive every read-out hidden`, (await p.$(".readout-strip .chip.prompts")) !== null && (await p.$(".readout-strip .chip.files")) !== null);
   await prefsWith({});
 
   // ── composer typed triggers (Lexical): keyboard-driven, tokens inline ──
@@ -857,7 +939,7 @@ for (const theme of Object.keys(THEMES)) {
   await p.click('.nav .it:has-text("Preferences")');
   await p.waitForSelector('h2:text-is("Composer stats")');
   const statsCard = p.locator(".card", { has: p.locator('h2:text-is("Composer stats")') });
-  check(`[${theme}] composer stats card carries four switches`, (await statsCard.locator('[role="switch"]').count()) === 4);
+  check(`[${theme}] composer stats card carries three switches`, (await statsCard.locator('[role="switch"]').count()) === 3);
   await statsCard.locator("label", { hasText: "context window" }).locator('[role="switch"]').click();
   const sent = await p.evaluate(() => window.__actions.at(-1));
   check(`[${theme}] a read-out switch patches only its own key`, JSON.stringify(sent) === JSON.stringify({ kind: "setPreferences", patch: { statsContext: false } }));

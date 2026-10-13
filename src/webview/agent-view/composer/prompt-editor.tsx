@@ -7,15 +7,17 @@
 // cannot style ranges, which is what forced the editor swap. Still
 // render-only: the editor state is draft furniture, reset with the webview;
 // every pick and the send itself go up as actions.
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { autoUpdate, flip, offset, size, useFloating } from "@floating-ui/react";
 import { LexicalComposer } from "@lexical/react/LexicalComposer";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { ContentEditable } from "@lexical/react/LexicalContentEditable";
 import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
-import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
+import { createEmptyHistoryState, HistoryPlugin, type HistoryState } from "@lexical/react/LexicalHistoryPlugin";
 import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
 import {
+  $createLineBreakNode,
+  $createParagraphNode,
   $createTextNode,
   $getRoot,
   $getSelection,
@@ -35,7 +37,8 @@ import {
   type TextNode,
   CLEAR_HISTORY_COMMAND,
 } from "lexical";
-import type { AvailableCommand, OpenEditorView, PromptPart } from "../../../shared/protocol";
+import type { AvailableCommand, OpenEditorView, PromptPart, UserBlock } from "../../../shared/protocol";
+import { promptPieces } from "../chat/prompt-pieces";
 import { useActions } from "../../shared/actions";
 import { basename } from "../../shared/path";
 import {
@@ -71,6 +74,11 @@ export interface PromptEditorProps {
    * mount — the editor owns the live buffer, so patch echoes of our own
    * debounced saves never fight the keyboard. */
   draft: string;
+  /** A sent prompt to put back in the box — a new `seq` is the request. It
+   * lands only in an empty box, as one undoable edit. */
+  reuse: { seq: number; prompt: UserBlock } | null;
+  /** Whether a reuse request landed. */
+  onReused(prompt: UserBlock, landed: boolean): void;
   commands: readonly AvailableCommand[];
   openEditors: readonly OpenEditorView[];
   workspaceFiles: { query: string; files: readonly string[]; dirs: readonly string[] };
@@ -104,6 +112,7 @@ function takeKeyboard(editor: LexicalEditor): void {
 }
 
 export function PromptEditor(props: PromptEditorProps) {
+  const history = useMemo(createEmptyHistoryState, []);
   return (
     <LexicalComposer
       initialConfig={{
@@ -126,8 +135,8 @@ export function PromptEditor(props: PromptEditorProps) {
         }
         ErrorBoundary={LexicalErrorBoundary}
       />
-      <HistoryPlugin />
-      <EditorCore {...props} />
+      <HistoryPlugin externalHistoryState={history} />
+      <EditorCore {...props} history={history} />
     </LexicalComposer>
   );
 }
@@ -169,7 +178,7 @@ function caretRect(root: HTMLElement): DOMRect | null {
   return rect;
 }
 
-function EditorCore(props: PromptEditorProps) {
+function EditorCore(props: PromptEditorProps & { history: HistoryState }) {
   const [editor] = useLexicalComposerContext();
   const send = useActions();
   const [trigger, setTrigger] = useState<Trigger | null>(null);
@@ -297,6 +306,36 @@ function EditorCore(props: PromptEditorProps) {
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, [editor]);
+
+  // Reuse: the prompt's words, line breaks and mentions, written into an
+  // empty box through the history — Undo takes them out again — and the
+  // keyboard handed over. A box with something in it is never overwritten.
+  // A history cleared at a session switch holds no state to return to, and
+  // the history records an edit only against one: the empty box is given
+  // as that state first.
+  const seenReuse = useRef(props.reuse?.seq);
+  useEffect(() => {
+    if (props.reuse === null || props.reuse.seq === seenReuse.current) return;
+    seenReuse.current = props.reuse.seq;
+    const { prompt } = props.reuse;
+    if (serialize() !== "") {
+      props.onReused(prompt, false);
+      return;
+    }
+    if (props.history.current === null) props.history.current = { editor, editorState: editor.getEditorState() };
+    editor.update(() => {
+      const paragraph = $createParagraphNode();
+      for (const piece of promptPieces(prompt.parts)) {
+        if (piece.kind === "text") paragraph.append($createTextNode(piece.text));
+        else if (piece.kind === "break") paragraph.append($createLineBreakNode());
+        else paragraph.append($createMentionNode(piece.path, piece.label));
+      }
+      $getRoot().clear().append(paragraph);
+      paragraph.selectEnd();
+    });
+    takeKeyboard(editor);
+    props.onReused(prompt, true);
+  }, [editor, props.reuse]);
 
   // The sibling-view seam (a session open in the sidebar AND a detached
   // panel): each composer owns its live buffer, so an incoming durable

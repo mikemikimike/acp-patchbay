@@ -194,6 +194,10 @@ export type Action =
    * one row whose place a resend keeps — and only into an empty composer;
    * anything else is a no-op (Copy is the way to merge by hand). */
   | { kind: "reclaimQueuedPrompt"; patchbaySessionId: PatchbaySessionId; promptId: string }
+  /** Stage a sent prompt's files again (the prompts chip's Reuse, once its
+   * words are back in the composer): images and attached files come back
+   * as chips; what can't is said. */
+  | { kind: "restagePromptFiles"; patchbaySessionId: PatchbaySessionId; blockId: string }
   /** Debounced durable save of the composer's per-session draft. */
   | { kind: "setSessionDraft"; patchbaySessionId: PatchbaySessionId; draft: string }
   /** A Settings card's knob editor expanded (open) or collapsed — the
@@ -1534,9 +1538,8 @@ export interface PreferencesView {
   /** The composer's session-stats strip, one switch per read-out — pure
    * render furniture, so hiding any of them loses nothing. Flat keys, not a
    * nested record: the store merges one level deep, so each member keeps its
-   * own default. The files chip is a control, not a read-out, and has no
-   * switch. */
-  statsPrompts: boolean;
+   * own default. The read-out strip's chips (prompts, edited files) are
+   * ways in, not read-outs, and have no switch. */
   statsToolCalls: boolean;
   statsContext: boolean;
   statsPlanUsage: boolean;
@@ -1565,7 +1568,6 @@ export const DEFAULT_PREFERENCES: PreferencesView = {
   doneSound: "",
   knobSource: "agent-default",
   idleCloseMinutes: 60,
-  statsPrompts: true,
   statsToolCalls: true,
   statsContext: true,
   statsPlanUsage: true,

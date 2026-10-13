@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Solutions Unity
 
-// The composer's session-stats strip: whole-session counts from the
-// view-model's single pass, then the context-window gauge (moved from the
+// The composer's session-stats strip: the whole-session tool-call count from
+// the view-model's single pass, then the context-window gauge (moved from the
 // header, smaller) and the plan-usage gauge — read-outs only, each behind its
 // own preference. Counts render only when nonzero, the gauges only when the
 // agent reports usage (absence over fake); a fresh session shows nothing at
@@ -121,12 +121,11 @@ export function ComposerStats({
   totals: SessionTotals;
   usage: UsageInfo | null;
   /** The per-read-out preferences — each member gated on its own. */
-  show: Pick<PreferencesView, "statsPrompts" | "statsToolCalls" | "statsContext" | "statsPlanUsage">;
+  show: Pick<PreferencesView, "statsToolCalls" | "statsContext" | "statsPlanUsage">;
 }) {
+  // The prompt count lives on the read-out strip's prompts chip — one
+  // number, one surface.
   const counts: { icon: string; n: number; tip: string }[] = [
-    ...(show.statsPrompts
-      ? [{ icon: "comment", n: totals.prompts, tip: `${count(totals.prompts, "prompt")} this session` }]
-      : []),
     ...(show.statsToolCalls
       ? [{ icon: "tools", n: totals.toolCalls, tip: `${count(totals.toolCalls, "tool call")} this session` }]
       : []),

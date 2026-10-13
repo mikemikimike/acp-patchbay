@@ -5,7 +5,7 @@
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { assertKind } from "./support/assert-kind";
@@ -3931,6 +3931,36 @@ describe("a session's files live with the session", () => {
     await h.gates.prompt(patchbaySessionId, { text: "read it" });
     expect(echoedKinds(h, patchbaySessionId)[0]).toMatchObject({ type: "resource_link", uri: pathToFileURL(path).toString() });
     await h.pool.stop("f78c" as PatchbayAgentId);
+  });
+
+  it("a reused prompt's files are staged again; a snapshot and a gone file are named instead (#59)", async () => {
+    const h = harness();
+    await h.pool.connect(spec({ turn: [{ type: "echoBlockKinds" }] }, "f59a"));
+    const patchbaySessionId = await h.sessions.createSession("f59a" as PatchbayAgentId, "Fake Agent", cwd);
+    const notes = join(tmpdir(), `patchbay-f59a-${Date.now()}.txt`);
+    await writeFile(notes, "notes");
+    const gonePath = join(tmpdir(), `patchbay-f59a-gone-${Date.now()}.txt`);
+    await h.sessions.addContext(patchbaySessionId, { id: "chip-f59a-img", kind: "image", label: "Image", content: PNG, mimeType: "image/png" });
+    await h.sessions.addContext(patchbaySessionId, { id: "chip-f59a-file", kind: "attachment", label: "File: notes", path: notes });
+    await h.sessions.addContext(patchbaySessionId, { id: "chip-f59a-gone", kind: "attachment", label: "File: gone", path: gonePath });
+    await h.sessions.addContext(patchbaySessionId, { id: "chip-f59a-sel", kind: "selection", label: "a.ts:1-2", content: "x" });
+    await h.gates.prompt(patchbaySessionId, { text: "look" });
+    expect(h.state().contextChips[patchbaySessionId] ?? []).toEqual([]);
+    const prompt = h.state().transcripts[patchbaySessionId]!.find((b) => b.kind === "user")!;
+
+    const missed = await h.sessions.restagePromptFiles(patchbaySessionId, prompt.id);
+    expect(missed).toEqual([`${basename(gonePath)}, no longer at ${gonePath}`, 'the snapshot "a.ts:1-2" — take a fresh one']);
+    const staged = h.state().contextChips[patchbaySessionId]!;
+    expect(staged.map((c) => [c.kind, c.label])).toEqual([
+      ["image", "Image (image/png)"],
+      ["attachment", `File: ${basename(notes)}`],
+    ]);
+    // fresh chips — the sent ones are history, never re-pointed
+    expect(staged.every((c) => c.id.startsWith("chip-") && !c.id.startsWith("chip-f59a"))).toBe(true);
+    expect(staged[0]).toMatchObject({ content: PNG });
+    expect(await h.sessions.restagePromptFiles(patchbaySessionId, "no-such-block")).toEqual([]);
+    await rm(notes, { force: true });
+    await h.pool.stop("f59a" as PatchbayAgentId);
   });
 
   it("the folder leaves with its session — deleted, or its agent removed — and stays through a close", async () => {
