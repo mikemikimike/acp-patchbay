@@ -375,8 +375,10 @@ OAuth sign-in never leaves, so such a server needs a fresh connect), *Settings*
 (preferences, machine-wide command rules, machine-wide saved roots). This
 workspace's own rules and saved roots stay with the workspace. A note says the
 file holds secrets in plain text; `Export…` (off with nothing ticked) opens the
-save dialog, and the file is written readable by its owner only. The outcome
-is a notification, as Copy config's is.
+save dialog, and the file is written readable by its owner only — except one
+saved, from a remote window, to the machine the editor runs on (Windows, from
+WSL), which takes that machine's usual permissions. The outcome is a
+notification, as Copy config's is.
 
 ### Permissions
 

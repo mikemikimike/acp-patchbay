@@ -41,7 +41,7 @@ import { AsksStore, type AskPlace } from "./asks-store";
 import { sessionOwner, type SessionOwner } from "./session-owner";
 import { PermissionBroker } from "./broker";
 import { applyFileWrite, ClientHost, clientRequestHooks } from "./client-host";
-import { exportConfiguration, writeConfigurationFile } from "./config-export";
+import { configurationText, exportConfiguration, writeConfigurationFile } from "./config-export";
 import { eraseAllData } from "./erase-all";
 import { CapabilityTracker } from "./capability-tracker";
 import { DefaultsEditor } from "./defaults-editor";
@@ -897,8 +897,13 @@ export class Orchestrator {
     });
     if (target === undefined) return;
     try {
-      await writeConfigurationFile(target.fsPath, file);
+      // A remote window's dialog also offers the machine the editor runs on
+      // (Windows, from WSL): that file is not on this host's disk, so it is
+      // written through the editor's file system, where no mode can be set.
+      if (target.scheme === "file") await writeConfigurationFile(target.fsPath, file);
+      else await vscode.workspace.fs.writeFile(target, Buffer.from(configurationText(file), "utf8"));
     } catch (err) {
+      this.log.error(`export to ${target.toString()}: ${err instanceof Error ? err.message : String(err)}`);
       void vscode.window.showErrorMessage(`Export failed — ${err instanceof Error ? err.message : String(err)}`);
       return;
     }

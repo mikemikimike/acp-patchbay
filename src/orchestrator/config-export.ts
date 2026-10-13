@@ -82,10 +82,15 @@ export async function exportConfiguration(
   return { patchbay: "configuration", exportedAt: now.toISOString(), state, secrets };
 }
 
+/** The file's text, wherever it is written. */
+export function configurationText(file: ConfigurationFile): string {
+  return `${JSON.stringify(file, null, 2)}\n`;
+}
+
 /** Readable by its owner only — it holds what their secret storage holds.
  * A file that already existed keeps its mode through a write, hence the
  * chmod after. */
 export async function writeConfigurationFile(path: string, file: ConfigurationFile): Promise<void> {
-  await writeFile(path, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
+  await writeFile(path, configurationText(file), { mode: 0o600 });
   await chmod(path, 0o600);
 }

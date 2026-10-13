@@ -28,8 +28,9 @@
   agents with their env values and composer choices, MCP servers with their
   env values and API keys, and your preferences, machine-wide command rules
   and saved roots. The file holds those secrets in plain text and is
-  readable only by you; an OAuth sign-in never leaves, so such a server
-  needs a fresh connect. Import comes next. README now says where patchbay
+  written readable only by you; an OAuth sign-in never leaves, so such a
+  server needs a fresh connect. From a remote window (WSL, SSH) it can be
+  saved on either machine. Import comes next. README now says where patchbay
   keeps your configuration. (#46)
 
 ## 0.86.0 — 2026-10-10
