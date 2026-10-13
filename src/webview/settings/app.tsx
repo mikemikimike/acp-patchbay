@@ -124,7 +124,13 @@ export function App({ state }: { state: SettingsState }) {
           />
         )}
         {section === "importExport" && (
-          <ImportExportSection state={state} onExport={(parts) => send({ kind: "exportConfiguration", parts })} />
+          <ImportExportSection
+            state={state}
+            onExport={(parts) => send({ kind: "exportConfiguration", parts })}
+            onPickImport={() => send({ kind: "pickConfigImport" })}
+            onApplyImport={(importId, take) => send({ kind: "applyConfigImport", importId, take })}
+            onDismissImport={(importId) => send({ kind: "dismissConfigImport", importId })}
+          />
         )}
         {section === "mcpServers" && (
           <McpServersSection

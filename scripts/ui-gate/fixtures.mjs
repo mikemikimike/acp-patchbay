@@ -299,7 +299,7 @@ export function settingsState() {
       env: { API_KEY: "sk-fixture" }, defaults: {}, registrySource: null, lastSeenVersion: null,
     }],
     sessionsActiveToday: 7, agentKnobs: {}, agentQuestions: {}, registryFetchedAt: "",
-    wireLog: { active: false, until: null }, dataInventory: null,
+    wireLog: { active: false, until: null }, dataInventory: null, configImport: null,
     preferences, doneSounds: ["Glass", "Ping"],
   };
 }

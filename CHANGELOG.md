@@ -31,8 +31,12 @@
   written readable only by you; an OAuth sign-in never leaves, so such a
   server needs a fresh connect. From a remote window (WSL, SSH) it can be
   saved on either machine. The file names the patchbay version that wrote
-  it. Import comes next. README now says where patchbay
-  keeps your configuration. (#46)
+  it. Importing it on the other machine shows what it would bring, item by
+  item — new, the same, or different from what is there — with anything to
+  know first (a command not found, a folder missing, a sign-in needed).
+  Nothing is replaced unless you tick it and nothing is removed; applying
+  restarts patchbay in place. README now says where patchbay keeps your
+  configuration. (#46)
 
 ## 0.86.0 — 2026-10-10
 

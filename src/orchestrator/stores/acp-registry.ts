@@ -199,7 +199,7 @@ export function binaryDigestFor(
 
 /** The moments the registry is read — the one list. A moment is added
  * here, and every site that reads names one. */
-export type RegistryReadMoment = "startup" | "new-session" | "settings" | "add" | "upgrade" | "download" | "manual";
+export type RegistryReadMoment = "startup" | "new-session" | "settings" | "add" | "upgrade" | "import" | "download" | "manual";
 
 const MOMENT_TEXT: Record<RegistryReadMoment, string> = {
   startup: "startup",
@@ -207,6 +207,7 @@ const MOMENT_TEXT: Record<RegistryReadMoment, string> = {
   settings: "Settings opened",
   add: "before an add",
   upgrade: "before an upgrade",
+  import: "before an import",
   download: "before a download",
   manual: "refresh requested",
 };

@@ -68,7 +68,8 @@ export class ComposerKnobsStore implements StoredEntry {
     return Object.keys(this.all()).length;
   }
 
-  private all(): ComposerKnobsRecord {
+  /** Every agent's combination that reads as one. */
+  all(): ComposerKnobsRecord {
     return readStored(this.kv.get<unknown>(KEY));
   }
 

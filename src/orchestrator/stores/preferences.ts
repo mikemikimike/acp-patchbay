@@ -80,7 +80,13 @@ export class PreferencesStore implements StoredEntry {
 
   /** Always complete — defaults filled in at read time, never at write. */
   get(): PreferencesView {
-    return { ...DEFAULT_PREFERENCES, ...readStored(this.kv.get<unknown>(KEY)) };
+    return { ...DEFAULT_PREFERENCES, ...this.chosen() };
+  }
+
+  /** Only the preferences stored, each that reads as one — what an import
+   * carries over, leaving every preference the file never held as it is. */
+  chosen(): Partial<PreferencesView> {
+    return readStored(this.kv.get<unknown>(KEY));
   }
 
   /** Patch-in, full-object-out — the emit after a set carries the whole

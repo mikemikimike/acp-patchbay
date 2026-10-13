@@ -47,6 +47,15 @@ export const mcpServerSourceSchema = z.discriminatedUnion("kind", [
 ]);
 export type McpServerSource = z.infer<typeof mcpServerSourceSchema>;
 
+/** How a server authenticates: a curated entry by the mechanism its
+ * connect used, a custom http server by its own setting; a stdio server
+ * takes no credential of patchbay's. */
+export function authTypeOf(source: McpServerSource): "none" | "header" | "oauth" {
+  if (source.kind === "catalog") return source.authMode;
+  if (source.kind === "custom-http") return source.authType;
+  return "none";
+}
+
 export const mcpServerConfigSchema = z.object({
   id: savedId<PatchbayMcpServerId>(),
   name: z.string().min(1),

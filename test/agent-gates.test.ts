@@ -235,6 +235,7 @@ describe("the one question before a connection ends", () => {
     expect(endQuestion("stop", "Claude", none)).toBeNull();
     expect(endQuestion("upgrade", "Claude", none)).toBeNull();
     expect(endQuestion("logout", "Claude", none)).toBeNull();
+    expect(endQuestion("import", "patchbay", none)).toBeNull();
     expect(endQuestion("remove", "Claude", none)).toEqual({
       message: "Remove Claude? Patchbay forgets the agent: its config, env and capability cache.",
       choice: "Remove",
@@ -253,6 +254,10 @@ describe("the one question before a connection ends", () => {
     expect(endQuestion("remove", "Claude", work)?.message).toBe(
       `Remove Claude? It disconnects ${cut}. Patchbay forgets the agent: its config, env and capability cache.`,
     );
+    expect(endQuestion("import", "patchbay", work)).toEqual({
+      message: `Import the configuration? Patchbay restarts, disconnecting ${cut}.`,
+      choice: "Import",
+    });
     expect(endQuestion("stop", "Claude", { conversations: 1, turns: 0 })?.message).toBe(
       "Stop Claude? It disconnects 1 open conversation.",
     );

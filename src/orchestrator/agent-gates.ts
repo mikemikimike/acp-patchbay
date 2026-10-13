@@ -36,7 +36,7 @@ const GATES = {
 } as const satisfies Record<AgentOperation, "waits" | "cuts in">;
 
 /** The operations that end an agent's connection. */
-type Ending = "stop" | "upgrade" | "logout" | "remove";
+type Ending = "stop" | "upgrade" | "logout" | "remove" | "import";
 
 /** The one question before a connection ends: nothing in hand, it just runs
  * — null; work in hand, it says what will be cut off. Remove always asks:
@@ -60,6 +60,8 @@ export function endQuestion(
       return inHand
         ? { message: `Log out of ${name}? It signs the agent out and stops it, disconnecting ${open}.`, choice: "Log out" }
         : null;
+    case "import":
+      return inHand ? { message: `Import the configuration? Patchbay restarts, disconnecting ${open}.`, choice: "Import" } : null;
     case "remove": {
       const forgets = "Patchbay forgets the agent: its config, env and capability cache.";
       return {

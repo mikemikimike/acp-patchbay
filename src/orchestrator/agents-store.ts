@@ -43,7 +43,7 @@ import { nullLogger, type Logger } from "./logger";
 import type { TerminalAuthRecipe } from "./meta";
 import type { AgentPool, LaunchSpec } from "./pool";
 import { resolveExecutableWin32 } from "./spawn-resolve";
-import { type AcpRegistryStore, type RegistryAgent, resolveDistribution } from "./stores/acp-registry";
+import { type AcpRegistryStore, type RegistryAgent, type RegistryReadMoment, resolveDistribution } from "./stores/acp-registry";
 import type { AgentConfig, AgentConfigStore } from "./stores/agent-configs";
 import type { AuthLockStore } from "./stores/auth-locks";
 import { resolvedBinaryPath } from "./stores/binary-installer";
@@ -405,12 +405,8 @@ export class AgentsStore implements ConnectionOperations {
    * Stopped before the new pin is saved, the agent keeps its version. */
   async upgrade(patchbayAgentId: PatchbayAgentId, signal?: AbortSignal, consent?: () => Promise<boolean>): Promise<void> {
     const config = this.config(patchbayAgentId);
-    const registryId = config?.registrySource?.registryId;
-    if (config === undefined || registryId === undefined) return;
-    await this.deps.registry.read("upgrade");
-    const listed = this.deps.registry.current().agents.find((a) => a.id === registryId);
-    const launch = listed === undefined ? null : this.registryLaunch(listed, patchbayAgentId);
-    if (launch === null) return;
+    const launch = config === undefined ? null : await this.freshLaunch(config, "upgrade");
+    if (config === undefined || launch === null) return;
     if (this.deps.pool.get(patchbayAgentId)?.status === "running") {
       if (consent !== undefined && !(await consent())) return;
       await this.deps.pool.stop(patchbayAgentId);
@@ -423,6 +419,33 @@ export class AgentsStore implements ConnectionOperations {
       // the pool already put how the launch ended — its crash and reason,
       // or a stop — on the row
     }
+  }
+
+  /** An imported agent this machine downloads: its launch and pin
+   * re-resolved from a fresh registry read for this platform, as an Upgrade
+   * resolves them — the file's were another machine's cache and build.
+   * False when the registry serves nothing this platform runs; the agent
+   * then stays as the file had it. */
+  async resolveHere(patchbayAgentId: PatchbayAgentId): Promise<boolean> {
+    const config = this.config(patchbayAgentId);
+    const launch = config === undefined ? null : await this.freshLaunch(config, "import");
+    if (config === undefined || launch === null) return false;
+    await this.saveUpgrade(config, launch.spec, launch.registrySource);
+    return true;
+  }
+
+  /** A registry agent's launch from a fresh read of the registry — never
+   * from a copy shown earlier. Null when the registry no longer lists it, or
+   * lists nothing this platform can run. */
+  private async freshLaunch(
+    config: AgentConfig,
+    moment: RegistryReadMoment,
+  ): Promise<{ spec: LaunchSpec; registrySource: AgentConfig["registrySource"] } | null> {
+    const registryId = config.registrySource?.registryId;
+    if (registryId === undefined) return null;
+    await this.deps.registry.read(moment);
+    const listed = this.deps.registry.current().agents.find((a) => a.id === registryId);
+    return listed === undefined ? null : this.registryLaunch(listed, config.id);
   }
 
   /** Remove is stop + forget ("add, edit, and remove agents") —

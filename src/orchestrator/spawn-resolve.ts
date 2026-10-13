@@ -29,7 +29,7 @@
 // use — a managed-runtime PATH prepend must be visible here — and is
 // never cached or persisted.
 import { statSync } from "node:fs";
-import { win32 } from "node:path";
+import { posix, win32 } from "node:path";
 
 /** The extension classes a child_process spawn can execute, in default
  * PATHEXT order. Anything else PATHEXT lists (.PS1, .VBS, …) needs an
@@ -100,6 +100,27 @@ export function resolveExecutableWin32(
     }
   }
   return null;
+}
+
+/** Whether a configured command names something this machine can run —
+ * found on PATH, or an absolute path that exists. A relative path with a
+ * separator resolves against a spawn's cwd, unknown until then: never
+ * reported missing. */
+export function commandFound(
+  command: string,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  platform: NodeJS.Platform = process.platform,
+  isFile: (p: string) => boolean = isFileSync,
+): boolean {
+  if (platform === "win32") {
+    if (/[\\/]/.test(command) && !win32.isAbsolute(command)) return true;
+    return resolveExecutableWin32(command, env, isFile) !== null;
+  }
+  if (command.includes("/")) return !posix.isAbsolute(command) || isFile(command);
+  return (envValue(env, "PATH") ?? "")
+    .split(":")
+    .filter((d) => posix.isAbsolute(d))
+    .some((dir) => isFile(posix.join(dir, command)));
 }
 
 /** The launch decision for a configured command: what actually spawns, and

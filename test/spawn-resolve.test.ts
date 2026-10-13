@@ -3,7 +3,7 @@
 // .cmd/.bat shims get shell:true scoped to exactly that case (Node ≥ 20.12,
 // CVE-2024-27980) with shell-active args refused rather than quoted-and-hoped.
 import { describe, expect, it } from "vitest";
-import { resolveSpawn, resolveExecutableWin32 } from "../src/orchestrator/spawn-resolve";
+import { commandFound, resolveSpawn, resolveExecutableWin32 } from "../src/orchestrator/spawn-resolve";
 import { warmupSpawn } from "../src/orchestrator/launcher-health";
 import type { LaunchSpec } from "../src/orchestrator/pool";
 import type { PatchbayAgentId } from "../src/shared/ids";
@@ -169,5 +169,31 @@ describe("warmupSpawn", () => {
     expect(warmupSpawn(spec("npx", ["@scope/pkg"]))).toBeNull(); // user-typed, no -y
     expect(warmupSpawn(spec("npx", ["-y"]))).toBeNull(); // nothing to warm
     expect(warmupSpawn(spec("uvx", ["--python", "3.12", "pkg"]))).toBeNull(); // flag-led
+  });
+});
+
+describe("commandFound — whether a configured command is runnable here", () => {
+  const posixEnv = { PATH: "/usr/bin:relative/bin:/home/me/.local/bin" };
+  const posixFiles = files("/usr/bin/git", "/home/me/.local/bin/kimi", "/opt/tools/agent");
+
+  it("POSIX: a bare name is found on PATH's absolute entries only; an absolute path must exist", () => {
+    expect(commandFound("git", posixEnv, "linux", posixFiles)).toBe(true);
+    expect(commandFound("kimi", posixEnv, "linux", posixFiles)).toBe(true);
+    expect(commandFound("claude", posixEnv, "linux", posixFiles)).toBe(false);
+    expect(commandFound("/opt/tools/agent", posixEnv, "linux", posixFiles)).toBe(true);
+    expect(commandFound("/opt/tools/gone", posixEnv, "linux", posixFiles)).toBe(false);
+  });
+
+  it("a relative path resolves against a spawn's cwd — never reported missing", () => {
+    expect(commandFound("./bin/agent", posixEnv, "linux", posixFiles)).toBe(true);
+    expect(commandFound(".\\bin\\agent.exe", winEnv, "win32", files())).toBe(true);
+  });
+
+  it("Windows: found through PATH×PATHEXT, as a spawn would resolve it", () => {
+    const winFiles = files(`${NPM_DIR}\\gemini.cmd`, `${NODE_DIR}\\node.exe`);
+    expect(commandFound("gemini", winEnv, "win32", winFiles)).toBe(true);
+    expect(commandFound("node", winEnv, "win32", winFiles)).toBe(true);
+    expect(commandFound("claude", winEnv, "win32", winFiles)).toBe(false);
+    expect(commandFound("C:\\tools\\gone.exe", winEnv, "win32", winFiles)).toBe(false);
   });
 });

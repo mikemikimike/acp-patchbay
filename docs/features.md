@@ -240,7 +240,9 @@ deliverable.
   global to this machine — never a repo-committed file. Sharing an MCP server
   is an explicit copy (Copy config, in the well-known `mcpServers` shape).
   The whole configuration — agents, MCP servers, settings, picked by part —
-  exports to a file the user keeps and carries to another machine. What the
+  exports to a file the user keeps and carries to another machine, and
+  imports there: reviewed item by item against what that machine holds,
+  nothing replaced unless the user ticks it, nothing removed. What the
   owner typed — env values, a header API key — is readable in the edit forms
   and rides the copy and the export; an OAuth token, minted by a login flow,
   never shows, never copies and never exports. Everything is revocable at any

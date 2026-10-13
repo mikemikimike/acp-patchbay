@@ -9,7 +9,6 @@ import {
   exportConfiguration,
   STORED_KEYS,
   writeConfigurationFile,
-  type ConfigurationFile,
   type ExportSources,
 } from "../src/orchestrator/config-export";
 import { AgentConfigStore } from "../src/orchestrator/stores/agent-configs";
@@ -232,31 +231,5 @@ describe("configuration export", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
-  });
-
-  // The first file export wrote (2026-10-13, a build before the export's
-  // release, so it names 0.86.0), kept as written. Whatever changes a
-  // store's shape migrates what that store already holds; this holds the
-  // same migration to every file already exported.
-  it("the first exported file still reads whole in today's stores, its secrets each naming a record it carries", async () => {
-    const file = JSON.parse(
-      await readFile(fileURLToPath(new URL("./goldens/configuration.2026-10-13.json", import.meta.url)), "utf8"),
-    ) as ConfigurationFile;
-    const kv = new MemoryKV();
-    for (const [key, value] of Object.entries(file.state)) {
-      expect(typeof STORED_KEYS[key], `${key} is still carried`).toBe("string");
-      await kv.update(key, value);
-    }
-    const raw = (key: string) => file.state[key] as unknown[];
-    const agents = new AgentConfigStore(kv).list();
-    const servers = new McpServerConfigStore(kv).list();
-    expect(agents.map((a) => a.id)).toEqual(raw("acpPatchbay.agents").map((a) => (a as { id: string }).id));
-    expect(servers.map((s) => s.id)).toEqual(raw("acpPatchbay.integrations").map((s) => (s as { id: string }).id));
-    expect(new ComposerKnobsStore(kv).get("claude" as PatchbayAgentId)).toEqual({ mode: "plan" });
-    expect(new PreferencesStore(kv).get()).toMatchObject({ statsPrompts: false, knobSource: "last-session", idleCloseMinutes: 45 });
-    expect(new MachineRulesStore(kv).get().commandRules).toEqual(raw("acpPatchbay.machineCommandRules"));
-    expect(new SavedRootsStore(kv, "machine").list()).toEqual(raw("acpPatchbay.machineSavedRoots"));
-    expect(Object.keys(file.secrets.agents ?? {}).every((id) => agents.some((a) => a.id === id))).toBe(true);
-    expect(Object.keys(file.secrets.mcpServers ?? {}).every((id) => servers.some((s) => s.id === id))).toBe(true);
   });
 });

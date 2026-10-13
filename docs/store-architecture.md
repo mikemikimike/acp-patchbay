@@ -433,6 +433,20 @@ in the tests as written; a change that stops today's stores reading it whole
 fails the gate. The file names the version that wrote it, so an older
 patchbay importing a newer file can say it may hold what it doesn't know.
 
+**An import is a restart in place.** The file is read through the stores
+(`config-import.ts`) and planned against this machine (`config-import-plan.ts`):
+each record matched by id, then by name — ids are minted per machine, and a
+name is how its owner tells two apart — and a matched record lands on this
+machine's id. Applying stops everything (the agents running are stamped first,
+as a shutdown stamps them), plans again against the stores as they stand,
+writes each ticked item through its store (`config-import-apply.ts`), republishes
+both channels from the stores — the same stop and republish an erase runs —
+and runs the startup connects, so what was running comes back on the new
+configuration. A taken item replaces what is here whole; only what this machine
+knows of it on its own stays: the version an agent last answered with, and an
+OAuth sign-in to an unchanged connection. A downloaded agent is resolved for
+this platform from a fresh registry read.
+
 Agents and MCP servers are deliberately global-only. The risk this guards —
 a production-access MCP server silently following a user between repos — is
 held where it lives: neither rides a repo, so nothing attaches by opening a

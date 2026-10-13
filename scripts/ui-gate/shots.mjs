@@ -1433,6 +1433,54 @@ for (const theme of Object.keys(THEMES)) {
   await p.click('[data-export-part="agents"] [role="checkbox"]');
   await p.click('[data-export-part="mcpServers"] [role="checkbox"]');
   check("[narrow] with nothing ticked, Export is off", await p.locator('button:has-text("Export…")').isDisabled());
+
+  // ── Import: reviewed item by item; new ones start ticked, different ones don't ──
+  await p.click('button:has-text("Import…")');
+  check("[narrow] Import asks the host for a file", (await p.evaluate(() => window.__actions.at(-1)))?.kind === "pickConfigImport");
+  const item = (id, part, kind, label, fate, differs = [], flags = []) => ({ id, part, kind, label, fate, differs, flags });
+  await p.evaluate((items) =>
+    window.__patch([{
+      kind: "configImportChanged",
+      configImport: {
+        id: 7, stage: "review", fileName: "patchbay-config-2026-10-13.json", patchbayVersion: "9.0.0", newer: true,
+        exportedAt: "2026-10-13T12:00:00.000Z", parts: ["agents", "mcpServers", "settings"], items,
+        unread: ["an entry this version doesn't carry (acpPatchbay.laterThing)"],
+      },
+    }]), [
+    item("agent:claude", "agents", "agent", "Claude", "differs", ["env values", "composer choices"]),
+    item("agent:kimi", "agents", "agent", "Kimi CLI", "new", [], ["downloaded again for this machine at its first connect"]),
+    item("mcpServer:github", "mcpServers", "mcpServer", "GitHub", "unchanged"),
+    item("preferences", "settings", "preferences", "Preferences", "differs", ["knobSource", "idleCloseMinutes"]),
+    item(`savedRoot:/srv/${LONG}`, "settings", "savedRoot", `/srv/${LONG}`, "new", [], ["doesn't exist on this machine"]),
+  ]);
+  await p.waitForSelector("[data-import-item]");
+  const ticked = async (id) => (await p.locator(`[data-import-item="${id}"] [role="checkbox"]`).getAttribute("data-state")) === "checked";
+  check(
+    "[narrow] a new item starts ticked, a different one unticked, an unchanged one can't be ticked",
+    (await ticked("agent:kimi")) && !(await ticked("agent:claude")) &&
+      (await p.locator('[data-import-item="mcpServer:github"] [role="checkbox"]').isDisabled()),
+  );
+  check(
+    "[narrow] the review says the file is newer, what didn't read, and each item's flags",
+    (await p.$("[data-import-newer]")) !== null && (await p.$("[data-import-unread]")) !== null &&
+      (await p.locator('[data-import-item="agent:kimi"]', { hasText: "downloaded again" }).count()) === 1,
+  );
+  await sweep(p, "settings › Import/Export review");
+  await p.locator(".card:has([data-import-item])").screenshot({ path: `${OUT}/narrow-settings-import-review.png` });
+  await p.click('[data-import-item="agent:claude"] [role="checkbox"]');
+  await p.click('[data-import-part="settings"] > label [role="checkbox"]');
+  await p.click('button:has-text("Apply")');
+  const applying = await p.evaluate(() => window.__actions.at(-1));
+  check(
+    "[narrow] Apply sends the import and exactly the ticked items",
+    applying?.kind === "applyConfigImport" && applying.importId === 7 &&
+      JSON.stringify([...applying.take].sort()) === JSON.stringify(["agent:claude", "agent:kimi", "preferences", `savedRoot:/srv/${LONG}`].sort()),
+  );
+  await p.evaluate(() => window.__patch([{ kind: "configImportChanged", configImport: { id: 7, stage: "applied", fileName: "patchbay-config-2026-10-13.json", landed: 3, failures: ["Kimi CLI: the registry has no download of it for this machine — it stays as the file had it"] } }]));
+  await p.waitForSelector("[data-import-applied]");
+  check("[narrow] what landed is said, and what didn't", (await p.locator(".card", { hasText: "Imported 3 items" }).locator("text=Kimi CLI").count()) === 1);
+  await p.click('button:has-text("Done")');
+  check("[narrow] Done dismisses the import", (await p.evaluate(() => window.__actions.at(-1)))?.kind === "dismissConfigImport");
   await p.close();
 }
 

@@ -32,7 +32,7 @@ import { PRODUCT } from "../shared/product";
 import { loggableUrl, nullLogger, type Logger } from "./logger";
 import { connectMcpOAuth, refreshMcpOAuth, type OAuthUserAgent } from "./mcp-oauth";
 import { McpServerTokenStore, type StoredToken } from "./stores/mcp-server-tokens";
-import { McpServerConfigStore, type McpServerConfig, type McpServerSource } from "./stores/mcp-server-configs";
+import { authTypeOf, McpServerConfigStore, type McpServerConfig, type McpServerSource } from "./stores/mcp-server-configs";
 import { isConnectable, type CatalogEntry } from "./stores/mcp-catalog";
 import type { SecretEnvStore } from "./stores/secret-env";
 import type { PatchbayAgentId, PatchbayMcpServerId } from "../shared/ids";
@@ -184,15 +184,6 @@ function reaches(config: McpServerConfig, patchbayAgentId: PatchbayAgentId): boo
   return Array.isArray(config.routing)
     ? config.routing.includes(patchbayAgentId)
     : !config.routing.except.includes(patchbayAgentId);
-}
-
-/** How a server authenticates: a curated entry by the mechanism its
- * connect used, a custom http server by its own setting; a stdio server
- * takes no credential of patchbay's. */
-function authTypeOf(source: McpServerSource): "none" | "header" | "oauth" {
-  if (source.kind === "catalog") return source.authMode;
-  if (source.kind === "custom-http") return source.authType;
-  return "none";
 }
 
 /** Whether "connected" requires a stored credential: every server that

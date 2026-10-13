@@ -345,6 +345,23 @@ describe("agents store", () => {
     expect(h.agents.config("old" as PatchbayAgentId)?.registrySource?.pinnedVersion).toBe("4.0.0");
   });
 
+  it("an imported agent is resolved for this machine from a fresh registry read — or, unlisted, stays as the file had it", async () => {
+    const h = agentsHarness(dir);
+    serveRegistry({ id: "reg", version: "2.0.0" });
+    await stored(h, fakeConfig("reg", {}, { registrySource: { registryId: "reg", distributionKind: "npx", pinnedVersion: "1.0.0" } }));
+    await stored(h, fakeConfig("gone", {}, { registrySource: { registryId: "unlisted", distributionKind: "npx", pinnedVersion: "1.0.0" } }));
+
+    expect(await h.agents.resolveHere("reg" as PatchbayAgentId)).toBe(true);
+    expect(h.agents.config("reg" as PatchbayAgentId)).toMatchObject({
+      command: "npx",
+      registrySource: { registryId: "reg", pinnedVersion: "2.0.0" },
+    });
+    expect(await h.agents.resolveHere("gone" as PatchbayAgentId)).toBe(false);
+    expect(h.agents.config("gone" as PatchbayAgentId)?.registrySource?.pinnedVersion).toBe("1.0.0");
+    // Resolving never connects: the import's restart does.
+    expect(h.pool.get("reg" as PatchbayAgentId)).toBeUndefined();
+  });
+
   it("an Upgrade the registry can't serve asks nothing and leaves the agent as it is", async () => {
     const user = asking();
     const h = agentsHarness(dir, { asks: user.asks });

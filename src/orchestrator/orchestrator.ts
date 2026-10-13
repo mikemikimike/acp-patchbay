@@ -5,7 +5,7 @@
 // truth for sessions, capability tables, permission rules, secrets,
 // configuration. Webviews only ever see its snapshots and patches.
 import { randomUUID } from "node:crypto";
-import { statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
@@ -34,7 +34,7 @@ import {
 } from "../shared/protocol";
 import { askNotice } from "../shared/ask-notice";
 import { openAsks, type OpenAsk } from "../shared/attention";
-import { AgentGates, type AgentOperation } from "./agent-gates";
+import { AgentGates, endQuestion, type AgentOperation } from "./agent-gates";
 import { AgentsStore, type ConnectionOperations } from "./agents-store";
 import { ATTACHMENTS_DIR, pickedFileForm } from "./attachments";
 import { AsksStore, type AskPlace } from "./asks-store";
@@ -42,6 +42,10 @@ import { sessionOwner, type SessionOwner } from "./session-owner";
 import { PermissionBroker } from "./broker";
 import { applyFileWrite, ClientHost, clientRequestHooks } from "./client-host";
 import { configurationText, exportConfiguration, writeConfigurationFile } from "./config-export";
+import { readConfiguration, type ConfigurationRead } from "./config-import";
+import { applyImport, type ImportOutcome } from "./config-import-apply";
+import { localConfiguration, planImport, type ImportPlan } from "./config-import-plan";
+import { commandFound } from "./spawn-resolve";
 import { eraseAllData } from "./erase-all";
 import { CapabilityTracker } from "./capability-tracker";
 import { DefaultsEditor } from "./defaults-editor";
@@ -194,6 +198,10 @@ export class Orchestrator {
   /** In-flight session/list syncs per agent — awaited by the startup
    * restore so "found or not" is judged against a settled list. */
   private readonly pendingSyncs = new Map<string, Promise<void>>();
+  /** The import the Import/Export page is reviewing: the file as read.
+   * Lives as long as the review. */
+  private configImport: { id: number; fileName: string; read: ConfigurationRead } | null = null;
+  private importCount = 0;
   private readonly editorSubscriptions: vscode.Disposable[] = [];
   /** Visible agent-view surfaces → the session each pins (null = follows
    * the active-session pointer). Hidden or disposed surfaces are absent;
@@ -917,11 +925,127 @@ export class Orchestrator {
     );
   }
 
+  /** Import, first half: the file the user picks, read and set against
+   * this machine for review — or refused, saying why. Nothing moves yet. */
+  private async pickConfigImport(): Promise<void> {
+    const [target] =
+      (await vscode.window.showOpenDialog({
+        title: "Import patchbay configuration",
+        canSelectMany: false,
+        filters: { JSON: ["json"] },
+      })) ?? [];
+    if (target === undefined) return;
+    const id = ++this.importCount;
+    const fileName = basename(target.path);
+    this.configImport = null;
+    let text: string;
+    try {
+      // Through the editor's file system: from a remote window the file may
+      // be on the machine the editor runs on.
+      text = Buffer.from(await vscode.workspace.fs.readFile(target)).toString("utf8");
+    } catch (err) {
+      const reason = `The file can't be read — ${err instanceof Error ? err.message : String(err)}`;
+      this.settings.emit({ kind: "configImportChanged", configImport: { id, stage: "refused", fileName, reason } });
+      return;
+    }
+    const outcome = readConfiguration(text);
+    if (!outcome.ok) {
+      this.settings.emit({ kind: "configImportChanged", configImport: { id, stage: "refused", fileName, reason: outcome.reason } });
+      return;
+    }
+    const { read } = outcome;
+    const plan = await this.importPlan(read);
+    this.configImport = { id, fileName, read };
+    this.settings.emit({
+      kind: "configImportChanged",
+      configImport: {
+        id,
+        stage: "review",
+        fileName,
+        patchbayVersion: read.patchbayVersion,
+        newer: read.newer,
+        exportedAt: read.exportedAt,
+        parts: [...read.parts],
+        items: plan.items,
+        unread: read.unread,
+      },
+    });
+  }
+
+  /** Import, second half: the ticked items land, as a restart in place —
+   * the one question first when work is open, everything stopped, the
+   * items written, everything republished, and what was running (and what
+   * connects on window open) connected again. */
+  private async applyConfigImport(importId: number, take: readonly string[]): Promise<void> {
+    const pending = this.configImport;
+    if (pending === null || pending.id !== importId) return;
+    const work = this.agentConfigs.list().reduce(
+      (sum, agent) => {
+        const open = this.sessions.openWork(agent.id);
+        return { conversations: sum.conversations + open.conversations, turns: sum.turns + open.turns };
+      },
+      { conversations: 0, turns: 0 },
+    );
+    const question = endQuestion("import", "patchbay", work);
+    if (question !== null && !(await askModal(question.message, question.choice))) return;
+    if (this.configImport?.id !== importId) return;
+    this.configImport = null;
+    const { fileName } = pending;
+    this.settings.emit({ kind: "configImportChanged", configImport: { id: importId, stage: "applying", fileName } });
+    this.log.info(`import ${fileName}: stopping every process`);
+    // What runs now is what the restart brings back, as a reload would.
+    await this.agents.stampRunning();
+    await this.stopEverything();
+    let outcome: ImportOutcome;
+    try {
+      // Planned again against what the stores hold now: the review showed
+      // the machine as it was when the file was read.
+      outcome = await applyImport(pending.read, await this.importPlan(pending.read), new Set(take), {
+        agentConfigs: this.agentConfigs,
+        agentEnv: this.agentEnv,
+        composerKnobs: this.composerKnobs,
+        mcpServerConfigs: this.mcpServerConfigs,
+        mcpServerEnv: this.mcpServerEnv,
+        mcpServerTokens: this.mcpServerTokens,
+        preferences: this.preferences,
+        machineRules: this.machinePermissionRules,
+        machineSavedRoots: this.machineSavedRoots,
+        resolveHere: (patchbayAgentId) => this.agents.resolveHere(patchbayAgentId),
+      });
+    } catch (err) {
+      // Whatever landed before it stopped stays, and the restart still runs.
+      outcome = { landed: 0, failures: [`the import stopped — ${err instanceof Error ? err.message : String(err)}`] };
+    }
+    await this.republishAll();
+    this.log.info(`import ${fileName}: ${outcome.landed} landed${outcome.failures.map((f) => `; ${f}`).join("")}`);
+    this.settings.emit({
+      kind: "configImportChanged",
+      configImport: { id: importId, stage: "applied", fileName, landed: outcome.landed, failures: outcome.failures },
+    });
+    await this.connectStartupAgents();
+  }
+
+  /** A file's plan against this machine as its stores hold it now. */
+  private async importPlan(read: ConfigurationRead): Promise<ImportPlan> {
+    const local = await localConfiguration({
+      agentConfigs: this.agentConfigs,
+      agentEnv: this.agentEnv,
+      composerKnobs: this.composerKnobs,
+      mcpServerConfigs: this.mcpServerConfigs,
+      mcpServerEnv: this.mcpServerEnv,
+      headerKey: (id) => this.mcpServers.headerKey(id as PatchbayMcpServerId),
+      preferences: this.preferences,
+      machineRules: this.machinePermissionRules,
+      machineSavedRoots: this.machineSavedRoots,
+    });
+    return planImport(read, local, { commandFound: (command) => commandFound(command), pathExists: (path) => existsSync(path) });
+  }
+
   /** Stops reality before the stores move under it: every terminal tree,
    * every agent's work ended and its process down (graceful ladder), every
    * MCP server's line — so nothing launches for a record the move forgets
    * or replaces. The views see each session close and any pending connect
-   * or import review end. */
+   * or import review end — a review was read against the stores now moving. */
   private async stopEverything(): Promise<void> {
     for (const pid of this.clientHost.runningPids()) killTree(pid, "SIGKILL");
     this.clientHost.clear();
@@ -932,6 +1056,10 @@ export class Orchestrator {
     }
     this.agentView.emit({ kind: "chatConnectResolved" });
     this.mcpServers.dropImport();
+    if (this.configImport !== null) {
+      this.configImport = null;
+      this.settings.emit({ kind: "configImportChanged", configImport: null });
+    }
   }
 
   /** The stores moved: both channels catch up from what they now hold,
@@ -1774,6 +1902,18 @@ export class Orchestrator {
         break;
       case "exportConfiguration":
         void this.exportToFile(action.parts);
+        break;
+      case "pickConfigImport":
+        void this.pickConfigImport().catch(this.logCatch("import: read"));
+        break;
+      case "applyConfigImport":
+        void this.applyConfigImport(action.importId, action.take).catch(this.logCatch("import: apply"));
+        break;
+      case "dismissConfigImport":
+        if (this.configImport?.id === action.importId) this.configImport = null;
+        if (this.settings.current.configImport?.id === action.importId) {
+          this.settings.emit({ kind: "configImportChanged", configImport: null });
+        }
         break;
       case "setWireLog":
         void this.setWireLog(action.active);

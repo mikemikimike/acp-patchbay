@@ -57,6 +57,46 @@ export type SettingsSectionId =
  * and saved roots). */
 export type ExportPart = "agents" | "mcpServers" | "settings";
 
+/** An imported item against this machine's: not here yet, the same as
+ * here, or different from what is here. */
+export type ImportItemFate = "new" | "unchanged" | "differs";
+
+/** One item of an import's review. */
+export interface ImportItemView {
+  /** Names the item within its import — what a tick refers to. */
+  id: string;
+  part: ExportPart;
+  kind: "agent" | "mcpServer" | "preferences" | "commandRule" | "savedRoot";
+  label: string;
+  fate: ImportItemFate;
+  /** What differs from this machine's, by what the user calls it. */
+  differs: readonly string[];
+  /** What the user should know before it lands. */
+  flags: readonly string[];
+}
+
+/** An import on the Import/Export page, by stage: the file refused (and
+ * why), read and set against this machine for the user to pick from,
+ * landing, or landed (with what didn't). */
+export type ConfigImportView =
+  | { id: number; stage: "refused"; fileName: string; reason: string }
+  | {
+      id: number;
+      stage: "review";
+      fileName: string;
+      /** The version that wrote the file, when it names one. */
+      patchbayVersion: string | null;
+      /** Written by a newer patchbay: it may hold what this one doesn't know. */
+      newer: boolean;
+      exportedAt: string | null;
+      parts: readonly ExportPart[];
+      items: readonly ImportItemView[];
+      /** What the file holds that this version couldn't read. */
+      unread: readonly string[];
+    }
+  | { id: number; stage: "applying"; fileName: string }
+  | { id: number; stage: "applied"; fileName: string; landed: number; failures: readonly string[] };
+
 /** Where a saved root lives: "workspace" — this workspace only
  * (workspaceState, never the repo), the default; "machine" — every
  * workspace on this machine. */
@@ -102,6 +142,12 @@ export type Action =
   /** Writes the picked parts of this machine's configuration to a file the
    * user names in a save dialog. */
   | { kind: "exportConfiguration"; parts: readonly ExportPart[] }
+  /** Opens a configuration file to import: read, then set against this
+   * machine for review. */
+  | { kind: "pickConfigImport" }
+  /** Lands the ticked items of a reviewed import — `take` names them. */
+  | { kind: "applyConfigImport"; importId: number; take: readonly string[] }
+  | { kind: "dismissConfigImport"; importId: number }
   /** Wire log on/off (Audit page + status bar + palette command). Turning
    * it on goes through the orchestrator's disclosure prompt first — the
    * event confirming `active: true` arrives only after consent. */
@@ -2687,6 +2733,8 @@ export interface SettingsState {
   doneSounds: readonly string[];
   /** Saved roots page snapshot — same event as the agent view's copy. */
   savedRoots: SavedRootsView;
+  /** The import under way on the Import/Export page; null when none. */
+  configImport: ConfigImportView | null;
 }
 
 /** One row of the Data page's storage inventory — a store, where it lives
@@ -2719,6 +2767,7 @@ export const initialSettingsState: SettingsState = {
   registryFetchedAt: "",
   wireLog: { active: false, until: null },
   dataInventory: null,
+  configImport: null,
   preferences: DEFAULT_PREFERENCES,
   doneSounds: [],
   savedRoots: NO_SAVED_ROOTS,
@@ -2751,6 +2800,7 @@ export type SettingsEvent =
   | { kind: "agentQuestion"; patchbayAgentId: PatchbayAgentId; event: QuestionEvent }
   | { kind: "wireLogChanged"; active: boolean; until: string | null }
   | { kind: "dataInventoryChanged"; rows: readonly DataInventoryRow[] }
+  | { kind: "configImportChanged"; configImport: ConfigImportView | null }
   | { kind: "sectionChanged"; section: SettingsSectionId };
 
 export function reduceSettings(
@@ -2828,6 +2878,8 @@ export function reduceSettings(
       return { ...state, wireLog: { active: event.active, until: event.until } };
     case "dataInventoryChanged":
       return { ...state, dataInventory: event.rows };
+    case "configImportChanged":
+      return { ...state, configImport: event.configImport };
     case "preferencesChanged":
       return { ...state, preferences: event.preferences };
     case "savedRootsChanged":
@@ -2851,6 +2903,7 @@ const SETTINGS_ONLY_KINDS = new Set([
   "agentQuestion",
   "wireLogChanged",
   "dataInventoryChanged",
+  "configImportChanged",
   "sectionChanged",
 ]);
 
