@@ -1,10 +1,17 @@
 // Export: the picked parts of the machine store, read from the real stores
 // over one in-memory KV, beside the secrets their records name.
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { exportConfiguration, writeConfigurationFile, type ExportSources } from "../src/orchestrator/config-export";
+import {
+  exportConfiguration,
+  STORED_KEYS,
+  writeConfigurationFile,
+  type ConfigurationFile,
+  type ExportSources,
+} from "../src/orchestrator/config-export";
 import { AgentConfigStore } from "../src/orchestrator/stores/agent-configs";
 import { ComposerKnobsStore } from "../src/orchestrator/stores/composer-knobs";
 import { MemoryKV } from "../src/orchestrator/stores/kv";
@@ -14,6 +21,7 @@ import { MachineRulesStore } from "../src/orchestrator/stores/permission-rules";
 import { PreferencesStore } from "../src/orchestrator/stores/preferences";
 import { SavedRootsStore } from "../src/orchestrator/stores/saved-roots";
 import { SecretEnvStore } from "../src/orchestrator/stores/secret-env";
+import { PRODUCT } from "../src/shared/product";
 import type { ExportPart } from "../src/shared/protocol";
 import type { PatchbayAgentId, PatchbayMcpServerId } from "../src/shared/ids";
 
@@ -29,17 +37,34 @@ async function machine() {
   const workspaceRoots = new SavedRootsStore(new MemoryKV(), "workspace");
   const agentEnv = new SecretEnvStore(secrets, "acpPatchbay.agent");
   const mcpServerEnv = new SecretEnvStore(secrets, "acpPatchbay.integration");
-  const keys: Record<string, string> = { keyed: "secret-abc" };
+  const keys: Record<string, string> = { keyed: "secret-abc", context7: "ctx-key" };
 
+  // An id from before patchbay minted them, on a registry agent.
   await agentConfigs.add({
     id: "claude" as PatchbayAgentId,
     name: "Claude",
     command: "npx",
-    args: ["claude-agent-acp"],
+    args: ["@agentclientprotocol/claude-agent-acp@0.31.0"],
     autoConnect: true,
+    defaults: { options: { model: "opus" } },
+    registrySource: { registryId: "claude-acp", distributionKind: "npx", pinnedVersion: "0.31.0" },
+    lastSeenVersion: "0.31.0",
+  });
+  // A binary download: its command is a path into this machine's cache.
+  await agentConfigs.add({
+    id: "6f1c2a9e-3b7d-4e21-9a5f-0c8d2e4b7a13" as PatchbayAgentId,
+    name: "Kimi CLI",
+    command: "/home/me/.vscode-server/data/User/globalStorage/solutionsunity.acp-patchbay/bin-cache/kimi/0.3.1/kimi",
+    args: ["acp"],
+    autoConnect: false,
     defaults: {},
-    registrySource: null,
-    lastSeenVersion: "1.2.0",
+    registrySource: {
+      registryId: "kimi",
+      distributionKind: "binary",
+      pinnedVersion: "0.3.1",
+      binary: { archiveUrl: "https://example.test/kimi-0.3.1-linux-x64.tar.gz", cmd: "./kimi", sha256: "ab".repeat(32) },
+    },
+    lastSeenVersion: null,
   });
   await agentConfigs.add({
     id: "bare" as PatchbayAgentId,
@@ -64,30 +89,48 @@ async function machine() {
   await mcpServerConfigs.add({
     id: "local" as PatchbayMcpServerId,
     name: "Local",
-    source: { kind: "custom-stdio", command: "tool", args: [] },
+    source: { kind: "custom-stdio", command: "tool", args: ["--stdio"] },
+    routing: ["claude"],
+    active: false,
+    transport: "auto",
+  });
+  await mcpServerConfigs.add({
+    id: "context7" as PatchbayMcpServerId,
+    name: "Context7",
+    source: { kind: "catalog", catalogId: "context7", authMode: "header" },
+    routing: { except: ["bare"] },
+    active: true,
+    transport: "bridge",
+  });
+  // Signed in with OAuth: nothing of its sign-in leaves.
+  await mcpServerConfigs.add({
+    id: "github" as PatchbayMcpServerId,
+    name: "GitHub",
+    source: { kind: "catalog", catalogId: "github", authMode: "oauth" },
     routing: "auto",
     active: true,
     transport: "auto",
   });
   await mcpServerEnv.set("local", { TOKEN: "t-1" });
-  await preferences.set({ statsPrompts: false });
-  await machineRules.set([{ pattern: "git status", verdict: "allow" }]);
+  await preferences.set({ statsPrompts: false, knobSource: "last-session", idleCloseMinutes: 45 });
+  await machineRules.set([
+    { pattern: "git status", verdict: "allow" },
+    { pattern: "rm -rf *", verdict: "deny" },
+  ]);
   await machineRoots.add("/home/me/notes");
   await workspaceRoots.add("/home/me/workspace-only");
 
   const sources: ExportSources = {
+    entries: [agentConfigs, composerKnobs, mcpServerConfigs, preferences, machineRules, machineRoots],
     agents: {
-      entries: [agentConfigs, composerKnobs],
       ids: () => agentConfigs.list().map((c) => c.id),
       env: (id) => agentEnv.get(id),
     },
     mcpServers: {
-      entries: [mcpServerConfigs],
       ids: () => mcpServerConfigs.list().map((c) => c.id),
       env: (id) => mcpServerEnv.get(id),
       headerKey: async (id) => keys[id],
     },
-    settings: { entries: [preferences, machineRules, machineRoots] },
   };
   return { kv, sources };
 }
@@ -101,6 +144,7 @@ describe("configuration export", () => {
     const file = await exportConfiguration(new Set<ExportPart>(["agents", "mcpServers", "settings"]), sources, at);
 
     expect(file.patchbay).toBe("configuration");
+    expect(file.patchbayVersion).toBe(PRODUCT.version);
     expect(file.exportedAt).toBe("2026-10-13T12:00:00.000Z");
     expect(file.state).toEqual({
       "acpPatchbay.agents": kv.get("acpPatchbay.agents"),
@@ -113,7 +157,7 @@ describe("configuration export", () => {
     // A record with nothing secret stored has no row.
     expect(file.secrets).toEqual({
       agents: { claude: { env: { ANTHROPIC_API_KEY: "sk-1" } } },
-      mcpServers: { keyed: { key: "secret-abc" }, local: { env: { TOKEN: "t-1" } } },
+      mcpServers: { keyed: { key: "secret-abc" }, local: { env: { TOKEN: "t-1" } }, context7: { key: "ctx-key" } },
     });
   });
 
@@ -145,13 +189,35 @@ describe("configuration export", () => {
     const file = await exportConfiguration(
       new Set<ExportPart>(["settings"]),
       {
-        agents: { entries: [], ids: () => [], env: async () => ({}) },
-        mcpServers: { entries: [], ids: () => [], env: async () => ({}), headerKey: async () => undefined },
-        settings: { entries: [new PreferencesStore(empty), new MachineRulesStore(empty), new SavedRootsStore(empty, "machine")] },
+        entries: [new PreferencesStore(empty), new MachineRulesStore(empty), new SavedRootsStore(empty, "machine")],
+        agents: { ids: () => [], env: async () => ({}) },
+        mcpServers: { ids: () => [], env: async () => ({}), headerKey: async () => undefined },
       },
       at,
     );
     expect(file.state).toEqual({});
+  });
+
+  it("a carried key with no store to read it from fails the export — never a file missing it", async () => {
+    const { sources } = await machine();
+    const withoutKnobs = { ...sources, entries: sources.entries.filter((e) => e.key !== "acpPatchbay.lastKnobs") };
+    await expect(exportConfiguration(new Set<ExportPart>(["agents"]), withoutKnobs, at)).rejects.toThrow(
+      "no store was given for acpPatchbay.lastKnobs",
+    );
+  });
+
+  it("every key a store names is classified — carried by a part, or never with its reason — and every row names a real key", async () => {
+    const dir = fileURLToPath(new URL("../src/orchestrator/stores/", import.meta.url));
+    const named = new Set<string>();
+    for (const name of await readdir(dir)) {
+      for (const line of (await readFile(join(dir, name), "utf8")).split("\n")) {
+        if (/^\s*(\/\/|\*|\/\*)/.test(line)) continue;
+        for (const m of line.matchAll(/"(acpPatchbay\.[A-Za-z]+)"/g)) named.add(m[1]!);
+      }
+    }
+    expect(named.size).toBeGreaterThan(10);
+    expect([...named].filter((key) => !(key in STORED_KEYS))).toEqual([]);
+    expect(Object.keys(STORED_KEYS).filter((key) => !named.has(key))).toEqual([]);
   });
 
   it.skipIf(process.platform === "win32")("the file is written readable by its owner only — an existing one too", async () => {
@@ -166,5 +232,31 @@ describe("configuration export", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  // The first file export wrote (2026-10-13, a build before the export's
+  // release, so it names 0.86.0), kept as written. Whatever changes a
+  // store's shape migrates what that store already holds; this holds the
+  // same migration to every file already exported.
+  it("the first exported file still reads whole in today's stores, its secrets each naming a record it carries", async () => {
+    const file = JSON.parse(
+      await readFile(fileURLToPath(new URL("./goldens/configuration.2026-10-13.json", import.meta.url)), "utf8"),
+    ) as ConfigurationFile;
+    const kv = new MemoryKV();
+    for (const [key, value] of Object.entries(file.state)) {
+      expect(typeof STORED_KEYS[key], `${key} is still carried`).toBe("string");
+      await kv.update(key, value);
+    }
+    const raw = (key: string) => file.state[key] as unknown[];
+    const agents = new AgentConfigStore(kv).list();
+    const servers = new McpServerConfigStore(kv).list();
+    expect(agents.map((a) => a.id)).toEqual(raw("acpPatchbay.agents").map((a) => (a as { id: string }).id));
+    expect(servers.map((s) => s.id)).toEqual(raw("acpPatchbay.integrations").map((s) => (s as { id: string }).id));
+    expect(new ComposerKnobsStore(kv).get("claude" as PatchbayAgentId)).toEqual({ mode: "plan" });
+    expect(new PreferencesStore(kv).get()).toMatchObject({ statsPrompts: false, knobSource: "last-session", idleCloseMinutes: 45 });
+    expect(new MachineRulesStore(kv).get().commandRules).toEqual(raw("acpPatchbay.machineCommandRules"));
+    expect(new SavedRootsStore(kv, "machine").list()).toEqual(raw("acpPatchbay.machineSavedRoots"));
+    expect(Object.keys(file.secrets.agents ?? {}).every((id) => agents.some((a) => a.id === id))).toBe(true);
+    expect(Object.keys(file.secrets.mcpServers ?? {}).every((id) => servers.some((s) => s.id === id))).toBe(true);
   });
 });

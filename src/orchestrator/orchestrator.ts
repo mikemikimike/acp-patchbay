@@ -877,18 +877,23 @@ export class Orchestrator {
    * the user says. */
   private async exportToFile(parts: readonly ExportPart[]): Promise<void> {
     const file = await exportConfiguration(new Set(parts), {
+      entries: [
+        this.agentConfigs,
+        this.composerKnobs,
+        this.mcpServerConfigs,
+        this.preferences,
+        this.machinePermissionRules,
+        this.machineSavedRoots,
+      ],
       agents: {
-        entries: [this.agentConfigs, this.composerKnobs],
         ids: () => this.agentConfigs.list().map((c) => c.id),
         env: (id) => this.agentEnv.get(id),
       },
       mcpServers: {
-        entries: [this.mcpServerConfigs],
         ids: () => this.mcpServerConfigs.list().map((c) => c.id),
         env: (id) => this.mcpServerEnv.get(id),
         headerKey: (id) => this.mcpServers.headerKey(id as PatchbayMcpServerId),
       },
-      settings: { entries: [this.preferences, this.machinePermissionRules, this.machineSavedRoots] },
     });
     const target = await vscode.window.showSaveDialog({
       title: "Export patchbay configuration",

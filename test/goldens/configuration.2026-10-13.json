@@ -1,0 +1,174 @@
+{
+  "patchbay": "configuration",
+  "patchbayVersion": "0.86.0",
+  "exportedAt": "2026-10-13T12:00:00.000Z",
+  "state": {
+    "acpPatchbay.agents": [
+      {
+        "id": "claude",
+        "name": "Claude",
+        "command": "npx",
+        "args": [
+          "@agentclientprotocol/claude-agent-acp@0.31.0"
+        ],
+        "autoConnect": true,
+        "defaults": {
+          "options": {
+            "model": "opus"
+          }
+        },
+        "registrySource": {
+          "registryId": "claude-acp",
+          "distributionKind": "npx",
+          "pinnedVersion": "0.31.0"
+        },
+        "lastSeenVersion": "0.31.0"
+      },
+      {
+        "id": "6f1c2a9e-3b7d-4e21-9a5f-0c8d2e4b7a13",
+        "name": "Kimi CLI",
+        "command": "/home/me/.vscode-server/data/User/globalStorage/solutionsunity.acp-patchbay/bin-cache/kimi/0.3.1/kimi",
+        "args": [
+          "acp"
+        ],
+        "autoConnect": false,
+        "defaults": {},
+        "registrySource": {
+          "registryId": "kimi",
+          "distributionKind": "binary",
+          "pinnedVersion": "0.3.1",
+          "binary": {
+            "archiveUrl": "https://example.test/kimi-0.3.1-linux-x64.tar.gz",
+            "cmd": "./kimi",
+            "sha256": "abababababababababababababababababababababababababababababababab"
+          }
+        },
+        "lastSeenVersion": null
+      },
+      {
+        "id": "bare",
+        "name": "Bare",
+        "command": "bare-acp",
+        "args": [],
+        "autoConnect": false,
+        "defaults": {},
+        "registrySource": null,
+        "lastSeenVersion": null
+      }
+    ],
+    "acpPatchbay.lastKnobs": {
+      "claude": {
+        "mode": "plan"
+      }
+    },
+    "acpPatchbay.integrations": [
+      {
+        "id": "keyed",
+        "name": "Keyed",
+        "source": {
+          "kind": "custom-http",
+          "url": "https://example.test/mcp",
+          "authType": "header",
+          "headerName": "Authorization",
+          "valuePrefix": "Bearer "
+        },
+        "routing": "auto",
+        "active": true,
+        "transport": "auto"
+      },
+      {
+        "id": "local",
+        "name": "Local",
+        "source": {
+          "kind": "custom-stdio",
+          "command": "tool",
+          "args": [
+            "--stdio"
+          ]
+        },
+        "routing": [
+          "claude"
+        ],
+        "active": false,
+        "transport": "auto"
+      },
+      {
+        "id": "context7",
+        "name": "Context7",
+        "source": {
+          "kind": "catalog",
+          "catalogId": "context7",
+          "authMode": "header"
+        },
+        "routing": {
+          "except": [
+            "bare"
+          ]
+        },
+        "active": true,
+        "transport": "bridge"
+      },
+      {
+        "id": "github",
+        "name": "GitHub",
+        "source": {
+          "kind": "catalog",
+          "catalogId": "github",
+          "authMode": "oauth"
+        },
+        "routing": "auto",
+        "active": true,
+        "transport": "auto"
+      }
+    ],
+    "acpPatchbay.preferences": {
+      "soundOnDone": false,
+      "doneSound": "",
+      "knobSource": "last-session",
+      "idleCloseMinutes": 45,
+      "statsPrompts": false,
+      "statsToolCalls": true,
+      "statsContext": true,
+      "statsPlanUsage": true,
+      "detachWindows": true,
+      "attachmentMaxMB": 10,
+      "openThinking": false,
+      "executeCalls": "grouped"
+    },
+    "acpPatchbay.machineCommandRules": [
+      {
+        "pattern": "git status",
+        "verdict": "allow"
+      },
+      {
+        "pattern": "rm -rf *",
+        "verdict": "deny"
+      }
+    ],
+    "acpPatchbay.machineSavedRoots": [
+      "/home/me/notes"
+    ]
+  },
+  "secrets": {
+    "agents": {
+      "claude": {
+        "env": {
+          "ANTHROPIC_API_KEY": "sk-1"
+        }
+      }
+    },
+    "mcpServers": {
+      "keyed": {
+        "key": "secret-abc"
+      },
+      "local": {
+        "env": {
+          "TOKEN": "t-1"
+        }
+      },
+      "context7": {
+        "key": "ctx-key"
+      }
+    }
+  }
+}

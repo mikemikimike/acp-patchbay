@@ -10,30 +10,55 @@
 // the user's to keep and move; nothing in it is shaped for anything but
 // this extension's own import.
 import { chmod, writeFile } from "node:fs/promises";
+import { PRODUCT } from "../shared/product";
 import type { ExportPart } from "../shared/protocol";
 import type { StoredEntry } from "./stores/kv";
 
 type Env = Record<string, string>;
 
-/** Where each part's contents are read from. */
+/** Every key patchbay stores in a KV, and its fate in an export: the part
+ * that carries it, or why it never leaves. A key a store names without a
+ * row here is a failing test, so nothing new is left out unannounced. */
+export const STORED_KEYS: Readonly<Record<string, ExportPart | { never: string }>> = {
+  "acpPatchbay.agents": "agents",
+  "acpPatchbay.lastKnobs": "agents",
+  "acpPatchbay.integrations": "mcpServers",
+  "acpPatchbay.preferences": "settings",
+  "acpPatchbay.machineCommandRules": "settings",
+  "acpPatchbay.machineSavedRoots": "settings",
+  "acpPatchbay.usedCapabilities": { never: "what an agent proved on this machine — earned again by use on the next" },
+  "acpPatchbay.authLocks": { never: "a sign-out witnessed on this machine — the next one's agents sign in for themselves" },
+  "acpPatchbay.sessionContinuity": { never: "sessions held by this machine's agents" },
+  "acpPatchbay.spawnRegistry": { never: "processes running on this machine" },
+  "acpPatchbay.defaultAgentFolded": { never: "marks this machine's old default-agent setting as folded in" },
+  "acpPatchbay.legacyStateRecovery": { never: "marks this machine's one-time recovery as done" },
+  "acpPatchbay.permissionRules": { never: "this workspace's own" },
+  "acpPatchbay.savedRoots": { never: "this workspace's own" },
+  "acpPatchbay.lastConnected": { never: "this workspace's agents at its last close" },
+  "acpPatchbay.lastActiveSession": { never: "this workspace's last open session" },
+};
+
+/** Where an export reads from: the stores that hold a carried key, and
+ * the secrets the agents' and MCP servers' records name. */
 export interface ExportSources {
+  entries: readonly StoredEntry[];
   agents: {
-    entries: readonly StoredEntry[];
     ids(): readonly string[];
     env(id: string): Promise<Env>;
   };
   mcpServers: {
-    entries: readonly StoredEntry[];
     ids(): readonly string[];
     env(id: string): Promise<Env>;
     headerKey(id: string): Promise<string | undefined>;
   };
-  settings: { entries: readonly StoredEntry[] };
 }
 
 export interface ConfigurationFile {
   /** What the file is — the one mark an import knows it by. */
   patchbay: "configuration";
+  /** The version that wrote it: an import by an older one says the file
+   * may hold what it doesn't know. */
+  patchbayVersion: string;
   exportedAt: string;
   /** Machine-store entries by their key, as stored. */
   state: Record<string, unknown>;
@@ -51,11 +76,12 @@ export async function exportConfiguration(
   now: Date = new Date(),
 ): Promise<ConfigurationFile> {
   const state: Record<string, unknown> = {};
-  for (const part of parts) {
-    for (const entry of sources[part].entries) {
-      const value = entry.stored();
-      if (value !== undefined) state[entry.key] = value;
-    }
+  for (const [key, fate] of Object.entries(STORED_KEYS)) {
+    if (typeof fate !== "string" || !parts.has(fate)) continue;
+    const entry = sources.entries.find((e) => e.key === key);
+    if (entry === undefined) throw new Error(`no store was given for ${key}`);
+    const value = entry.stored();
+    if (value !== undefined) state[key] = value;
   }
   const secrets: ConfigurationFile["secrets"] = {};
   if (parts.has("agents")) {
@@ -79,7 +105,7 @@ export async function exportConfiguration(
     }
     secrets.mcpServers = servers;
   }
-  return { patchbay: "configuration", exportedAt: now.toISOString(), state, secrets };
+  return { patchbay: "configuration", patchbayVersion: PRODUCT.version, exportedAt: now.toISOString(), state, secrets };
 }
 
 /** The file's text, wherever it is written. */

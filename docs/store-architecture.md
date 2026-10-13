@@ -420,6 +420,16 @@ a record that it ran where the old value can't be rewritten (an
 unregistered setting), so none runs twice and none undoes what the user
 did since. Live code reads only the current shape.
 
+**An exported file is a saved shape too.** Export carries the machine
+store's entries as stored, under their keys, so the migration that moves a
+store also moves every file already exported: an import reads the file
+through the same stores. Every key a store names has its fate in one table
+(`config-export.ts` `STORED_KEYS`) — the part that carries it, or why it never
+leaves — and a key without a row fails the gate. The first exported file (2026-10-13) is kept
+in the tests as written; a change that stops today's stores reading it whole
+fails the gate. The file names the version that wrote it, so an older
+patchbay importing a newer file can say it may hold what it doesn't know.
+
 Agents and MCP servers are deliberately global-only. The risk this guards —
 a production-access MCP server silently following a user between repos — is
 held where it lives: neither rides a repo, so nothing attaches by opening a
