@@ -22,6 +22,15 @@
   Patchbay now names itself by the extension's version everywhere — to
   agents, to the servers it checks, and from its own server — no longer a
   fixed 0.0.1. (#43)
+- **Your configuration exports to a file.** Agents, MCP servers and
+  settings could only be re-entered by hand on a second machine. Settings
+  › Import/Export now writes them to a file you name, picked by part:
+  agents with their env values and composer choices, MCP servers with their
+  env values and API keys, and your preferences, machine-wide command rules
+  and saved roots. The file holds those secrets in plain text and is
+  readable only by you; an OAuth sign-in never leaves, so such a server
+  needs a fresh connect. Import comes next. README now says where patchbay
+  keeps your configuration. (#46)
 
 ## 0.86.0 — 2026-10-10
 

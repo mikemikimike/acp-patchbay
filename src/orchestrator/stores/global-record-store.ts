@@ -11,14 +11,18 @@
 // record is dropped rather than trusted blind.
 import type { z } from "zod";
 import { freeName } from "../../shared/names";
-import type { KV } from "./kv";
+import type { KV, StoredEntry } from "./kv";
 
-export class RecordStore<T> {
+export class RecordStore<T> implements StoredEntry {
   constructor(
     private readonly kv: KV,
-    private readonly key: string,
+    readonly key: string,
     private readonly schema: z.ZodType<T>,
   ) {}
+
+  stored(): unknown {
+    return this.kv.get(this.key);
+  }
 
   list(): T[] {
     const raw = this.kv.get<unknown[]>(this.key) ?? [];

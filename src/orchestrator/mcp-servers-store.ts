@@ -186,13 +186,19 @@ function reaches(config: McpServerConfig, patchbayAgentId: PatchbayAgentId): boo
     : !config.routing.except.includes(patchbayAgentId);
 }
 
-/** Whether "connected" requires a stored credential: curated servers
- * always (both header and oauth modes carry one); custom-http except
- * authType "none"; custom-stdio never. */
+/** How a server authenticates: a curated entry by the mechanism its
+ * connect used, a custom http server by its own setting; a stdio server
+ * takes no credential of patchbay's. */
+function authTypeOf(source: McpServerSource): "none" | "header" | "oauth" {
+  if (source.kind === "catalog") return source.authMode;
+  if (source.kind === "custom-http") return source.authType;
+  return "none";
+}
+
+/** Whether "connected" requires a stored credential: every server that
+ * authenticates, header and oauth alike. */
 function needsToken(source: McpServerSource): boolean {
-  if (source.kind === "catalog") return true;
-  if (source.kind === "custom-http") return source.authType !== "none";
-  return false;
+  return authTypeOf(source) !== "none";
 }
 
 /** The endpoint an http-backed server reaches: the user's own URL for
@@ -445,10 +451,19 @@ export class McpServersStore {
     const entry = source.kind === "catalog" ? this.entryFor(source.catalogId) : undefined;
     const url = endpointOf(source, entry);
     if (url === "") return undefined;
-    const authType = source.kind === "catalog" ? source.authMode : source.authType;
+    const authType = authTypeOf(source);
     if (authType !== "header") return { url, authType };
-    const token = (await this.tokens.get(patchbayMcpServerId))?.accessToken;
+    const token = await this.headerKey(patchbayMcpServerId);
     return { url, authType, ...headerShapeOf(source, entry), ...(token !== undefined ? { token } : {}) };
+  }
+
+  /** The key a header-auth server sends — what its owner typed, so it
+   * leaves with the server's copy or export. Undefined for any other
+   * server: an OAuth token is flow-minted and never leaves. */
+  async headerKey(patchbayMcpServerId: PatchbayMcpServerId): Promise<string | undefined> {
+    const source = this.configs.get(patchbayMcpServerId)?.source;
+    if (source === undefined || authTypeOf(source) !== "header") return undefined;
+    return (await this.tokens.get(patchbayMcpServerId))?.accessToken;
   }
 
   private entryFor(catalogId: string): CatalogEntry | undefined {

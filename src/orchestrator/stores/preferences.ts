@@ -9,7 +9,7 @@
 // on every read, so a version that adds a preference never invalidates an
 // older stored object and an absent key is honestly "the default".
 import { DEFAULT_PREFERENCES, type PreferencesView } from "../../shared/protocol";
-import type { KV } from "./kv";
+import type { KV, StoredEntry } from "./kv";
 
 const KEY = "acpPatchbay.preferences";
 
@@ -26,7 +26,9 @@ function migrate(stored: Record<string, unknown>): Partial<PreferencesView> {
   return { ...split, ...(rest as Partial<PreferencesView>) };
 }
 
-export class PreferencesStore {
+export class PreferencesStore implements StoredEntry {
+  readonly key = KEY;
+
   constructor(private readonly kv: KV) {
     // Once, at construction: a KV applies an update in memory before its
     // write settles, so no read ever sees the old shape. Disk is a trust
@@ -35,6 +37,11 @@ export class PreferencesStore {
     if (typeof stored === "object" && stored !== null && "composerStats" in stored) {
       void kv.update(KEY, migrate(stored as Record<string, unknown>));
     }
+  }
+
+  /** As stored — defaults are filled in by get(), never here. */
+  stored(): unknown {
+    return this.kv.get(KEY);
   }
 
   /** Always complete — defaults filled in at read time, never at write. */

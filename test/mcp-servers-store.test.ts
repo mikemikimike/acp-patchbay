@@ -330,6 +330,23 @@ describe("McpServersStore — custom escape hatch", () => {
     expect((await h.tokens.get(id))?.accessToken).toBe("access-1");
   });
 
+  it("a header server's key is what leaves with it; an OAuth token never does, and a stdio server has none", async () => {
+    const h = harness([]);
+    const header = await h.gates.addCustom(
+      "Keyed",
+      { kind: "custom-http", url: "https://example.test/mcp", authType: "header", token: "secret-abc" },
+      "auto",
+    );
+    const oauth = await h.gates.addCustom("Signed in", { kind: "custom-http", url: provider.mcpUrl, authType: "oauth" }, "auto");
+    const stdio = await h.gates.addCustom("Local", { kind: "custom-stdio", command: "echo", args: [], env: {} }, "auto");
+
+    expect(await h.manager.headerKey(header)).toBe("secret-abc");
+    expect((await h.tokens.get(oauth))?.accessToken).toBe("access-1");
+    expect(await h.manager.headerKey(oauth)).toBeUndefined();
+    expect(await h.manager.headerKey(stdio)).toBeUndefined();
+    expect(await h.manager.headerKey("gone" as PatchbayMcpServerId)).toBeUndefined();
+  });
+
   it("disconnect is remove — the full clear; the catalog entry stays", async () => {
     const h = harness([entry()]);
     const id = await h.gates.connectWithKey("svc", "Service", "static-key");

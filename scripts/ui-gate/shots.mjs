@@ -1401,7 +1401,7 @@ for (const theme of Object.keys(THEMES)) {
   p = await page(browser, theme0, { width: 520, height: 800 });
   await renderView(p, "settings", st);
   await p.waitForSelector(".section h1");
-  for (const section of ["Agents", "Capability matrix", "MCP Servers", "Preferences", "Saved roots", "Permissions", "Audit", "Data"]) {
+  for (const section of ["Agents", "Capability matrix", "MCP Servers", "Preferences", "Saved roots", "Import/Export", "Permissions", "Audit", "Data"]) {
     await p.click(`.nav .it:has-text("${section}")`);
     await p.waitForTimeout(150);
     // a section that failed to render shows no controls at all — never a pass
@@ -1414,6 +1414,25 @@ for (const theme of Object.keys(THEMES)) {
   await p.click('.nav .it:has-text("Preferences")');
   await opened(p, '.section [role="combobox"]', "select-content", "a preference's options");
   await p.keyboard.press("Escape");
+
+  // ── Import/Export: export sends the parts still ticked; none ticked, nothing to send ──
+  await p.click('.nav .it:has-text("Import/Export")');
+  await p.waitForSelector("[data-export-part]");
+  check(
+    "[narrow] export counts what each part carries",
+    (await p.locator('[data-export-part="agents"]', { hasText: `${st.agentConfigs.length} agent` }).count()) === 1 &&
+      (await p.locator('[data-export-part="mcpServers"]', { hasText: `${st.mcpServers.length} server` }).count()) === 1,
+  );
+  await p.click('[data-export-part="settings"] [role="checkbox"]');
+  await p.click('button:has-text("Export…")');
+  const exporting = await p.evaluate(() => window.__actions.at(-1));
+  check(
+    "[narrow] Export sends the parts still ticked",
+    exporting?.kind === "exportConfiguration" && JSON.stringify(exporting.parts) === JSON.stringify(["agents", "mcpServers"]),
+  );
+  await p.click('[data-export-part="agents"] [role="checkbox"]');
+  await p.click('[data-export-part="mcpServers"] [role="checkbox"]');
+  check("[narrow] with nothing ticked, Export is off", await p.locator('button:has-text("Export…")').isDisabled());
   await p.close();
 }
 

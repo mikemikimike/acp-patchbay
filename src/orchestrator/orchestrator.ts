@@ -7,7 +7,7 @@
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { RequestError } from "@agentclientprotocol/sdk";
 import * as vscode from "vscode";
@@ -41,6 +41,7 @@ import { AsksStore, type AskPlace } from "./asks-store";
 import { sessionOwner, type SessionOwner } from "./session-owner";
 import { PermissionBroker } from "./broker";
 import { applyFileWrite, ClientHost, clientRequestHooks } from "./client-host";
+import { exportConfiguration, writeConfigurationFile } from "./config-export";
 import { eraseAllData } from "./erase-all";
 import { CapabilityTracker } from "./capability-tracker";
 import { DefaultsEditor } from "./defaults-editor";
@@ -57,7 +58,7 @@ import { AgentPool } from "./pool";
 import { agentErrorText, authRequiredReasonOf } from "./readers/agent-error";
 import { commandOf, killTree, reapOrphans } from "./process-tree";
 import { Cancelled, Queue } from "./queue";
-import type { McpServerWork } from "../shared/protocol";
+import type { ExportPart, McpServerWork } from "../shared/protocol";
 import { type AttachWork, SessionGates } from "./session-gates";
 import { normalizeRootPath, SessionsStore, type SessionConnectionOperations } from "./sessions-store";
 import { nonce } from "./webview-host";
@@ -870,6 +871,40 @@ export class Orchestrator {
     });
     await this.republishAll();
     this.log.info("erase all data: complete — factory state");
+  }
+
+  /** Export: the picked parts read fresh from the stores, written where
+   * the user says. */
+  private async exportToFile(parts: readonly ExportPart[]): Promise<void> {
+    const file = await exportConfiguration(new Set(parts), {
+      agents: {
+        entries: [this.agentConfigs, this.composerKnobs],
+        ids: () => this.agentConfigs.list().map((c) => c.id),
+        env: (id) => this.agentEnv.get(id),
+      },
+      mcpServers: {
+        entries: [this.mcpServerConfigs],
+        ids: () => this.mcpServerConfigs.list().map((c) => c.id),
+        env: (id) => this.mcpServerEnv.get(id),
+        headerKey: (id) => this.mcpServers.headerKey(id as PatchbayMcpServerId),
+      },
+      settings: { entries: [this.preferences, this.machinePermissionRules, this.machineSavedRoots] },
+    });
+    const target = await vscode.window.showSaveDialog({
+      title: "Export patchbay configuration",
+      defaultUri: vscode.Uri.file(join(homedir(), `patchbay-config-${file.exportedAt.slice(0, 10)}.json`)),
+      filters: { JSON: ["json"] },
+    });
+    if (target === undefined) return;
+    try {
+      await writeConfigurationFile(target.fsPath, file);
+    } catch (err) {
+      void vscode.window.showErrorMessage(`Export failed — ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    void vscode.window.showInformationMessage(
+      `Exported to ${target.fsPath}. It holds your env values and keys in plain text — keep it as you would a password.`,
+    );
   }
 
   /** Stops reality before the stores move under it: every terminal tree,
@@ -1726,6 +1761,9 @@ export class Orchestrator {
         break;
       case "eraseAllData":
         void this.eraseEverything().catch(this.logCatch("eraseAllData"));
+        break;
+      case "exportConfiguration":
+        void this.exportToFile(action.parts);
         break;
       case "setWireLog":
         void this.setWireLog(action.active);

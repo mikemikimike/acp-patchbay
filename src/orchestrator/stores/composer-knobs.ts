@@ -13,7 +13,7 @@
 // knob, renamed a value) is silently skipped at apply time, exactly like a
 // no-longer-offered configured default — no validation needed here.
 import type { KnobSeed } from "../../shared/protocol";
-import type { KV } from "./kv";
+import type { KV, StoredEntry } from "./kv";
 import type { PatchbayAgentId } from "../../shared/ids";
 
 // Historical key (this store began as "last-used knobs") — kept so existing
@@ -22,8 +22,14 @@ const KEY = "acpPatchbay.lastKnobs";
 
 type ComposerKnobsRecord = Readonly<Record<string, KnobSeed>>;
 
-export class ComposerKnobsStore {
+export class ComposerKnobsStore implements StoredEntry {
+  readonly key = KEY;
+
   constructor(private readonly kv: KV) {}
+
+  stored(): unknown {
+    return this.kv.get(KEY);
+  }
 
   get(patchbayAgentId: PatchbayAgentId): KnobSeed | undefined {
     return this.kv.get<ComposerKnobsRecord>(KEY)?.[patchbayAgentId];

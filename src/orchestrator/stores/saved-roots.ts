@@ -8,21 +8,25 @@
 // preference, not a session fact: a session owns its list once born, so
 // nothing stored here ever reaches a live session.
 import type { SavedRootScope } from "../../shared/protocol";
-import type { KV } from "./kv";
+import type { KV, StoredEntry } from "./kv";
 
 const KEYS: Record<SavedRootScope, string> = {
   workspace: "acpPatchbay.savedRoots",
   machine: "acpPatchbay.machineSavedRoots",
 };
 
-export class SavedRootsStore {
-  private readonly key: string;
+export class SavedRootsStore implements StoredEntry {
+  readonly key: string;
 
   constructor(
     private readonly kv: KV,
     scope: SavedRootScope,
   ) {
     this.key = KEYS[scope];
+  }
+
+  stored(): unknown {
+    return this.kv.get(this.key);
   }
 
   list(): string[] {

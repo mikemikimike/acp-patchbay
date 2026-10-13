@@ -7,6 +7,14 @@ export interface KV {
   update(key: string, value: unknown): Thenable<void>;
 }
 
+/** A store's entry in a KV — the key it is stored under and the value as
+ * stored there — read whole by whatever carries the store's contents
+ * elsewhere. */
+export interface StoredEntry {
+  readonly key: string;
+  stored(): unknown;
+}
+
 export class MemoryKV implements KV {
   private map = new Map<string, unknown>();
 

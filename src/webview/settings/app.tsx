@@ -13,6 +13,7 @@ import { Icon } from "../shared/icon";
 import { AgentsSection } from "./agents";
 import { AuditSection } from "./audit";
 import { DataSection } from "./data";
+import { ImportExportSection } from "./import-export";
 import { McpServersSection } from "./mcp-servers";
 import { MatrixSection } from "./matrix";
 import { PermissionsSection } from "./permissions";
@@ -34,6 +35,7 @@ const NAV_GROUPS = [
       { id: "mcpServers", icon: "server", label: "MCP Servers" },
       { id: "preferences", icon: "settings-gear", label: "Preferences" },
       { id: "roots", icon: "root-folder", label: "Saved roots" },
+      { id: "importExport", icon: "arrow-swap", label: "Import/Export" },
     ],
   },
   // Formerly two groups (Trust / Transparency) — merged, not deleted: all
@@ -120,6 +122,9 @@ export function App({ state }: { state: SettingsState }) {
             onEdit={(replacing, scope) => send({ kind: "pickSavedRoot", scope, replacing })}
             onRemove={(path, scope) => send({ kind: "unsaveRoot", path, scope })}
           />
+        )}
+        {section === "importExport" && (
+          <ImportExportSection state={state} onExport={(parts) => send({ kind: "exportConfiguration", parts })} />
         )}
         {section === "mcpServers" && (
           <McpServersSection

@@ -183,10 +183,10 @@ readable without the Output panel.
 
 Left nav + cards, grouped in two non-collapsing headers that *are* the placement
 contract: **This machine** (Agents · Capability matrix · MCP Servers · Preferences
-· Saved roots — everything global to this machine, plus Saved roots' own
+· Saved roots · Import/Export — everything global to this machine, plus Saved roots' own
 per-workspace list beside its machine one), **Trust** (Permissions · Audit · Data — the
 one trust surface: the contract, the evidence, what's held and the way out; one
-verb per page). Groups don't collapse: eight items don't earn the interaction.
+verb per page). Groups don't collapse: nine items don't earn the interaction.
 Nav footer restates the credential rule: SecretStorage only.
 
 ### Agents
@@ -365,6 +365,18 @@ sessions skip it meanwhile, each with a notice in its chat. The page states the
 ownership rule: a session owns its list once started, so a change here reaches
 new sessions only, and removing a root from one session leaves these lists
 alone. The roots chip's Save writes the same lists.
+
+### Import/Export
+
+This machine's configuration carried to a file. The **Export** card ticks
+three parts, each with what it carries counted: *Agents* (with their env values
+and composer choices), *MCP servers* (with their env values and API keys — an
+OAuth sign-in never leaves, so such a server needs a fresh connect), *Settings*
+(preferences, machine-wide command rules, machine-wide saved roots). This
+workspace's own rules and saved roots stay with the workspace. A note says the
+file holds secrets in plain text; `Export…` (off with nothing ticked) opens the
+save dialog, and the file is written readable by its owner only. The outcome
+is a notification, as Copy config's is.
 
 ### Permissions
 

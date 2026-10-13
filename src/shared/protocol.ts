@@ -46,9 +46,16 @@ export type SettingsSectionId =
   | "mcpServers"
   | "preferences"
   | "roots"
+  | "importExport"
   | "permissions"
   | "audit"
   | "data";
+
+/** What an export carries, picked by the user: the agents (with their
+ * composer knobs and env values), the MCP servers (with their env values
+ * and header keys), the settings (preferences, machine-wide command rules
+ * and saved roots). */
+export type ExportPart = "agents" | "mcpServers" | "settings";
 
 /** Where a saved root lives: "workspace" — this workspace only
  * (workspaceState, never the repo), the default; "machine" — every
@@ -92,6 +99,9 @@ export type Action =
    * never a lifecycle side effect: the platform has no uninstall hook, so
    * a clean slate before uninstalling is the user's own deliberate act. */
   | { kind: "eraseAllData" }
+  /** Writes the picked parts of this machine's configuration to a file the
+   * user names in a save dialog. */
+  | { kind: "exportConfiguration"; parts: readonly ExportPart[] }
   /** Wire log on/off (Audit page + status bar + palette command). Turning
    * it on goes through the orchestrator's disclosure prompt first — the
    * event confirming `active: true` arrives only after consent. */

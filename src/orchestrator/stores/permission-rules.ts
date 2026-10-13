@@ -10,7 +10,7 @@
 // everywhere"). Evaluation order is workspace first, then machine, then
 // ask (broker.ts): a workspace can tighten or loosen its own floor, and
 // the repo still can't grant anything — the machine layer never rides it.
-import type { KV } from "./kv";
+import type { KV, StoredEntry } from "./kv";
 
 export type RuleVerdict = "allow" | "ask" | "deny";
 
@@ -57,8 +57,14 @@ const MACHINE_KEY = "acpPatchbay.machineCommandRules";
  * workspace on this machine), consulted only after the workspace layer
  * stays silent. Command rules only: file-write scope stays workspace-level
  * by nature (it's defined relative to the current workspace root). */
-export class MachineRulesStore {
+export class MachineRulesStore implements StoredEntry {
+  readonly key = MACHINE_KEY;
+
   constructor(private readonly kv: KV) {}
+
+  stored(): unknown {
+    return this.kv.get(MACHINE_KEY);
+  }
 
   get(): { commandRules: CommandRule[] } {
     return { commandRules: this.kv.get<CommandRule[]>(MACHINE_KEY) ?? [] };
