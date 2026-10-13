@@ -391,13 +391,16 @@ which version it was exported (a newer version is warned of: something in it
 may not work here), anything it holds that didn't read, then each part with a
 checkbox ticking all of its items and each item beside its own — `new` (starts
 ticked), `differs` (starts unticked, with what differs: replacing is the
-user's call) or `same as here` (nothing to tick) — and its flags: a command not
-found here, a root that doesn't exist here, a server that needs a fresh
-sign-in, an agent downloaded again for this machine. Nothing is removed by an
-import, so the review lists only what the file brings. `Apply` (off with
-nothing ticked) asks the one question first when conversations are open, then
-restarts patchbay in place; the card says it is restarting, then what landed
-and anything that didn't, until `Done`.
+user's call) or `same as here` (no box and no click: it lands nothing; a part
+with nothing to take has no box either) — and, on an item that would land, its
+flags: a command not found here, a root that doesn't exist here, a server that
+needs a fresh sign-in, an agent downloaded again for this machine. Nothing is
+removed by an import, so the review lists only what the file brings. `Apply`
+(off with nothing ticked, saying "Tick what to import") asks the one question
+first when conversations are open, then restarts patchbay in place; the card
+says it is restarting, then what landed and anything that didn't, until
+`Done`. A file holding nothing that isn't already here says so — "nothing to
+import" — with only `Close`.
 
 ### Permissions
 

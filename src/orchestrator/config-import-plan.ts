@@ -3,7 +3,8 @@
 
 // An import's plan: what a configuration file holds, set against what this
 // machine holds — each item new here, the same as here, or different, and
-// what the user should know before it lands. An item is matched by its id,
+// what the user should know before it lands (an item the same as here
+// lands nothing, so it carries nothing to know). An item is matched by its id,
 // then by its name: ids are minted per machine, so the same agent added on
 // two machines has two, and its name is how its owner tells it apart. A
 // matched item lands on this machine's id, keeping what this machine knows
@@ -174,10 +175,13 @@ export function planImport(read: ConfigurationRead, local: LocalConfiguration, c
       mine === undefined
         ? []
         : differing(portableAgent(mine, local.agentEnv[mine.id] ?? {}, local.knobs[mine.id]), theirs, AGENT_LABELS);
+    const fate = fateOf(mine, differs);
     const flags: string[] = [];
-    if (agent.registrySource?.distributionKind === "binary") flags.push("downloaded again for this machine at its first connect");
-    else if (agent.registrySource === null && !checks.commandFound(agent.command)) flags.push(`${agent.command} isn't found on this machine`);
-    items.push({ id: `agent:${agent.id}`, part: "agents", kind: "agent", label: agent.name, fate: fateOf(mine, differs), differs, flags });
+    if (fate !== "unchanged") {
+      if (agent.registrySource?.distributionKind === "binary") flags.push("downloaded again for this machine at its first connect");
+      else if (agent.registrySource === null && !checks.commandFound(agent.command)) flags.push(`${agent.command} isn't found on this machine`);
+    }
+    items.push({ id: `agent:${agent.id}`, part: "agents", kind: "agent", label: agent.name, fate, differs, flags });
   }
 
   const serverMatch = matchById(read.mcpServers, local.mcpServers);
@@ -196,12 +200,15 @@ export function planImport(read: ConfigurationRead, local: LocalConfiguration, c
     });
     const theirs = portable(server, routingOn(server.routing, agentIds), secret);
     const differs = mine === undefined ? [] : differing(portable(mine, mine.routing, local.serverSecrets[mine.id]), theirs, SERVER_LABELS);
+    const fate = fateOf(mine, differs);
     const flags: string[] = [];
-    if (authTypeOf(server.source) === "oauth") flags.push("needs a fresh sign-in on this machine");
-    if (server.source.kind === "custom-stdio" && !checks.commandFound(server.source.command)) {
-      flags.push(`${server.source.command} isn't found on this machine`);
+    if (fate !== "unchanged") {
+      if (authTypeOf(server.source) === "oauth") flags.push("needs a fresh sign-in on this machine");
+      if (server.source.kind === "custom-stdio" && !checks.commandFound(server.source.command)) {
+        flags.push(`${server.source.command} isn't found on this machine`);
+      }
     }
-    items.push({ id: `mcpServer:${server.id}`, part: "mcpServers", kind: "mcpServer", label: server.name, fate: fateOf(mine, differs), differs, flags });
+    items.push({ id: `mcpServer:${server.id}`, part: "mcpServers", kind: "mcpServer", label: server.name, fate, differs, flags });
   }
 
   const preferenceKeys = Object.keys(read.preferences) as (keyof PreferencesView)[];
@@ -233,7 +240,7 @@ export function planImport(read: ConfigurationRead, local: LocalConfiguration, c
       label: root,
       fate: here ? "unchanged" : "new",
       differs: [],
-      flags: checks.pathExists(root) ? [] : ["doesn't exist on this machine"],
+      flags: here || checks.pathExists(root) ? [] : ["doesn't exist on this machine"],
     });
   }
 

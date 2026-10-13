@@ -203,7 +203,8 @@ function ImportStage(props: {
 
 /** The file's items by part: a new one starts ticked, a different one
  * unticked — replacing is the user's call — and an unchanged one has
- * nothing to tick. */
+ * nothing to tick, so no box and no click. A file holding nothing that
+ * isn't already here has nothing to apply, and says so. */
 function ImportReview(props: {
   view: Extract<ConfigImportView, { stage: "review" }>;
   onApply(take: readonly string[]): void;
@@ -245,35 +246,82 @@ function ImportReview(props: {
       {view.parts.map((part) => {
         const items = view.items.filter((i) => i.part === part);
         const tickable = items.filter((i) => i.fate !== "unchanged").map((i) => i.id);
-        const all = tickable.length > 0 && tickable.every((id) => take.has(id));
         return (
           <div key={part} className="mb-3" data-import-part={part}>
-            <label className="mb-1 flex cursor-pointer items-center gap-2 text-[12px] font-semibold">
-              <Checkbox checked={all} disabled={tickable.length === 0} onCheckedChange={(on) => set(tickable, on === true)} />
+            <Tickable
+              taken={tickable.length > 0 && tickable.every((id) => take.has(id))}
+              onTake={tickable.length > 0 ? (on) => set(tickable, on) : undefined}
+              className="items-center font-semibold"
+            >
               {PART_LABELS[part]}
-            </label>
-            {items.length === 0 ? (
-              <div className="ml-5.5 text-[12px] text-muted-foreground">nothing in the file</div>
-            ) : (
-              items.map((item) => (
-                <ImportItem key={item.id} item={item} taken={take.has(item.id)} onTake={(on) => set([item.id], on)} />
-              ))
-            )}
+            </Tickable>
+            <div className="ml-5.5" data-import-items>
+              {items.length === 0 ? (
+                <Tickable taken={false}>
+                  <span className="text-muted-foreground">nothing in the file</span>
+                </Tickable>
+              ) : (
+                items.map((item) => (
+                  <ImportItem key={item.id} item={item} taken={take.has(item.id)} onTake={(on) => set([item.id], on)} />
+                ))
+              )}
+            </div>
           </div>
         );
       })}
-      <div className="note mx-0 mt-0 mb-2.5">
-        Applying restarts patchbay: agents and sessions stop, then what was running connects again.
-      </div>
-      <div className="row gap-2.5">
-        <Button size="sm" disabled={take.size === 0} onClick={() => props.onApply([...take])}>
-          Apply
-        </Button>
-        <Button size="sm" variant="ghost" onClick={props.onDismiss}>
-          Cancel
-        </Button>
-      </div>
+      {view.items.some((i) => i.fate !== "unchanged") ? (
+        <>
+          <div className="note mx-0 mt-0 mb-2.5">
+            Applying restarts patchbay: agents and sessions stop, then what was running connects again.
+          </div>
+          <div className="row gap-2.5">
+            <Button size="sm" disabled={take.size === 0} onClick={() => props.onApply([...take])}>
+              Apply
+            </Button>
+            <Button size="sm" variant="ghost" onClick={props.onDismiss}>
+              Cancel
+            </Button>
+            {take.size === 0 && <span className="text-[12px] text-muted-foreground">Tick what to import.</span>}
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="note mx-0 mt-0 mb-2.5" data-import-nothing>
+            Everything in the file is the same as here — nothing to import.
+          </div>
+          <Button size="sm" variant="outline" onClick={props.onDismiss}>
+            Close
+          </Button>
+        </>
+      )}
     </>
+  );
+}
+
+/** A row the user can tick — a box and a click — or, with nothing to take
+ * (no `onTake`), the same row without either, aligned as if it had one. */
+function Tickable(props: {
+  taken: boolean;
+  onTake?: (on: boolean) => void;
+  className?: string;
+  children: React.ReactNode;
+  data?: Record<string, string>;
+}) {
+  const row = `mb-1 flex gap-2 text-[12px] ${props.className ?? ""}`;
+  if (props.onTake === undefined) {
+    return (
+      <div className={row} {...props.data}>
+        <span className="w-3.5 shrink-0" />
+        {props.children}
+      </div>
+    );
+  }
+  const onTake = props.onTake;
+  return (
+    <label className={`${row} cursor-pointer`} {...props.data}>
+      <Checkbox className="mt-0.5" checked={props.taken} onCheckedChange={(on) => onTake(on === true)} />
+      {props.children}
+    </label>
   );
 }
 
@@ -288,17 +336,12 @@ function ImportItem(props: { item: ImportItemView; taken: boolean; onTake(on: bo
   const differs =
     item.kind === "preferences" ? count(item.differs.length, "preference") : item.differs.join(", ");
   return (
-    <label
-      className="ml-5.5 mb-1 flex cursor-pointer items-start gap-2 text-[12px]"
-      data-import-item={item.id}
-      data-fate={item.fate}
+    <Tickable
+      taken={props.taken}
+      onTake={item.fate === "unchanged" ? undefined : props.onTake}
+      className="items-start"
+      data={{ "data-import-item": item.id, "data-fate": item.fate }}
     >
-      <Checkbox
-        className="mt-0.5"
-        checked={props.taken}
-        disabled={item.fate === "unchanged"}
-        onCheckedChange={(on) => props.onTake(on === true)}
-      />
       <span className="min-w-0 flex-1">
         <span className="break-all">{item.label}</span>{" "}
         <Badge variant={item.fate === "differs" ? "secondary" : "outline"}>{FATE_TEXT[item.fate]}</Badge>
@@ -309,6 +352,6 @@ function ImportItem(props: { item: ImportItemView; taken: boolean; onTake(on: bo
           </span>
         ))}
       </span>
-    </label>
+    </Tickable>
   );
 }

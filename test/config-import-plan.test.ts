@@ -101,7 +101,8 @@ describe("an import's plan", () => {
       command: "C:\\Users\\me\\AppData\\Roaming\\Code\\User\\globalStorage\\solutionsunity.acp-patchbay\\bin-cache\\kimi\\0.3.1\\kimi.exe",
       registrySource: { ...theirs.registrySource!, binary: { archiveUrl: "https://example.test/kimi-0.3.1-windows-x64.zip", cmd: "kimi.exe" } },
     };
-    expect(of(planImport(read, { ...empty, agents: [mine] }, here), `agent:${theirs.id}`).fate).toBe("unchanged");
+    // The same as here, it lands nothing — so nothing to know about landing it.
+    expect(of(planImport(read, { ...empty, agents: [mine] }, here), `agent:${theirs.id}`)).toMatchObject({ fate: "unchanged", flags: [] });
   });
 
   it("a server's routing reads by the ids its agents land on here", async () => {
@@ -128,7 +129,7 @@ describe("an import's plan", () => {
       serverSecrets: { keyed: { env: {}, key: "older-key" } },
     }, here);
     expect(of(plan, "mcpServer:keyed").differs).toEqual(["on or off", "API key"]);
-    expect(of(plan, "mcpServer:github").fate).toBe("unchanged");
+    expect(of(plan, "mcpServer:github")).toMatchObject({ fate: "unchanged", flags: [] });
   });
 
   it("settings: preferences one item; a rule by its pattern; a root by its path", async () => {
@@ -138,11 +139,11 @@ describe("an import's plan", () => {
       preferences: { ...DEFAULT_PREFERENCES, statsPrompts: false, knobSource: "last-session", idleCloseMinutes: 45 },
       machineCommandRules: [{ pattern: "git status", verdict: "ask" }, { pattern: "ls", verdict: "allow" }],
       machineSavedRoots: ["/home/me/notes"],
-    }, here);
+    }, { ...here, pathExists: () => false });
     expect(of(plan, "preferences")).toMatchObject({ fate: "unchanged", differs: [] });
     expect(of(plan, "commandRule:git status")).toMatchObject({ fate: "differs", differs: ["ask here, allow in the file"] });
     expect(of(plan, "commandRule:rm -rf *").fate).toBe("new");
-    expect(of(plan, "savedRoot:/home/me/notes").fate).toBe("unchanged");
+    expect(of(plan, "savedRoot:/home/me/notes")).toMatchObject({ fate: "unchanged", flags: [] });
     // What only this machine holds is no item: an import removes nothing.
     expect(plan.items.some((i) => i.label === "ls")).toBe(false);
   });

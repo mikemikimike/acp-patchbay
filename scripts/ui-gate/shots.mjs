@@ -1469,10 +1469,12 @@ for (const theme of Object.keys(THEMES)) {
   ]);
   await p.waitForSelector("[data-import-item]");
   const ticked = async (id) => (await p.locator(`[data-import-item="${id}"] [role="checkbox"]`).getAttribute("data-state")) === "checked";
+  const unchanged = p.locator('[data-import-item="mcpServer:github"]');
   check(
-    "[narrow] a new item starts ticked, a different one unticked, an unchanged one can't be ticked",
+    "[narrow] a new item starts ticked, a different one unticked, an unchanged one has no box and no click",
     (await ticked("agent:kimi")) && !(await ticked("agent:claude")) &&
-      (await p.locator('[data-import-item="mcpServer:github"] [role="checkbox"]').isDisabled()),
+      (await unchanged.locator('[role="checkbox"]').count()) === 0 &&
+      (await unchanged.evaluate((el) => el.tagName !== "LABEL" && getComputedStyle(el).cursor !== "pointer")),
   );
   check(
     "[narrow] the review says the file is newer, what didn't read, and each item's flags",
@@ -1481,6 +1483,15 @@ for (const theme of Object.keys(THEMES)) {
   );
   await sweep(p, "settings › Import/Export review");
   await p.locator(".card:has([data-import-item])").screenshot({ path: `${OUT}/narrow-settings-import-review.png` });
+  const root = `[data-import-item="savedRoot:/srv/${LONG}"] [role="checkbox"]`;
+  await p.click('[data-import-item="agent:kimi"] [role="checkbox"]');
+  await p.click(root);
+  check(
+    "[narrow] with nothing ticked, Apply is off and says why",
+    (await p.locator('button:has-text("Apply")').isDisabled()) && (await p.locator("text=Tick what to import.").count()) === 1,
+  );
+  await p.click('[data-import-item="agent:kimi"] [role="checkbox"]');
+  await p.click(root);
   await p.click('[data-import-item="agent:claude"] [role="checkbox"]');
   await p.click('[data-import-part="settings"] > label [role="checkbox"]');
   await p.click('button:has-text("Apply")');
@@ -1495,6 +1506,34 @@ for (const theme of Object.keys(THEMES)) {
   check("[narrow] what landed is said, and what didn't", (await p.locator(".card", { hasText: "Imported 3 items" }).locator("text=Kimi CLI").count()) === 1);
   await p.click('button:has-text("Done")');
   check("[narrow] Done dismisses the import", (await p.evaluate(() => window.__actions.at(-1)))?.kind === "dismissConfigImport");
+
+  // A file holding only what is already here: nothing to tick, nothing to apply.
+  await p.evaluate((items) =>
+    window.__patch([{
+      kind: "configImportChanged",
+      configImport: {
+        id: 8, stage: "review", fileName: "same.json", patchbayVersion: null, newer: false, exportedAt: null,
+        parts: ["agents", "mcpServers", "settings"], items, unread: [],
+      },
+    }]), [
+    item("agent:claude", "agents", "agent", "Claude", "unchanged"),
+    item("preferences", "settings", "preferences", "Preferences", "unchanged"),
+  ]);
+  await p.waitForSelector("[data-import-nothing]");
+  check(
+    "[narrow] a file with nothing new says so — no Apply, no boxes",
+    (await p.locator('button:has-text("Apply")').count()) === 0 &&
+      (await p.locator('[data-import-card] [role="checkbox"]').count()) === 0 &&
+      (await p.locator('[data-import-card] button:has-text("Close")').count()) === 1,
+  );
+  const left = (selector) => p.locator(selector).first().evaluate((el) => Math.round(el.getBoundingClientRect().left));
+  check(
+    "[narrow] a part's items, or its \"nothing in the file\", sit under its name",
+    (await left('[data-import-part="mcpServers"] [data-import-items] > div > :last-child')) ===
+      (await left('[data-import-part="agents"] [data-import-items] > div > :last-child')),
+  );
+  await p.locator("[data-import-card]").screenshot({ path: `${OUT}/narrow-settings-import-nothing.png` });
+  await p.click('[data-import-card] button:has-text("Close")');
   await p.close();
 }
 
