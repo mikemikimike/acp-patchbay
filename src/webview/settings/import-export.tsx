@@ -41,7 +41,7 @@ export function ImportExportSection(props: {
     },
     {
       id: "settings",
-      detail: `preferences, ${count(state.machineCommandRules.length, "machine-wide command rule")}, ${count(state.savedRoots.machine.length, "machine-wide saved root")}`,
+      detail: `preferences, ${count(state.machineCommandRules.length, "machine-wide command rule")}, the machine-wide file writes, ${count(state.savedRoots.machine.length, "machine-wide saved root")}`,
     },
   ];
   const toggle = (part: ExportPart, on: boolean) =>

@@ -282,7 +282,18 @@ export function settingsState() {
       { id: "gemini", name: "Gemini CLI", description: "Google", icon: null, version: "0.9.0", unavailableReason: null },
       { id: "aug", name: "Augment", description: "Augment Code", icon: null, version: "2.1.0", unavailableReason: "requires login" },
     ],
-    commandRules: [], machineCommandRules: [], fileWriteScope: "workspace",
+    commandRules: [], machineCommandRules: [],
+    writeScope: {
+      tempDir: "/tmp",
+      rows: [
+        { location: { kind: "alwaysAsk" }, machine: false, workspace: null, on: false },
+        { location: { kind: "workspace" }, machine: true, workspace: null, on: true },
+        { location: { kind: "sessionRoots" }, machine: false, workspace: null, on: false },
+        { location: { kind: "temp" }, machine: false, workspace: true, on: true },
+        { location: { kind: "path", path: "/home/me/.hermes" }, machine: true, workspace: null, on: true },
+        { location: { kind: "path", path: "/srv/infra/terraform/environments/production" }, machine: null, workspace: true, on: true },
+      ],
+    },
     auditTail: [], mcpCatalog: catalogEntries, mcpServers: [], mcpConnects: [], mcpImportReview: null,
     mcpBuiltinServers: [{
       id: "patchbay:editor", name: "patchbay", busy: [],

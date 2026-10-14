@@ -285,7 +285,7 @@ describe("fs/terminal — gated by the broker, same as everything else", () => {
     const { rules } = h;
     await rules.set({
       commandRules: [{ pattern: `${process.execPath} *`, verdict: "allow" }],
-      fileWriteScope: "workspace",
+      writeScope: [],
     });
     await h.pool.connect(
       spec({ turn: [{ type: "runCommand", command: process.execPath, args: ["-e", "console.log('hi from child')"] }] }, "c1" as PatchbayAgentId),
@@ -345,7 +345,7 @@ describe("fs/terminal — gated by the broker, same as everything else", () => {
   ] as const) {
     it(`a session re-attached by ${via} after a restart runs a cwd-less command in its own cwd (issue #64)`, async () => {
       const h = harness();
-      await h.rules.set({ commandRules: [{ pattern: `${process.execPath} *`, verdict: "allow" }], fileWriteScope: "workspace" });
+      await h.rules.set({ commandRules: [{ pattern: `${process.execPath} *`, verdict: "allow" }], writeScope: [] });
       const probe = { type: "runCommand" as const, command: process.execPath, args: ["-e", "console.log('cwd=' + process.cwd())"] };
       const patchbayAgentId = `c64-${via.slice(8)}` as PatchbayAgentId;
       await h.pool.connect(spec({ declare, turn: [probe] }, patchbayAgentId));
@@ -373,7 +373,7 @@ describe("fs/terminal — gated by the broker, same as everything else", () => {
     const h = harness();
     await h.rules.set({
       commandRules: [{ pattern: "*", verdict: "deny" }],
-      fileWriteScope: "workspace",
+      writeScope: [],
     });
     await h.pool.connect(
       spec({ turn: [{ type: "runCommand", command: process.execPath, args: ["-e", "1"] }] }, "c2" as PatchbayAgentId),
@@ -678,7 +678,7 @@ describe("ClientHost — a terminal answers only the session that made it (#76)"
 
   it("another session — its agent's or another's — finds no such terminal: no output, no wait, no kill, no release", async () => {
     const h = harness();
-    await h.rules.set({ commandRules: [{ pattern: `${process.execPath} *`, verdict: "allow" }], fileWriteScope: "workspace" });
+    await h.rules.set({ commandRules: [{ pattern: `${process.execPath} *`, verdict: "allow" }], writeScope: [] });
     const { terminalId } = await h.host.createTerminal(
       { sessionId: "agent-a", command: process.execPath, args: ["-e", "setTimeout(() => {}, 30000)"], env: {} },
       { id: A, cwd: workspaceRoot },
@@ -731,7 +731,7 @@ describe("ClientHost — a terminal's session and cwd (issue #64)", () => {
 
   it("a command that never starts says why in its own output, and terminal ids never repeat (#80)", async () => {
     const h = harness();
-    await h.rules.set({ commandRules: [{ pattern: "*", verdict: "allow" }], fileWriteScope: "workspace" });
+    await h.rules.set({ commandRules: [{ pattern: "*", verdict: "allow" }], writeScope: [] });
     const S = "s" as PatchbaySessionId;
     const create = () =>
       h.host.createTerminal({ sessionId: "s", command: join(dir, "no-such-command"), args: [], env: {} }, { id: S, cwd: workspaceRoot });

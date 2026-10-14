@@ -39,6 +39,7 @@ export interface AgentViewState {
 /** What Settings is shown — the part the suites read. */
 interface SettingsState {
   machineCommandRules: ReadonlyArray<{ pattern: string }>;
+  writeScope: { rows: ReadonlyArray<{ location: { kind: string }; machine: boolean }> };
   registryFetchedAt: string;
   registryAgents: ReadonlyArray<{ id: string }>;
 }
@@ -246,6 +247,14 @@ export class Patchbay {
   async removeMachineRule(pattern: string): Promise<void> {
     this.act({ kind: "removeCommandRule", pattern, layer: "machine" });
     await waitFor(() => (this.hasMachineRule(pattern) ? undefined : true), 8000, `rule ${pattern} gone`);
+  }
+
+  /** A file-write switch's machine answer, as the Permissions table sets
+   * it — settled once Settings shows it. */
+  async setMachineWriteSwitch(kind: "alwaysAsk" | "workspace" | "sessionRoots" | "temp", on: boolean): Promise<void> {
+    this.act({ kind: "setWriteLocation", location: { kind }, layer: "machine", on });
+    const row = () => this.settings.writeScope.rows.find((r) => r.location.kind === kind);
+    await waitFor(() => (row()?.machine === on ? true : undefined), 8000, `${kind} ${on ? "on" : "off"} on the machine`);
   }
 
   /** A registry fetch landing with these agents: the CDN is served by a

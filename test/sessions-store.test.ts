@@ -1579,20 +1579,21 @@ describe("SessionsStore", () => {
     await h.pool.stop("sm28n" as PatchbayAgentId);
   });
 
-  // The write scope's "inside the workspace" (issue #56): the session's own
-  // root list, minus a cwd no folder backs.
-  it("granted roots: every workspace folder and the session's own roots — a cwd no folder backs is not one", async () => {
+  // The write scope's workspace and session roots (issues #56, #102): the
+  // session's own root list by where each came from, minus a cwd no folder
+  // backs.
+  it("granted roots: the workspace folders apart from the session's own roots — a cwd no folder backs is neither", async () => {
     const h = harness({ workspaceRoots: [cwd, "/repo/second"] });
     await h.pool.connect(spec({ declare: ROOTS_CAPS }, "sm56"));
     const patchbaySessionId = await h.sessions.createSession("sm56" as PatchbayAgentId, "Fake Agent", cwd);
     await h.gates.addRoot(patchbaySessionId, "/repo/backend");
     const current = h.state().activePatchbaySessionId!;
-    expect(h.sessions.grantedRoots(current)).toEqual([cwd, "/repo/second", "/repo/backend"]);
+    expect(h.sessions.grantedRoots(current)).toEqual({ workspace: [cwd, "/repo/second"], added: ["/repo/backend"] });
 
     // no folder open: the session still runs somewhere, but nobody handed
     // the agent that place
     h.workspaceRoots.splice(0);
-    expect(h.sessions.grantedRoots(current)).toEqual(["/repo/backend"]);
+    expect(h.sessions.grantedRoots(current)).toEqual({ workspace: [], added: ["/repo/backend"] });
     await h.pool.stop("sm56" as PatchbayAgentId);
   });
 

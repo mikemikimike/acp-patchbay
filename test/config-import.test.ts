@@ -121,6 +121,7 @@ describe("reading a configuration file", () => {
         "acpPatchbay.lastKnobs": { a: { mode: "plan" }, b: "plan" },
         "acpPatchbay.preferences": { soundOnDone: true, knobSource: "sometimes", laterPreference: 1 },
         "acpPatchbay.machineCommandRules": [{ pattern: "ls", verdict: "allow" }, { pattern: "x", verdict: "maybe" }],
+        "acpPatchbay.machineWriteScope": [{ location: { kind: "temp" }, on: true }, { location: { kind: "path", path: "rel" }, on: true }],
         "acpPatchbay.machineSavedRoots": ["/a", 7],
         "acpPatchbay.laterThing": { x: 1 },
         "acpPatchbay.usedCapabilities": [],
@@ -134,6 +135,7 @@ describe("reading a configuration file", () => {
     expect(r.knobs).toEqual({ a: { mode: "plan" } });
     expect(r.preferences).toEqual({ soundOnDone: true });
     expect(r.machineCommandRules).toEqual([{ pattern: "ls", verdict: "allow" }]);
+    expect(r.machineWriteScope).toEqual([{ location: { kind: "temp" }, on: true }]);
     expect(r.machineSavedRoots).toEqual(["/a"]);
     expect(r.secrets).toEqual({ agents: { a: { K: "v" } }, mcpServers: {} });
     expect(r.unread).toEqual([
@@ -143,6 +145,7 @@ describe("reading a configuration file", () => {
       "composer choices for 1 agent",
       "2 preferences",
       "1 command rule",
+      "1 file-write place",
       "1 saved root",
       "the env values of an agent the file doesn't carry as one (b)",
       "the env values of an agent the file doesn't carry as one (z)",

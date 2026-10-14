@@ -26,6 +26,7 @@ const empty: LocalConfiguration = {
   serverSecrets: {},
   preferences: DEFAULT_PREFERENCES,
   machineCommandRules: [],
+  machineWriteScope: [],
   machineSavedRoots: [],
 };
 
@@ -146,5 +147,25 @@ describe("an import's plan", () => {
     expect(of(plan, "savedRoot:/home/me/notes")).toMatchObject({ fate: "unchanged", flags: [] });
     // What only this machine holds is no item: an import removes nothing.
     expect(plan.items.some((i) => i.label === "ls")).toBe(false);
+  });
+
+  it("file writes: a place by its switch or folder, set against this machine's answer — its default where it set none", async () => {
+    const read: ConfigurationRead = {
+      ...(await golden()),
+      machineWriteScope: [
+        { location: { kind: "workspace" }, on: true },
+        { location: { kind: "temp" }, on: true },
+        { location: { kind: "path", path: "/home/me/.hermes" }, on: true },
+        { location: { kind: "path", path: "/srv/infra" }, on: true },
+      ],
+    };
+    const plan = planImport(read, { ...empty, machineWriteScope: [{ location: { kind: "path", path: "/srv/infra" }, on: false }] }, {
+      ...here,
+      pathExists: (p) => p !== "/home/me/.hermes",
+    });
+    expect(of(plan, "writeLocation:workspace")).toMatchObject({ fate: "unchanged", differs: [] });
+    expect(of(plan, "writeLocation:temp")).toMatchObject({ fate: "differs", differs: ["off here, on in the file"], label: "File writes: Temp on" });
+    expect(of(plan, "writeLocation:/home/me/.hermes")).toMatchObject({ fate: "new", flags: ["doesn't exist on this machine"] });
+    expect(of(plan, "writeLocation:/srv/infra")).toMatchObject({ fate: "differs", flags: [] });
   });
 });

@@ -14,6 +14,7 @@ import { McpServerTokenStore, MemorySecrets } from "../src/orchestrator/stores/m
 import { MachineRulesStore } from "../src/orchestrator/stores/permission-rules";
 import { PreferencesStore } from "../src/orchestrator/stores/preferences";
 import { SavedRootsStore } from "../src/orchestrator/stores/saved-roots";
+import { MachineWriteScopeStore } from "../src/orchestrator/stores/write-scope";
 import { SecretEnvStore } from "../src/orchestrator/stores/secret-env";
 import type { PatchbayAgentId, PatchbayMcpServerId } from "../src/shared/ids";
 
@@ -38,6 +39,7 @@ function machine(resolves = true) {
     mcpServerTokens: new McpServerTokenStore(secrets),
     preferences: new PreferencesStore(kv),
     machineRules: new MachineRulesStore(kv),
+    machineWriteScope: new MachineWriteScopeStore(kv),
     machineSavedRoots: new SavedRootsStore(kv, "machine"),
   };
   const targets: ImportTargets = {
@@ -135,6 +137,23 @@ describe("landing an import", () => {
       { pattern: "ls", verdict: "allow" },
       { pattern: "git status", verdict: "allow" },
       { pattern: "rm -rf *", verdict: "deny" },
+    ]);
+  });
+
+  it("a file-write place's answer lands in its place or joins the list; this machine's other places stay", async () => {
+    const hermes = { kind: "path", path: "/home/me/.hermes" } as const;
+    const read: ConfigurationRead = {
+      ...(await golden()),
+      machineWriteScope: [{ location: { kind: "temp" }, on: true }, { location: hermes, on: true }],
+    };
+    const m = machine();
+    await m.stores.machineWriteScope.set([{ location: { kind: "path", path: "/srv/infra" }, on: true }, { location: { kind: "temp" }, on: false }]);
+    const plan = planImport(read, await m.local(), here);
+    await applyImport(read, plan, new Set(["writeLocation:temp", "writeLocation:/home/me/.hermes"]), m.targets);
+    expect(m.stores.machineWriteScope.get()).toEqual([
+      { location: { kind: "path", path: "/srv/infra" }, on: true },
+      { location: { kind: "temp" }, on: true },
+      { location: hermes, on: true },
     ]);
   });
 

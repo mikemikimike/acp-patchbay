@@ -47,14 +47,15 @@ export type SettingsSectionId =
   | "preferences"
   | "roots"
   | "importExport"
-  | "permissions"
+  | "edits"
+  | "commands"
   | "audit"
   | "data";
 
 /** What an export carries, picked by the user: the agents (with their
  * composer knobs and env values), the MCP servers (with their env values
- * and header keys), the settings (preferences, machine-wide command rules
- * and saved roots). */
+ * and header keys), the settings (preferences, and the machine-wide
+ * command rules, file-write places and saved roots). */
 export type ExportPart = "agents" | "mcpServers" | "settings";
 
 /** An imported item against this machine's: not here yet, the same as
@@ -66,7 +67,7 @@ export interface ImportItemView {
   /** Names the item within its import — what a tick refers to. */
   id: string;
   part: ExportPart;
-  kind: "agent" | "mcpServer" | "preferences" | "commandRule" | "savedRoot";
+  kind: "agent" | "mcpServer" | "preferences" | "commandRule" | "writeLocation" | "savedRoot";
   label: string;
   fate: ImportItemFate;
   /** What differs from this machine's, by what the user calls it. */
@@ -217,7 +218,14 @@ export type Action =
    * every workspace, the fallback floor). */
   | { kind: "addCommandRule"; rule: CommandRuleView; layer: "workspace" | "machine" }
   | { kind: "removeCommandRule"; pattern: string; layer: "workspace" | "machine" }
-  | { kind: "setFileWriteScope"; scope: FileWriteScopeView }
+  /** One place's answer at one layer — null: the layer says nothing of it
+   * (the workspace follows the machine — or drops a folder only it
+   * added; the machine goes back to the default, or drops its folder). */
+  | { kind: "setWriteLocation"; location: WriteLocation; layer: "workspace" | "machine"; on: boolean | null }
+  /** File writes' add: the folder picker opens host-side, and the folder
+   * lands switched on at `layer` — one added for this workspace is this
+   * workspace's own, never on the machine's list. */
+  | { kind: "pickWriteFolder"; layer: "workspace" | "machine" }
   /** Preferences: partial patch in, the
    * orchestrator answers `preferencesChanged` with the complete stored
    * object — the webview never assumes its own write landed. */
@@ -2654,7 +2662,61 @@ export interface CommandRuleView {
   verdict: "allow" | "ask" | "deny";
 }
 
-export type FileWriteScopeView = "workspace" | "workspace+temp" | "always-ask";
+/** A place where an agent's writes are approved without asking — or, first
+ * of them, the mute that sets every place aside without forgetting it.
+ * `workspace`: the workspace's folders. `sessionRoots`: the folders added
+ * to a session — the saved roots it started with and any added since. */
+export type WriteLocation =
+  | { kind: "alwaysAsk" }
+  | { kind: "workspace" }
+  | { kind: "sessionRoots" }
+  | { kind: "temp" }
+  | { kind: "path"; path: string };
+
+/** One layer's answer for one place. */
+export interface WriteEntry {
+  location: WriteLocation;
+  on: boolean;
+}
+
+/** A place by its name: a folder by its path, a switch by its kind. */
+export const writeLocationKey = (location: WriteLocation): string => (location.kind === "path" ? location.path : location.kind);
+
+export function sameWriteLocation(a: WriteLocation, b: WriteLocation): boolean {
+  return a.kind === b.kind && (a.kind !== "path" || a.path === (b as { path: string }).path);
+}
+
+export function writeLocationLabel(location: WriteLocation): string {
+  switch (location.kind) {
+    case "alwaysAsk":
+      return "Always ask";
+    case "workspace":
+      return "Workspace";
+    case "sessionRoots":
+      return "Session roots";
+    case "temp":
+      return "Temp";
+    case "path":
+      return location.path;
+  }
+}
+
+/** One file-write place: this machine's answer — null for a folder only
+ * this workspace added — this workspace's, null where it follows the
+ * machine, and the answer this window goes by. */
+export interface WriteScopeRowView {
+  location: WriteLocation;
+  machine: boolean | null;
+  workspace: boolean | null;
+  on: boolean;
+}
+
+export interface WriteScopeView {
+  rows: readonly WriteScopeRowView[];
+  /** The system temp dir as this extension host reads it — the place
+   * `temp` names, read when the rows are. */
+  tempDir: string;
+}
 
 export interface AuditEntryView {
   ts: string;
@@ -2698,7 +2760,7 @@ export interface SettingsState {
   commandRules: readonly CommandRuleView[];
   /** Machine layer — the fallback floor for every workspace on this machine. */
   machineCommandRules: readonly CommandRuleView[];
-  fileWriteScope: FileWriteScopeView;
+  writeScope: WriteScopeView;
   auditTail: readonly AuditEntryView[];
   mcpCatalog: readonly CatalogEntryView[];
   mcpServers: readonly McpServerView[];
@@ -2761,7 +2823,7 @@ export const initialSettingsState: SettingsState = {
   registryAgents: [],
   commandRules: [],
   machineCommandRules: [],
-  fileWriteScope: "workspace",
+  writeScope: { rows: [], tempDir: "" },
   auditTail: [],
   mcpCatalog: [],
   mcpServers: [],
@@ -2787,7 +2849,7 @@ export type SettingsEvent =
       kind: "permissionRulesChanged";
       commandRules: readonly CommandRuleView[];
       machineCommandRules: readonly CommandRuleView[];
-      fileWriteScope: FileWriteScopeView;
+      writeScope: WriteScopeView;
     }
   | { kind: "auditTailChanged"; entries: readonly AuditEntryView[] }
   | { kind: "mcpCatalogLoaded"; entries: readonly CatalogEntryView[] }
@@ -2860,7 +2922,7 @@ export function reduceSettings(
         ...state,
         commandRules: event.commandRules,
         machineCommandRules: event.machineCommandRules,
-        fileWriteScope: event.fileWriteScope,
+        writeScope: event.writeScope,
       };
     case "auditTailChanged":
       return { ...state, auditTail: event.entries };

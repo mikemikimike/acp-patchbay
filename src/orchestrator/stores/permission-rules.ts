@@ -2,16 +2,19 @@
 // Copyright 2026 Solutions Unity
 
 // Permission rules, two layers. Workspace layer (this file's original
-// scope): command rules + file-write scope in workspaceState — per user,
-// per workspace, never repo-shipped; a cloned repo must not arrive
-// pre-authorized. Machine
-// layer (MachineRulesStore): command rules only, in the machine store —
-// developer-owned defaults for every workspace ("allow `npm test`
-// everywhere"). Evaluation order is workspace first, then machine, then
-// ask (broker.ts): a workspace can tighten or loosen its own floor, and
-// the repo still can't grant anything — the machine layer never rides it.
+// scope): command rules + this workspace's file-write answers in
+// workspaceState — per user, per workspace, never repo-shipped; a cloned
+// repo must not arrive pre-authorized. Machine layer: command rules
+// (MachineRulesStore) and file-write places (write-scope.ts), in the
+// machine store — developer-owned defaults for every workspace ("allow
+// `npm test` everywhere"). Evaluation order is workspace first, then
+// machine, then ask (broker.ts): a workspace can tighten or loosen its own
+// floor, and the repo still can't grant anything — the machine layer never
+// rides it.
 import { z } from "zod";
+import type { WriteEntry } from "../../shared/protocol";
 import type { KV, StoredEntry } from "./kv";
+import { readWriteEntries } from "./write-scope";
 
 const ruleVerdictSchema = z.enum(["allow", "ask", "deny"]);
 export type RuleVerdict = z.infer<typeof ruleVerdictSchema>;
@@ -20,9 +23,6 @@ export interface CommandRule {
   pattern: string; // glob-ish command pattern, e.g. "npm run *"
   verdict: RuleVerdict;
 }
-
-const fileWriteScopeSchema = z.enum(["workspace", "workspace+temp", "always-ask"]);
-export type FileWriteScope = z.infer<typeof fileWriteScopeSchema>;
 
 const commandRuleSchema = z.object({ pattern: z.string().min(1), verdict: ruleVerdictSchema });
 
@@ -38,29 +38,49 @@ function readRules(stored: unknown): CommandRule[] {
 
 export interface PermissionRules {
   commandRules: CommandRule[];
-  fileWriteScope: FileWriteScope;
+  /** This workspace's file-write answers — each overrides the machine's
+   * for its place (write-scope.ts). */
+  writeScope: WriteEntry[];
 }
 
-/** Sane defaults: nothing pre-allowed — everything asks. */
+/** Sane defaults: no command pre-allowed, every write place as the
+ * machine has it. */
 export const DEFAULT_PERMISSION_RULES: PermissionRules = {
   commandRules: [],
-  fileWriteScope: "workspace",
+  writeScope: [],
 };
 
 const KEY = "acpPatchbay.permissionRules";
 
+/** The scope a released version stored as one choice per workspace, as
+ * this workspace's answers over the machine's defaults: "workspace" was
+ * the default and says nothing. */
+const LEGACY_SCOPE: ReadonlyMap<unknown, WriteEntry[]> = new Map([
+  ["workspace", []],
+  ["workspace+temp", [{ location: { kind: "temp" }, on: true }]],
+  ["always-ask", [{ location: { kind: "alwaysAsk" }, on: true }]],
+]);
+
 export class PermissionRulesStore {
-  constructor(private readonly kv: KV) {}
+  constructor(private readonly kv: KV) {
+    // Once, at construction: a KV applies an update in memory before its
+    // write settles, so no read ever sees the old shape. A choice this
+    // version doesn't know reads as the default did.
+    const stored = kv.get<unknown>(KEY);
+    if (typeof stored === "object" && stored !== null && "fileWriteScope" in stored) {
+      const { fileWriteScope, ...rest } = stored as Record<string, unknown>;
+      void kv.update(KEY, { ...rest, writeScope: LEGACY_SCOPE.get(fileWriteScope) ?? [] });
+    }
+  }
 
   /** Each half read on its own: one stored in a shape this version
    * doesn't take reads as its default. */
   get(): PermissionRules {
     const stored = this.kv.get<unknown>(KEY);
-    const { commandRules, fileWriteScope } = typeof stored === "object" && stored !== null ? (stored as Record<string, unknown>) : {};
-    const scope = fileWriteScopeSchema.safeParse(fileWriteScope);
+    const { commandRules, writeScope } = typeof stored === "object" && stored !== null ? (stored as Record<string, unknown>) : {};
     return {
       commandRules: commandRules === undefined ? DEFAULT_PERMISSION_RULES.commandRules : readRules(commandRules),
-      fileWriteScope: scope.success ? scope.data : DEFAULT_PERMISSION_RULES.fileWriteScope,
+      writeScope: readWriteEntries(writeScope),
     };
   }
 
@@ -73,8 +93,7 @@ const MACHINE_KEY = "acpPatchbay.machineCommandRules";
 
 /** Machine-layer command rules — machine store (developer-owned, every
  * workspace on this machine), consulted only after the workspace layer
- * stays silent. Command rules only: file-write scope stays workspace-level
- * by nature (it's defined relative to the current workspace root). */
+ * stays silent. */
 export class MachineRulesStore implements StoredEntry {
   readonly key = MACHINE_KEY;
 

@@ -197,9 +197,11 @@ readable without the Output panel.
 Left nav + cards, grouped in two non-collapsing headers that *are* the placement
 contract: **This machine** (Agents · Capability matrix · MCP Servers · Preferences
 · Saved roots · Import/Export — everything global to this machine, plus Saved roots' own
-per-workspace list beside its machine one), **Trust** (Permissions · Audit · Data — the
-one trust surface: the contract, the evidence, what's held and the way out; one
-verb per page). Groups don't collapse: nine items don't earn the interaction.
+per-workspace list beside its machine one), **Trust** (Edits · Commands · Audit · Data —
+the one trust surface: the contract, the evidence, what's held and the way out; one
+verb per page, and one subject per rules page — edits and commands are different
+mechanisms that grow apart). Groups don't collapse: ten items don't earn the
+interaction.
 Nav footer restates the credential rule: SecretStorage only.
 
 ### Agents
@@ -385,7 +387,7 @@ This machine's configuration carried to a file. The **Export** card ticks
 three parts, each with what it carries counted: *Agents* (with their env values
 and composer choices), *MCP servers* (with their env values and API keys — an
 OAuth sign-in never leaves, so such a server needs a fresh connect), *Settings*
-(preferences, machine-wide command rules, machine-wide saved roots). This
+(preferences, machine-wide command rules, file writes and saved roots). This
 workspace's own rules and saved roots stay with the workspace. A note says the
 file holds secrets in plain text; `Export…` (off with nothing ticked) opens the
 save dialog, and the file is written readable by its owner only — except one
@@ -415,21 +417,46 @@ says it is restarting, then what landed and anything that didn't, until
 `Done`. A file holding nothing that isn't already here says so — "nothing to
 import" — with only `Close`.
 
-### Permissions
+### Edits
 
-Command rules in **two layers**, one card each, identical shape (`pattern → allow /
-ask / deny` + add row, and a note that an allow rule trusts the command itself —
-the cwd and env the agent runs it with ride along): *this workspace* (evaluated first — the repo's own
-tightening or loosening) and *this machine* (the fallback floor for every workspace
-— consulted only where the workspace layer stays silent; no rule anywhere means
-ask). File-write scope radios (workspace only / + temp / always ask) with the note
-that writes surface as diffs regardless, and that a
-scope also answers an agent's own edit asks over the mode picked for the session —
-always ask leaves each agent's mode to decide — file-write scope has no machine layer,
-it's defined relative to the session's granted roots (every workspace folder plus
-the roots added to the session), judged by where a write lands. The placement statement in
-green: **workspace rules and machine rules live in developer-owned storage, never
-in the repo either way; a cloned repository cannot arrive pre-authorized.**
+Where an agent's file writes — through patchbay's own write gate, or the edit asks it
+sends itself — are approved without asking, in two cards. *File writes — this
+machine* lists every place, each with its switch — *Always ask* first, then
+*Workspace* (every workspace folder, on by default), *Session roots* (the folders
+added to a session — the saved roots it started with and any added since — off by
+default), *Temp* with the temp dir it names shown muted, then each folder the user
+added on the machine, with its remove (from this machine) — and `Add folder…`. A
+row this workspace overrides says what holds here ("on here" / "off here"). *File
+writes — this workspace* holds two lists, each with its own add. **Exceptions** —
+"No exceptions — this machine's answers hold here" until one exists — each with its
+switch, the machine's answer beside it, and a remove that follows the machine again;
+`Add exception` picks a place still followed and starts it as the other answer (one
+that agreed would change nothing). **Folders** approved in this workspace only — the
+machine's list never shows them — each with its switch and a remove; `Add folder…`
+sits on its own row under them, where it stays whatever the exceptions hold, as on
+the machine card. Each remove clears its own card's answer and nothing else. While Always ask holds,
+every other row is dimmed and kept as set, both `Add folder…` buttons are disabled,
+and the note says so; `Add exception` stays open — it is how one workspace lifts the
+mute. The note: writes
+surface as diffs regardless, judged by where a write lands; approved places also
+answer an agent's own edit asks over the mode picked for the session, and anywhere
+else each agent's mode decides. The placement statement in green: **this machine's
+list and this workspace's exceptions live in developer-owned storage, never in the
+repo; a cloned repository cannot arrive pre-authorized.**
+
+### Commands
+
+Rules for the terminal commands an agent runs through patchbay; the intro says an
+agent's own permission requests carry no command line a rule could match, so those
+always ask. Command rules in **two layers**, one card each, identical shape
+(`pattern → allow / ask / deny` + add row, and a note that an allow rule trusts the
+command itself — the cwd and env the agent runs it with ride along): *this
+workspace* (evaluated first — the repo's own tightening or loosening) and *this
+machine* (the fallback floor for every workspace — consulted only where the
+workspace layer stays silent; no rule anywhere means ask). Each list is bounded at
+about ten rows and scrolls within itself: a list grows with every "Always allow",
+and hundreds of rules must not push the card after it, or its own add row, out of
+reach (#103). The placement statement in green, as on Edits.
 
 ### Audit
 

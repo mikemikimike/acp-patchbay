@@ -19,6 +19,7 @@ import { ComposerKnobsStore } from "../src/orchestrator/stores/composer-knobs";
 import { PreferencesStore } from "../src/orchestrator/stores/preferences";
 import { DEFAULT_PREFERENCES } from "../src/shared/protocol";
 import { DEFAULT_PERMISSION_RULES, MachineRulesStore, PermissionRulesStore } from "../src/orchestrator/stores/permission-rules";
+import { MachineWriteScopeStore } from "../src/orchestrator/stores/write-scope";
 import { SecretEnvStore } from "../src/orchestrator/stores/secret-env";
 import { SpawnRegistryStore } from "../src/orchestrator/stores/spawn-registry";
 import { UsedCapabilityStore } from "../src/orchestrator/stores/used-capabilities";
@@ -54,6 +55,7 @@ describe("eraseAllData", () => {
     const mcpServerTokens = new McpServerTokenStore(secrets);
     const permissionRules = new PermissionRulesStore(workspaceKv);
     const machineRules = new MachineRulesStore(globalKv);
+    const machineWriteScope = new MachineWriteScopeStore(globalKv);
     const decisionAudit = new DecisionAuditStore(dir);
     const lastConnected = new LastConnectedStore(workspaceKv);
     const defaultAgentFold = new DefaultAgentFoldStore(globalKv);
@@ -75,8 +77,9 @@ describe("eraseAllData", () => {
     // A stray from a removed agent — no config left, must still go.
     await usedCapabilities.save("ghost" as PatchbayAgentId, "0.1.0", matrixFromDeclared({ loadSession: false, sessionFork: false, sessionResume: false, sessionList: false, sessionDelete: false, sessionClose: false, promptImage: false, promptAudio: false, promptEmbeddedContext: false, mcpHttp: false, mcpSse: false, authMethods: [], authLogout: false, sessionAdditionalDirectories: false }));
     await spawnRegistry.add(4242, "node agent.js", "agent");
-    await permissionRules.set({ commandRules: [{ pattern: "npm *", verdict: "allow" }], fileWriteScope: "always-ask" });
+    await permissionRules.set({ commandRules: [{ pattern: "npm *", verdict: "allow" }], writeScope: [{ location: { kind: "alwaysAsk" }, on: true }] });
     await machineRules.set([{ pattern: "git status", verdict: "allow" }]);
+    await machineWriteScope.set([{ location: { kind: "path", path: "/home/me/.hermes" }, on: true }]);
     await decisionAudit.append({ kind: "permission", decision: "allow" });
     await lastConnected.write(["claude" as PatchbayAgentId]);
     await lastActiveSession.set({ patchbayAgentId: "a" as PatchbayAgentId, sessionId: "s1" });
@@ -92,7 +95,7 @@ describe("eraseAllData", () => {
     await eraseAllData({
       agentConfigs, mcpServerConfigs, usedCapabilities,
       authLocks, spawnRegistry, agentEnv, mcpServerEnv,
-      mcpServerTokens, permissionRules, machineRules,
+      mcpServerTokens, permissionRules, machineRules, machineWriteScope,
       decisionAudit, lastConnected, defaultAgentFold, lastActiveSession,
       preferences, composerKnobs, sessionContinuity, sessionFiles,
       workspaceSavedRoots, machineSavedRoots,
@@ -112,6 +115,7 @@ describe("eraseAllData", () => {
     expect(await mcpServerTokens.get("github" as PatchbayMcpServerId)).toBeNull();
     expect(permissionRules.get()).toEqual(DEFAULT_PERMISSION_RULES);
     expect(machineRules.get()).toEqual({ commandRules: [] });
+    expect(machineWriteScope.get()).toEqual([]);
     expect(await decisionAudit.tail(5)).toEqual([]);
     expect(await lastConnected.consume()).toEqual([]);
     expect(lastActiveSession.get()).toBeUndefined();

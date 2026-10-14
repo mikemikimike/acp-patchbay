@@ -16,7 +16,8 @@ import { DataSection } from "./data";
 import { ImportExportSection } from "./import-export";
 import { McpServersSection } from "./mcp-servers";
 import { MatrixSection } from "./matrix";
-import { PermissionsSection } from "./permissions";
+import { CommandsSection } from "./commands";
+import { EditsSection } from "./edits";
 import { PreferencesSection } from "./preferences";
 import { RootsSection } from "./roots";
 
@@ -39,13 +40,14 @@ const NAV_GROUPS = [
     ],
   },
   // Formerly two groups (Trust / Transparency) — merged, not deleted: all
-  // three are facets of the one trust surface (Permissions is the contract,
+  // are facets of the one trust surface (Edits and Commands the contract,
   // Audit the evidence, Data what's held and the way out). The one-verb-per-
   // page discipline lives at page boundaries, where it always actually did.
   {
     label: "Trust",
     items: [
-      { id: "permissions", icon: "shield", label: "Permissions" },
+      { id: "edits", icon: "edit", label: "Edits" },
+      { id: "commands", icon: "terminal", label: "Commands" },
       { id: "audit", icon: "eye", label: "Audit" },
       { id: "data", icon: "database", label: "Data" },
     ],
@@ -168,12 +170,18 @@ export function App({ state }: { state: SettingsState }) {
             onReorder={(patchbayMcpServerIds) => send({ kind: "reorderMcpServers", patchbayMcpServerIds })}
           />
         )}
-        {section === "permissions" && (
-          <PermissionsSection
+        {section === "edits" && (
+          <EditsSection
+            state={state}
+            onSetWriteLocation={(location, layer, on) => send({ kind: "setWriteLocation", location, layer, on })}
+            onAddWriteFolder={(layer) => send({ kind: "pickWriteFolder", layer })}
+          />
+        )}
+        {section === "commands" && (
+          <CommandsSection
             state={state}
             onAddRule={(rule, layer) => send({ kind: "addCommandRule", rule, layer })}
             onRemoveRule={(pattern, layer) => send({ kind: "removeCommandRule", pattern, layer })}
-            onSetScope={(scope) => send({ kind: "setFileWriteScope", scope })}
           />
         )}
         {section === "audit" && (

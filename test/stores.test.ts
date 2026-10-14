@@ -28,6 +28,7 @@ import {
 } from "../src/orchestrator/stores/permission-rules";
 import { SpawnRegistryStore } from "../src/orchestrator/stores/spawn-registry";
 import { SavedRootsStore } from "../src/orchestrator/stores/saved-roots";
+import { MachineWriteScopeStore, withWriteEntry, writeScopeRows } from "../src/orchestrator/stores/write-scope";
 import type { PatchbayAgentId } from "../src/shared/ids";
 
 describe("SpawnRegistryStore", () => {
@@ -164,21 +165,41 @@ describe("PermissionRulesStore", () => {
     const store = new PermissionRulesStore(new MemoryKV());
     await store.set({
       commandRules: [{ pattern: "npm run *", verdict: "allow" }],
-      fileWriteScope: "always-ask",
+      writeScope: [{ location: { kind: "alwaysAsk" }, on: true }],
     });
     expect(store.get().commandRules).toHaveLength(1);
-    expect(store.get().fileWriteScope).toBe("always-ask");
+    expect(store.get().writeScope).toEqual([{ location: { kind: "alwaysAsk" }, on: true }]);
+  });
+
+  // The one choice a released version stored per workspace becomes this
+  // workspace's overrides of the machine's defaults — nothing it chose is
+  // lost, and nothing it never chose is set.
+  it("migrates the stored one-choice scope to this workspace's overrides, once, keeping the command rules", () => {
+    const cases: [string, unknown][] = [
+      ["workspace", []],
+      ["workspace+temp", [{ location: { kind: "temp" }, on: true }]],
+      ["always-ask", [{ location: { kind: "alwaysAsk" }, on: true }]],
+      ["anywhere", []],
+      ["toString", []],
+    ];
+    for (const [fileWriteScope, writeScope] of cases) {
+      const kv = new MemoryKV();
+      const commandRules = [{ pattern: "npm test", verdict: "allow" }];
+      void kv.update("acpPatchbay.permissionRules", { commandRules, fileWriteScope });
+      expect(new PermissionRulesStore(kv).get()).toEqual({ commandRules, writeScope });
+      expect(kv.get("acpPatchbay.permissionRules")).toEqual({ commandRules, writeScope });
+    }
   });
 
   it("each half stored in a shape this version doesn't take reads as its default; a stray rule is skipped", () => {
     const kv = new MemoryKV();
     void kv.update("acpPatchbay.permissionRules", {
       commandRules: [{ pattern: "npm test", verdict: "allow" }, { pattern: "x", verdict: "maybe" }],
-      fileWriteScope: "anywhere",
+      writeScope: "anywhere",
     });
     expect(new PermissionRulesStore(kv).get()).toEqual({
       commandRules: [{ pattern: "npm test", verdict: "allow" }],
-      fileWriteScope: DEFAULT_PERMISSION_RULES.fileWriteScope,
+      writeScope: DEFAULT_PERMISSION_RULES.writeScope,
     });
     void kv.update("acpPatchbay.permissionRules", "always-ask");
     expect(new PermissionRulesStore(kv).get()).toEqual(DEFAULT_PERMISSION_RULES);
@@ -206,6 +227,65 @@ describe("MachineRulesStore", () => {
       void kv.update("acpPatchbay.machineCommandRules", junk);
       expect(new MachineRulesStore(kv).get().commandRules).toEqual([]);
     }
+  });
+});
+
+describe("MachineWriteScopeStore", () => {
+  it("a stored entry that isn't one is skipped — a relative folder too — and a place held twice keeps its first", () => {
+    const kv = new MemoryKV();
+    void kv.update("acpPatchbay.machineWriteScope", [
+      { location: { kind: "temp" }, on: true },
+      { location: { kind: "path", path: "/home/me/.hermes" }, on: true },
+      { location: { kind: "path", path: "relative/dir" }, on: true },
+      { location: { kind: "home" }, on: true },
+      { location: { kind: "temp" }, on: false },
+      { location: { kind: "workspace" }, on: "yes" },
+      { location: { kind: "roots" }, on: true },
+      "temp",
+      null,
+    ]);
+    expect(new MachineWriteScopeStore(kv).get()).toEqual([
+      { location: { kind: "temp" }, on: true },
+      { location: { kind: "path", path: "/home/me/.hermes" }, on: true },
+    ]);
+    void kv.update("acpPatchbay.machineWriteScope", { temp: true });
+    expect(new MachineWriteScopeStore(kv).get()).toEqual([]);
+  });
+});
+
+describe("writeScopeRows", () => {
+  const hermes = { kind: "path", path: "/home/me/.hermes" } as const;
+  const infra = { kind: "path", path: "/srv/infra" } as const;
+
+  it("nothing set: the mute off, the workspace on, session roots and temp off — no folders", () => {
+    expect(writeScopeRows([], [])).toEqual([
+      { location: { kind: "alwaysAsk" }, machine: false, workspace: null, on: false },
+      { location: { kind: "workspace" }, machine: true, workspace: null, on: true },
+      { location: { kind: "sessionRoots" }, machine: false, workspace: null, on: false },
+      { location: { kind: "temp" }, machine: false, workspace: null, on: false },
+    ]);
+  });
+
+  it("this workspace's answer holds over the machine's, either way; a folder only it added has no machine answer", () => {
+    const rows = writeScopeRows(
+      [{ location: { kind: "temp" }, on: true }, { location: hermes, on: true }],
+      [{ location: { kind: "workspace" }, on: false }, { location: hermes, on: false }, { location: infra, on: true }],
+    );
+    expect(rows.map((r) => [r.location, r.machine, r.workspace, r.on])).toEqual([
+      [{ kind: "alwaysAsk" }, false, null, false],
+      [{ kind: "workspace" }, true, false, false],
+      [{ kind: "sessionRoots" }, false, null, false],
+      [{ kind: "temp" }, true, null, true],
+      [hermes, true, false, false],
+      [infra, null, true, true],
+    ]);
+  });
+
+  it("an answer set in place, appended when new, dropped by null", () => {
+    const entries = [{ location: { kind: "temp" }, on: true }, { location: hermes, on: true }] as const;
+    expect(withWriteEntry(entries, { kind: "temp" }, false)).toEqual([{ location: { kind: "temp" }, on: false }, { location: hermes, on: true }]);
+    expect(withWriteEntry(entries, infra, true)).toEqual([...entries, { location: infra, on: true }]);
+    expect(withWriteEntry(entries, hermes, null)).toEqual([{ location: { kind: "temp" }, on: true }]);
   });
 });
 

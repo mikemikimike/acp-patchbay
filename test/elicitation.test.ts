@@ -306,7 +306,7 @@ function wireHarness() {
     pairOf: (patchbaySessionId) => sessions.pairOf(patchbaySessionId),
     openLink: (href) => opened.push(href),
   });
-  const broker = new PermissionBroker(new PermissionRulesStore(new MemoryKV()), asks, () => [dir], (text) => text);
+  const broker = new PermissionBroker(new PermissionRulesStore(new MemoryKV()), asks, () => ({ workspace: [dir], added: [] }), (text) => text);
   let sessions!: SessionsStore;
   const pool = new AgentPool({
     onStatusChanged: () => {},

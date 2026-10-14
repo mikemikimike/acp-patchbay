@@ -25,6 +25,7 @@ export const STORED_KEYS: Readonly<Record<string, ExportPart | { never: string }
   "acpPatchbay.integrations": "mcpServers",
   "acpPatchbay.preferences": "settings",
   "acpPatchbay.machineCommandRules": "settings",
+  "acpPatchbay.machineWriteScope": "settings",
   "acpPatchbay.machineSavedRoots": "settings",
   "acpPatchbay.usedCapabilities": { never: "what an agent proved on this machine — earned again by use on the next" },
   "acpPatchbay.authLocks": { never: "a sign-out witnessed on this machine — the next one's agents sign in for themselves" },

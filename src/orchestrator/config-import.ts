@@ -11,7 +11,7 @@
 import { z } from "zod";
 import { count } from "../shared/count";
 import { PRODUCT } from "../shared/product";
-import type { ExportPart, KnobSeed, PreferencesView } from "../shared/protocol";
+import type { ExportPart, KnobSeed, PreferencesView, WriteEntry } from "../shared/protocol";
 import { STORED_KEYS } from "./config-export";
 import { AgentConfigStore, type AgentConfig } from "./stores/agent-configs";
 import { ComposerKnobsStore } from "./stores/composer-knobs";
@@ -20,6 +20,7 @@ import { McpServerConfigStore, type McpServerConfig } from "./stores/mcp-server-
 import { MachineRulesStore, type CommandRule } from "./stores/permission-rules";
 import { PreferencesStore } from "./stores/preferences";
 import { SavedRootsStore } from "./stores/saved-roots";
+import { MachineWriteScopeStore } from "./stores/write-scope";
 
 type Env = Record<string, string>;
 
@@ -37,6 +38,7 @@ export interface ConfigurationRead {
   /** Only the preferences the file holds. */
   preferences: Partial<PreferencesView>;
   machineCommandRules: readonly CommandRule[];
+  machineWriteScope: readonly WriteEntry[];
   machineSavedRoots: readonly string[];
   /** By the id of the record they belong to, as the file has it. */
   secrets: {
@@ -94,6 +96,7 @@ export function readConfiguration(text: string): ReadOutcome {
   const mcpServers = new McpServerConfigStore(kv).list();
   const preferences = new PreferencesStore(kv).chosen();
   const machineCommandRules = new MachineRulesStore(kv).get().commandRules;
+  const machineWriteScope = new MachineWriteScopeStore(kv).get();
   const machineSavedRoots = new SavedRootsStore(kv, "machine").list();
 
   // What an entry held against what read from it — a list's items, a
@@ -108,6 +111,7 @@ export function readConfiguration(text: string): ReadOutcome {
   short("acpPatchbay.integrations", mcpServers.length, (n) => count(n, "MCP server"));
   short("acpPatchbay.preferences", Object.keys(preferences).length, (n) => count(n, "preference"));
   short("acpPatchbay.machineCommandRules", machineCommandRules.length, (n) => count(n, "command rule"));
+  short("acpPatchbay.machineWriteScope", machineWriteScope.length, (n) => count(n, "file-write place"));
   short("acpPatchbay.machineSavedRoots", machineSavedRoots.length, (n) => count(n, "saved root"));
 
   const agentSecrets: Record<string, Env> = {};
@@ -137,6 +141,7 @@ export function readConfiguration(text: string): ReadOutcome {
       mcpServers,
       preferences,
       machineCommandRules,
+      machineWriteScope,
       machineSavedRoots,
       secrets: { agents: agentSecrets, mcpServers: serverSecrets },
       unread,

@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **Permissions is now two pages: Edits and Commands.** Where file writes
+  are approved and which commands are allowed are different things that
+  grow apart, so each has its own page under Trust. A long command-rules
+  list now scrolls within its card, about ten rows tall: a few hundred
+  rules no longer push the next card, or the list's own add row, off
+  screen. (#103)
+- **File writes can be approved outside the workspace — where you say.**
+  Settings › Permissions › File writes offered one choice per workspace:
+  the workspace, the workspace and temp, or always ask. A folder outside
+  them, such as an agent's own config under your home folder, asked on
+  every write. File writes is now a list of places for this machine:
+  Always ask, the workspace, session roots, Temp (its folder shown), and
+  any folder you add, each switched on or off. A workspace can make
+  exceptions, so a folder can be approved everywhere, or in one project
+  only. Always ask dims the rest and keeps them as you set them. Your
+  current choice carries over as this workspace's exception. One change in
+  what is approved: roots added to a session (saved roots included) were
+  approved with the workspace; they now ask unless you switch Session
+  roots on — a root is most often source to read beside the code you
+  write. File writes live on the new Edits page. (#102)
 - **A dropped file keeps its own name.** Patchbay stores a dropped file as
   `chip-…-name` so two drops of the same name never meet, and the prompt
   took the file's name from that stored copy: the chat showed

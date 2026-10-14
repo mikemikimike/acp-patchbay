@@ -1702,13 +1702,17 @@ export class SessionsStore {
     return [cwd, ...this.rootsFor(patchbaySessionId, cwd).filter((p) => this.onDisk(p))];
   }
 
-  /** The roots the session was given: its root list, minus a cwd no
-   * workspace folder backs — with no folder open the session still runs
-   * somewhere, but nobody handed the agent that place. What "inside the
-   * workspace" means to the write scope. */
-  grantedRoots(patchbaySessionId: PatchbaySessionId): string[] {
-    const roots = this.rootsOf(patchbaySessionId);
-    return (this.hooks.workspaceRoots?.() ?? []).includes(this.cwd()) ? roots : roots.slice(1);
+  /** The roots the session was given, by where each came from: the
+   * workspace's folders, and the folders added to the session — the saved
+   * roots it started with and any added since. Its root list, minus a cwd
+   * no workspace folder backs — with no folder open the session still runs
+   * somewhere, but nobody handed the agent that place. What the write
+   * scope's workspace and session roots mean. */
+  grantedRoots(patchbaySessionId: PatchbaySessionId): { workspace: string[]; added: string[] } {
+    const [cwd = "", ...rest] = this.rootsOf(patchbaySessionId);
+    const folders = this.hooks.workspaceRoots?.() ?? [];
+    const isFolder = (p: string) => folders.includes(p);
+    return { workspace: [cwd, ...rest].filter(isFolder), added: rest.filter((p) => !isFolder(p)) };
   }
 
   /** The sessions attached right now — what a workspace folder change

@@ -17,6 +17,7 @@ import { MemoryKV } from "../src/orchestrator/stores/kv";
 import { McpServerConfigStore } from "../src/orchestrator/stores/mcp-server-configs";
 import { MemorySecrets } from "../src/orchestrator/stores/mcp-server-tokens";
 import { MachineRulesStore } from "../src/orchestrator/stores/permission-rules";
+import { MachineWriteScopeStore } from "../src/orchestrator/stores/write-scope";
 import { PreferencesStore } from "../src/orchestrator/stores/preferences";
 import { SavedRootsStore } from "../src/orchestrator/stores/saved-roots";
 import { SecretEnvStore } from "../src/orchestrator/stores/secret-env";
@@ -33,6 +34,7 @@ async function machine() {
   const preferences = new PreferencesStore(kv);
   const machineRules = new MachineRulesStore(kv);
   const machineRoots = new SavedRootsStore(kv, "machine");
+  const machineWriteScope = new MachineWriteScopeStore(kv);
   const workspaceRoots = new SavedRootsStore(new MemoryKV(), "workspace");
   const agentEnv = new SecretEnvStore(secrets, "acpPatchbay.agent");
   const mcpServerEnv = new SecretEnvStore(secrets, "acpPatchbay.integration");
@@ -116,11 +118,12 @@ async function machine() {
     { pattern: "git status", verdict: "allow" },
     { pattern: "rm -rf *", verdict: "deny" },
   ]);
+  await machineWriteScope.set([{ location: { kind: "path", path: "/home/me/.hermes" }, on: true }]);
   await machineRoots.add("/home/me/notes");
   await workspaceRoots.add("/home/me/workspace-only");
 
   const sources: ExportSources = {
-    entries: [agentConfigs, composerKnobs, mcpServerConfigs, preferences, machineRules, machineRoots],
+    entries: [agentConfigs, composerKnobs, mcpServerConfigs, preferences, machineRules, machineWriteScope, machineRoots],
     agents: {
       ids: () => agentConfigs.list().map((c) => c.id),
       env: (id) => agentEnv.get(id),
@@ -151,6 +154,7 @@ describe("configuration export", () => {
       "acpPatchbay.integrations": kv.get("acpPatchbay.integrations"),
       "acpPatchbay.preferences": kv.get("acpPatchbay.preferences"),
       "acpPatchbay.machineCommandRules": kv.get("acpPatchbay.machineCommandRules"),
+      "acpPatchbay.machineWriteScope": kv.get("acpPatchbay.machineWriteScope"),
       "acpPatchbay.machineSavedRoots": kv.get("acpPatchbay.machineSavedRoots"),
     });
     // A record with nothing secret stored has no row.
@@ -173,6 +177,7 @@ describe("configuration export", () => {
     expect(Object.keys(settings.state)).toEqual([
       "acpPatchbay.preferences",
       "acpPatchbay.machineCommandRules",
+      "acpPatchbay.machineWriteScope",
       "acpPatchbay.machineSavedRoots",
     ]);
     expect(settings.secrets).toEqual({});
@@ -188,7 +193,7 @@ describe("configuration export", () => {
     const file = await exportConfiguration(
       new Set<ExportPart>(["settings"]),
       {
-        entries: [new PreferencesStore(empty), new MachineRulesStore(empty), new SavedRootsStore(empty, "machine")],
+        entries: [new PreferencesStore(empty), new MachineRulesStore(empty), new MachineWriteScopeStore(empty), new SavedRootsStore(empty, "machine")],
         agents: { ids: () => [], env: async () => ({}) },
         mcpServers: { ids: () => [], env: async () => ({}), headerKey: async () => undefined },
       },

@@ -28,6 +28,7 @@ import type { ElicitationAnswer, ElicitationAsk, PermissionCallView, PermissionO
 import type { AskPlace, AsksStore, LinkCompletion, Proposal } from "./asks-store";
 import { computeLineDiff, previewOf } from "./diff";
 import { type MachineRulesStore, type PermissionRulesStore, type RuleVerdict } from "./stores/permission-rules";
+import { type MachineWriteScopeStore, writeScopeRows } from "./stores/write-scope";
 import type { CreateTerminalParams } from "./terminal-runner";
 import type { PatchbayAgentId, PatchbayAskId, PatchbaySessionId } from "../shared/ids";
 
@@ -77,15 +78,20 @@ export class PermissionBroker {
   constructor(
     private readonly rules: PermissionRulesStore,
     private readonly asks: AsksStore,
-    /** The roots a session was given — where its writes may land
-     * without asking under the `workspace` scope. */
-    private readonly grantedRoots: (patchbaySessionId: PatchbaySessionId) => readonly string[],
+    /** The roots a session was given, the workspace's folders apart from
+     * the ones added to the session — where its writes may land without
+     * asking while each is in the write scope. */
+    private readonly grantedRoots: (patchbaySessionId: PatchbaySessionId) => { workspace: readonly string[]; added: readonly string[] },
     /** `text` with every value patchbay handed an agent masked — for agent
      * text a card shows, which such a value can ride back in. */
     private readonly redact: (text: string) => string,
     /** Machine-layer command rules — absent in tests that don't exercise
      * layering; the workspace layer alone then behaves as before. */
     private readonly machineRules: MachineRulesStore | null = null,
+    /** Machine-layer file-write places — absent in tests that don't
+     * exercise layering; every place then answers by its default unless
+     * the workspace layer sets it. */
+    private readonly machineWriteScope: MachineWriteScopeStore | null = null,
     /** A file's text as a write would replace it — the open editor's
      * buffer, unsaved edits included, where one holds the file; the disk
      * otherwise. */
@@ -107,13 +113,31 @@ export class PermissionBroker {
     return "ask"; // no matching rule in either layer — the safe default, never a silent allow
   }
 
-  /** Allows only when every path lands inside a root the session was
-   * given (or the temp dir, under `workspace+temp`) — judged where the
-   * write lands, never by the text the agent sent. None named asks. */
+  /** Allows only when every path lands inside a place the write scope
+   * has on — the workspace, the session's added roots, the temp dir, a
+   * folder the user added —
+   * judged where the write lands, never by the text the agent sent. The
+   * mute, or no path named, asks. */
   async evaluateFileWrites(patchbaySessionId: PatchbaySessionId, paths: readonly string[]): Promise<RuleVerdict> {
-    const { fileWriteScope } = this.rules.get();
-    if (fileWriteScope === "always-ask" || paths.length === 0) return "ask";
-    const scope = [...this.grantedRoots(patchbaySessionId), ...(fileWriteScope === "workspace+temp" ? [tmpdir()] : [])];
+    const on = writeScopeRows(this.machineWriteScope?.get() ?? [], this.rules.get().writeScope)
+      .filter((row) => row.on)
+      .map((row) => row.location);
+    if (on.some((l) => l.kind === "alwaysAsk") || paths.length === 0) return "ask";
+    const granted = this.grantedRoots(patchbaySessionId);
+    const scope = on.flatMap((l) => {
+      switch (l.kind) {
+        case "workspace":
+          return granted.workspace;
+        case "sessionRoots":
+          return granted.added;
+        case "temp":
+          return [tmpdir()];
+        case "path":
+          return [l.path];
+        case "alwaysAsk":
+          return [];
+      }
+    });
     const roots = (await Promise.all(scope.map(landingOf))).filter((r) => r !== null);
     const landings = await Promise.all(paths.map(landingOf));
     return landings.every((l) => l !== null && roots.some((r) => isUnder(l, r))) ? "allow" : "ask";

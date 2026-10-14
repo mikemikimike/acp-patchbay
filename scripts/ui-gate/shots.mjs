@@ -1483,7 +1483,7 @@ for (const theme of Object.keys(THEMES)) {
   p = await page(browser, theme0, { width: 520, height: 800 });
   await renderView(p, "settings", st);
   await p.waitForSelector(".section h1");
-  for (const section of ["Agents", "Capability matrix", "MCP Servers", "Preferences", "Saved roots", "Import/Export", "Permissions", "Audit", "Data"]) {
+  for (const section of ["Agents", "Capability matrix", "MCP Servers", "Preferences", "Saved roots", "Import/Export", "Edits", "Commands", "Audit", "Data"]) {
     await p.click(`.nav .it:has-text("${section}")`);
     await p.waitForTimeout(150);
     // a section that failed to render shows no controls at all — never a pass
@@ -1616,6 +1616,96 @@ for (const theme of Object.keys(THEMES)) {
   );
   await p.locator("[data-import-card]").screenshot({ path: `${OUT}/narrow-settings-import-nothing.png` });
   await p.click('[data-import-card] button:has-text("Close")');
+  await p.close();
+
+  // ── File writes: the machine's list, then this workspace's exceptions;
+  // the temp dir shown, an overridden row says what holds here, the mute
+  // dims what it sets aside — and a control asks the host, never itself ──
+  const fw = settingsState();
+  fw.section = "edits";
+  p = await page(browser, theme0, { width: 900, height: 1100 });
+  await renderView(p, "settings", fw);
+  const machineCard = p.locator('[data-write-card="machine"]');
+  const exceptionsCard = p.locator('[data-write-card="workspace"]');
+  await machineCard.waitFor();
+  const writeCards = p.locator('[data-write-card]');
+  check("[file writes] the temp row shows the place it names", (await machineCard.locator('code:text("/tmp")').count()) === 1);
+  check(
+    "[file writes] the machine lists its own places — never a folder only this workspace added",
+    (await machineCard.locator(".rule").count()) === fw.writeScope.rows.filter((r) => r.machine !== null).length &&
+      (await machineCard.locator('code:text("/srv/infra/terraform/environments/production")').count()) === 0,
+  );
+  check(
+    "[file writes] a folder only this workspace added sits in its own list — not among the exceptions",
+    (await exceptionsCard.locator('[data-write-group="folders"] code:text("/srv/infra/terraform/environments/production")').count()) === 1 &&
+      (await exceptionsCard.locator('[data-write-group="exceptions"] code:text("/srv/infra/terraform/environments/production")').count()) === 0,
+  );
+  check(
+    "[file writes] the exceptions are exactly the machine's places this workspace answers otherwise",
+    (await exceptionsCard.locator('[data-write-group="exceptions"] .rule').count()) ===
+      fw.writeScope.rows.filter((r) => r.workspace !== null && r.machine !== null).length,
+  );
+  check("[file writes] an overridden machine row says what holds here", (await machineCard.locator('text="on here"').count()) === 1);
+  check("[file writes] nothing dimmed while the mute is off", (await writeCards.locator(".rule.opacity-50").count()) === 0);
+  check("[file writes] adding a folder is open while the mute is off", (await writeCards.locator('button:has-text("Add folder…"):not([disabled])').count()) === 2);
+  await machineCard.screenshot({ path: `${OUT}/settings-file-writes.png` });
+  await exceptionsCard.screenshot({ path: `${OUT}/settings-file-writes-exceptions.png` });
+  await machineCard.locator('[aria-label="/home/me/.hermes — this machine"]').click();
+  let sent = await p.evaluate(() => window.__actions.at(-1));
+  check(
+    "[file writes] a machine switch sends that place's answer at that layer",
+    sent?.kind === "setWriteLocation" && sent.layer === "machine" && sent.on === false && sent.location?.path === "/home/me/.hermes",
+  );
+  await exceptionsCard.locator('button:has-text("Add exception")').click();
+  const below = (selector) => exceptionsCard.locator(selector).evaluate((el) => Math.round(el.getBoundingClientRect().top));
+  check(
+    "[file writes] this workspace's Add folder… sits under its folders, apart from the exception row",
+    (await below('button:has-text("Add folder…")')) > (await below('[data-write-group="folders"]')) &&
+      (await below('[data-write-group="folders"]')) > (await below('button:has-text("Add exception")')),
+  );
+  sent = await p.evaluate(() => window.__actions.at(-1));
+  check(
+    "[file writes] a new exception starts as the other answer — the first place still followed, Always ask",
+    sent?.kind === "setWriteLocation" && sent.layer === "workspace" && sent.on === true && sent.location?.kind === "alwaysAsk",
+  );
+  await exceptionsCard.locator('[aria-label="Remove the exception for Temp"]').click();
+  sent = await p.evaluate(() => window.__actions.at(-1));
+  check("[file writes] removing an exception follows the machine again", sent?.kind === "setWriteLocation" && sent.layer === "workspace" && sent.on === null);
+  await p.evaluate((ws) => window.__patch([{ kind: "permissionRulesChanged", commandRules: [], machineCommandRules: [], writeScope: ws }]), {
+    ...fw.writeScope,
+    rows: fw.writeScope.rows.map((r) => (r.location.kind === "alwaysAsk" ? { ...r, workspace: true, on: true } : r)),
+  });
+  await p.waitForTimeout(100);
+  check(
+    "[file writes] always ask dims every other place, kept as set",
+    (await machineCard.locator(".rule.opacity-50").count()) === fw.writeScope.rows.filter((r) => r.machine !== null).length - 1 &&
+      (await machineCard.locator("text=Always ask is on").count()) === 1,
+  );
+  check(
+    "[file writes] always ask mutes adding a folder on both cards — an exception, the way to lift it here, stays open",
+    (await writeCards.locator('button:has-text("Add folder…")[disabled]').count()) === 2 &&
+      (await exceptionsCard.locator('button:has-text("Add exception"):not([disabled])').count()) === 1,
+  );
+  await machineCard.screenshot({ path: `${OUT}/settings-file-writes-muted.png` });
+  await p.close();
+
+  // ── Commands (#103): a few hundred rules scroll within their own list —
+  // the machine card after them, and the list's own add row, stay in reach ──
+  const many = settingsState();
+  many.section = "commands";
+  many.commandRules = Array.from({ length: 341 }, (_, i) => ({ pattern: `tool-${i} *`, verdict: "allow" }));
+  p = await page(browser, theme0, { width: 900, height: 900 });
+  await renderView(p, "settings", many);
+  await p.waitForSelector("[data-rule-list]");
+  const topOf = (selector) => p.locator(selector).first().evaluate((el) => el.getBoundingClientRect().top);
+  check("[commands] 341 workspace rules: the machine card still starts on screen", (await topOf('h2:text("Command rules — this machine")')) < 900);
+  check("[commands] 341 workspace rules: the list's own add row stays on screen", (await topOf('button:has-text("Add rule")')) < 900);
+  check(
+    "[commands] the long list scrolls within itself, every rule kept",
+    (await p.locator("[data-rule-list]").first().evaluate((el) => el.scrollHeight > el.clientHeight)) &&
+      (await p.locator("[data-rule-list]").first().locator(".rule").count()) === 341,
+  );
+  await p.screenshot({ path: `${OUT}/settings-commands-long.png` });
   await p.close();
 }
 

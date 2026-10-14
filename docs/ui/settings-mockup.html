@@ -317,16 +317,31 @@
       </div>
 
       <div class="card">
-        <h2 style="margin-top:0">File writes</h2>
-        <div class="row" style="gap:18px">
-          <label><input type="radio" name="fw" checked> workspace only</label>
-          <label><input type="radio" name="fw"> workspace + temp</label>
-          <label><input type="radio" name="fw"> always ask</label>
-        </div>
-        <div class="note">writes surface as diffs either way — auto-accept only changes who clicks, not what is visible. A scope also answers an agent's own edit asks for you, over the mode you picked for the session; always ask leaves each agent's mode to decide when you are asked</div>
+        <h2 style="margin-top:0">File writes — this machine</h2>
+        <div class="note">Where an agent's writes are approved without asking, in every workspace on this machine — unless a workspace makes an exception.</div>
+        <div class="rule"><span style="flex:1">Always ask</span><input type="checkbox"></div>
+        <div class="rule"><span style="flex:1">Workspace</span><input type="checkbox" checked></div>
+        <div class="rule"><span style="flex:1">Session roots</span><input type="checkbox"></div>
+        <div class="rule"><span style="flex:1">Temp <code>/tmp</code></span><span class="note">on here</span><input type="checkbox"></div>
+        <div class="rule"><code style="flex:1">/home/me/.hermes</code><input type="checkbox" checked><span class="e">×</span></div>
+        <div class="row" style="margin-top:10px"><button class="btn primary">Add folder…</button></div>
+        <div class="note">writes surface as diffs either way — auto-approve only changes who clicks, not what is visible. Approved places also answer an agent's own edit asks for you, over the mode you picked for the session; anywhere else, each agent's mode decides when you are asked. Always ask dims the places below it: kept, not used.</div>
       </div>
 
-      <div class="note good">Rules live in workspaceState — per user, per workspace, never in the repo.
+      <div class="card">
+        <h2 style="margin-top:0">File writes — this workspace</h2>
+        <div class="note">Exceptions: places this workspace answers otherwise than this machine.</div>
+        <div class="rule"><span style="flex:1">Temp <code>/tmp</code></span><span class="note">machine: off</span><input type="checkbox" checked><span class="e">×</span></div>
+        <div class="row" style="margin-top:10px">
+          <select style="flex:1"><option>Always ask</option><option>Workspace</option><option>Session roots</option></select>
+          <button class="btn primary">Add exception</button>
+        </div>
+        <div class="note">Folders: approved in this workspace only — this machine's list never shows them.</div>
+        <div class="rule"><code style="flex:1">/srv/infra</code><input type="checkbox" checked><span class="e">×</span></div>
+        <div class="row" style="margin-top:10px"><button class="btn primary">Add folder…</button></div>
+      </div>
+
+      <div class="note good">Workspace rules live in workspaceState (per user, per workspace), machine rules in global storage — never in the repo either way.
         A cloned repository cannot arrive pre-authorized.</div>
 
       <div class="card" style="margin-top:12px">

@@ -11,11 +11,22 @@
 // of it. Nothing here is ever removed by an import, so the plan holds only
 // what the file brings.
 import { isDeepStrictEqual } from "node:util";
-import type { ImportItemFate, ImportItemView, KnobSeed, PreferencesView } from "../shared/protocol";
+import {
+  sameWriteLocation,
+  writeLocationKey,
+  writeLocationLabel,
+  type ImportItemFate,
+  type ImportItemView,
+  type KnobSeed,
+  type PreferencesView,
+  type WriteEntry,
+  type WriteLocation,
+} from "../shared/protocol";
 import type { ConfigurationRead } from "./config-import";
 import type { AgentConfig } from "./stores/agent-configs";
 import { authTypeOf, type McpServerConfig } from "./stores/mcp-server-configs";
 import type { CommandRule } from "./stores/permission-rules";
+import { writeScopeRows } from "./stores/write-scope";
 
 type Env = Record<string, string>;
 
@@ -36,6 +47,7 @@ export interface LocalConfiguration {
   serverSecrets: Readonly<Record<string, { env: Env; key?: string }>>;
   preferences: PreferencesView;
   machineCommandRules: readonly CommandRule[];
+  machineWriteScope: readonly WriteEntry[];
   machineSavedRoots: readonly string[];
 }
 
@@ -50,6 +62,7 @@ export interface LocalSources {
   headerKey(id: string): Promise<string | undefined>;
   preferences: { get(): PreferencesView };
   machineRules: { get(): { commandRules: CommandRule[] } };
+  machineWriteScope: { get(): WriteEntry[] };
   machineSavedRoots: { list(): string[] };
 }
 
@@ -72,6 +85,7 @@ export async function localConfiguration(sources: LocalSources): Promise<LocalCo
     serverSecrets,
     preferences: sources.preferences.get(),
     machineCommandRules: sources.machineRules.get().commandRules,
+    machineWriteScope: sources.machineWriteScope.get(),
     machineSavedRoots: sources.machineSavedRoots.list(),
   };
 }
@@ -163,6 +177,8 @@ export function routingOn(routing: McpServerConfig["routing"], agentIds: Readonl
   return { except: on(routing.except) };
 }
 
+export const writeLocationItemId = (location: WriteLocation) => `writeLocation:${writeLocationKey(location)}`;
+
 export function planImport(read: ConfigurationRead, local: LocalConfiguration, checks: PlanChecks): ImportPlan {
   const items: ImportItemView[] = [];
 
@@ -229,6 +245,25 @@ export function planImport(read: ConfigurationRead, local: LocalConfiguration, c
     const mine = local.machineCommandRules.find((r) => r.pattern === rule.pattern);
     const differs = mine === undefined || mine.verdict === rule.verdict ? [] : [`${mine.verdict} here, ${rule.verdict} in the file`];
     items.push({ id: `commandRule:${rule.pattern}`, part: "settings", kind: "commandRule", label: rule.pattern, fate: fateOf(mine, differs), differs, flags: [] });
+  }
+
+  // Set against this machine's answer as it holds — its default where it
+  // set nothing: a switch is always here, a folder new until added.
+  const hereRows = writeScopeRows(local.machineWriteScope, []);
+  for (const entry of read.machineWriteScope) {
+    const here = hereRows.find((r) => sameWriteLocation(r.location, entry.location))?.machine ?? undefined;
+    const word = (on: boolean) => (on ? "on" : "off");
+    const differs = here === undefined || here === entry.on ? [] : [`${word(here)} here, ${word(entry.on)} in the file`];
+    const { location } = entry;
+    items.push({
+      id: writeLocationItemId(location),
+      part: "settings",
+      kind: "writeLocation",
+      label: `File writes: ${writeLocationLabel(location)} ${word(entry.on)}`,
+      fate: fateOf(here, differs),
+      differs,
+      flags: here === undefined && location.kind === "path" && !checks.pathExists(location.path) ? ["doesn't exist on this machine"] : [],
+    });
   }
 
   for (const root of read.machineSavedRoots) {

@@ -968,8 +968,9 @@ The differentiator (the PRD's current-release scope), shipped complete:
   remains visible either way. The scope is judged by where a write lands — the
   deepest existing ancestor resolved through symlinks and `..`, the rest
   appended; a relative path or a link to nowhere names no place and asks —
-  against every root the session was given (workspace folders plus added
-  roots; a fallback cwd with no folder open is not one). An agent's own edit
+  against every place the scope has on: the workspace's folders (a fallback
+  cwd with no folder open is not one), the roots added to the session, the
+  temp dir, folders the user added. An agent's own edit
   request is judged by every file it names — its locations and each diff's
   path; one outside asks. The gate
   holds its pending slot before it reads the disk, so a turn stopped mid-judge
@@ -985,9 +986,10 @@ The differentiator (the PRD's current-release scope), shipped complete:
   cwd, and each env var the agent sets, values patchbay handed out masked by the
   wire log's own redaction. **A command rule trusts the command** (decided
   2026-09-27): it matches the command line alone, and the cwd and env the agent
-  picks ride that trust — under the default write scope the agent can already
-  change what an allowed command runs by editing workspace files, so they add
-  nothing a rule guards. Accepted edge: under `always-ask`, env still can
+  picks ride that trust — with the workspace in the write scope (the
+  default) the agent can already change what an allowed command runs by editing workspace
+  files, so they add nothing a rule guards. Accepted edge: under Always ask,
+  env still can
   (`NODE_OPTIONS=--import=data:…` needs no file) — the rule is the user's own,
   and an unruled command always asks. The audit records env names, never values.
   A command that names no cwd runs in its session's — the cwd the pool sent when
@@ -1182,13 +1184,38 @@ supplies each agent in its own standard — and ACP carries no channel for it
   2026-10-08). An agent's mode decides when it asks — Codex's
   approval presets, Claude's Default vs Accept Edits. Whether the user
   answers that ask by hand or by a rule they set is patchbay's side, and a
-  rule wins: it is what the user configured. The default scope stays
-  `workspace` — an opened workspace is one the agent may edit, and agents
+  rule wins: it is what the user configured. The workspace stays in the
+  scope by default — an opened workspace is one the agent may edit, and agents
   that write through `fs/write_text_file` after asking would otherwise
   show two cards per edit. Under it, an agent's "ask before edits" mode
-  (Claude's Default) behaves as its accept-edits one inside the roots; the
-  Settings scope note says so, and `always-ask` is how a user hands every
+  (Claude's Default) behaves as its accept-edits one inside the workspace; the
+  Settings Edits page says so, and Always ask is how a user hands every
   ask to the agent's mode.
+- **The write scope is a list of places, in two layers** (decided
+  2026-10-14, #102, superseding one per-workspace choice of workspace /
+  workspace + temp / always ask). Each place — the workspace's folders, the
+  roots added to a session, the temp dir, a folder the user adds — is
+  switched on or off, under a mute (Always
+  ask) that sets every place aside without forgetting it. The machine layer
+  (`write-scope.ts`, the machine store) holds each place's answer for every
+  workspace; the workspace layer (beside the command rules, workspaceState)
+  overrides it for that workspace alone, either way — the command rules'
+  order. A folder belongs to the layer it was added at: the machine's reach
+  every workspace, one a workspace added is its own and the machine never
+  lists it; removing one clears that layer's answer and nothing else. A
+  switch the machine never set answers by its default: the workspace on,
+  everything else off. The workspace and the added roots are two places,
+  not one: a root added to a session is most often source to read — a
+  framework's code beside the modules being written — so it asks by
+  default, which changes the earlier scope, where the added roots rode the
+  workspace's approval. One judge reads both (`writeScopeRows`): the broker
+  allows a write landing under a place that holds on, and the Settings
+  cards show the same rows. Approved folders are not roots: a root widens what
+  the agent is told it works in, a write place only answers asks. The
+  scope approves; it never protects — outside it a write asks, and the
+  agent's mode then decides. Home is deliberately no preset: it holds the
+  workspace and the files that keep an edit's effect past the session
+  (shell profiles, `~/.ssh`); a folder under it is added by name.
 - **A card shows what it approves.** An agent's request asks about a tool
   call, read by the same reader as the session's stream and shown over what
   the transcript already holds for that call (an absent field is unchanged):

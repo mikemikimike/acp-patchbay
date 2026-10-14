@@ -239,6 +239,11 @@ deliverable.
   with per-workspace rules evaluated first — a workspace can tighten or loosen
   its own floor, and no rule anywhere means ask. Neither layer ever rides the
   repo.
+- File writes are approved without asking in the places the user picks: the
+  workspace (on by default), the roots added to a session, the temp dir, and
+  any folder they add — each set for this machine and, where one project needs it
+  otherwise, overridden for that workspace alone. Always ask sets every
+  place aside without forgetting it.
 
 ### Configuration placement
 

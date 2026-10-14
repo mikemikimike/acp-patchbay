@@ -8,14 +8,15 @@
 // answered with, and an OAuth sign-in to the same server. Nothing the file
 // doesn't name is touched. An item that fails is said, and the rest land.
 import { isDeepStrictEqual } from "node:util";
-import type { KnobSeed, PreferencesView } from "../shared/protocol";
+import { writeLocationLabel, type KnobSeed, type PreferencesView, type WriteEntry } from "../shared/protocol";
 import type { PatchbayAgentId, PatchbayMcpServerId } from "../shared/ids";
 import type { ConfigurationRead } from "./config-import";
-import { routingOn, type ImportPlan } from "./config-import-plan";
+import { routingOn, writeLocationItemId, type ImportPlan } from "./config-import-plan";
 import type { AgentConfig } from "./stores/agent-configs";
 import { authTypeOf, type McpServerConfig } from "./stores/mcp-server-configs";
 import type { StoredToken } from "./stores/mcp-server-tokens";
 import type { CommandRule } from "./stores/permission-rules";
+import { withWriteEntry } from "./stores/write-scope";
 
 type Env = Record<string, string>;
 
@@ -38,6 +39,7 @@ export interface ImportTargets {
   };
   preferences: { set(patch: Partial<PreferencesView>): Promise<unknown> };
   machineRules: { get(): { commandRules: CommandRule[] }; set(rules: CommandRule[]): Promise<void> };
+  machineWriteScope: { get(): WriteEntry[]; set(entries: readonly WriteEntry[]): Promise<void> };
   machineSavedRoots: { add(path: string): Promise<void> };
   /** Re-resolves a downloaded agent's launch for this machine; false when
    * the registry serves nothing it runs. */
@@ -120,6 +122,13 @@ export async function applyImport(
       const held = here.some((r) => r.pattern === rule.pattern);
       await targets.machineRules.set(held ? here.map((r) => (r.pattern === rule.pattern ? rule : r)) : [...here, rule]);
     });
+  }
+
+  for (const { location, on } of read.machineWriteScope) {
+    if (!taken(writeLocationItemId(location))) continue;
+    await land(writeLocationLabel(location), () =>
+      targets.machineWriteScope.set(withWriteEntry(targets.machineWriteScope.get(), location, on)),
+    );
   }
 
   for (const root of read.machineSavedRoots) {

@@ -30,6 +30,8 @@ import {
   type SettingsEvent,
   type SettingsSectionId,
   type SettingsState,
+  type WriteLocation,
+  type WriteScopeView,
 } from "../shared/protocol";
 import { askNotice } from "../shared/ask-notice";
 import { openAsks, type OpenAsk } from "../shared/attention";
@@ -87,6 +89,7 @@ import { LastActiveSessionStore } from "./stores/last-active-session";
 import { LastConnectedStore } from "./stores/last-connected";
 import { DefaultAgentFoldStore } from "./stores/default-agent-fold";
 import { MachineRulesStore, PermissionRulesStore } from "./stores/permission-rules";
+import { MachineWriteScopeStore, withWriteEntry, writeScopeRows } from "./stores/write-scope";
 import { SavedRootsStore } from "./stores/saved-roots";
 import { loadCatalog } from "./stores/mcp-catalog";
 import { SpawnRegistryStore } from "./stores/spawn-registry";
@@ -145,6 +148,7 @@ export class Orchestrator {
   readonly acpRegistry: AcpRegistryStore;
   readonly permissionRules: PermissionRulesStore;
   readonly machinePermissionRules: MachineRulesStore;
+  readonly machineWriteScope: MachineWriteScopeStore;
   readonly workspaceSavedRoots: SavedRootsStore;
   readonly machineSavedRoots: SavedRootsStore;
   readonly preferences: PreferencesStore;
@@ -244,6 +248,7 @@ export class Orchestrator {
     }).catch((error: unknown) => log.info(`legacy recovery failed: ${String(error)}`));
     this.permissionRules = new PermissionRulesStore(context.workspaceState);
     this.machinePermissionRules = new MachineRulesStore(machineKV);
+    this.machineWriteScope = new MachineWriteScopeStore(machineKV);
     this.workspaceSavedRoots = new SavedRootsStore(context.workspaceState, "workspace");
     this.machineSavedRoots = new SavedRootsStore(machineKV, "machine");
     this.decisionAudit = new DecisionAuditStore(context.storageUri?.fsPath ?? null);
@@ -341,7 +346,7 @@ export class Orchestrator {
         ...initialSettingsState,
         commandRules: rules.commandRules,
         machineCommandRules: this.machinePermissionRules.get().commandRules,
-        fileWriteScope: rules.fileWriteScope,
+        writeScope: this.writeScopeView(),
         mcpCatalog: this.mcpServers.catalogViews(),
         preferences: this.preferences.get(),
         doneSounds: listDoneSounds(),
@@ -761,6 +766,7 @@ export class Orchestrator {
       (patchbaySessionId) => this.sessions.grantedRoots(patchbaySessionId),
       (text) => this.wireLog.redact(text),
       this.machinePermissionRules,
+      this.machineWriteScope,
       (path) => this.readTextFileLive(path),
     );
     this.clientHost = new ClientHost({
@@ -853,6 +859,7 @@ export class Orchestrator {
       mcpServerTokens: this.mcpServerTokens,
       permissionRules: this.permissionRules,
       machineRules: this.machinePermissionRules,
+      machineWriteScope: this.machineWriteScope,
       decisionAudit: this.decisionAudit,
       lastActiveSession: this.lastActiveSession,
       lastConnected: this.lastConnected,
@@ -884,6 +891,7 @@ export class Orchestrator {
         this.mcpServerConfigs,
         this.preferences,
         this.machinePermissionRules,
+        this.machineWriteScope,
         this.machineSavedRoots,
       ],
       agents: {
@@ -984,6 +992,7 @@ export class Orchestrator {
         mcpServerTokens: this.mcpServerTokens,
         preferences: this.preferences,
         machineRules: this.machinePermissionRules,
+        machineWriteScope: this.machineWriteScope,
         machineSavedRoots: this.machineSavedRoots,
         resolveHere: (patchbayAgentId) => this.agents.resolveHere(patchbayAgentId),
       });
@@ -1011,6 +1020,7 @@ export class Orchestrator {
       headerKey: (id) => this.mcpServers.headerKey(id as PatchbayMcpServerId),
       preferences: this.preferences,
       machineRules: this.machinePermissionRules,
+      machineWriteScope: this.machineWriteScope,
       machineSavedRoots: this.machineSavedRoots,
     });
     return planImport(read, local, { commandFound: (command) => commandFound(command), pathExists: (path) => existsSync(path) });
@@ -1735,6 +1745,7 @@ export class Orchestrator {
       { id: "mcp-server-configs", label: "MCP server configs", placement: "globalStorage file", detail: count(mcpServerConfigs.length, "server") },
       { id: "used-capabilities", label: "Used-capability cache", placement: "globalStorage file", detail: count(this.usedCapabilities.list().length, "agent record") },
       { id: "machine-rules", label: "Command rules — this machine", placement: "globalStorage file", detail: count(machineRules.commandRules.length, "rule") },
+      { id: "machine-write-scope", label: "File writes — this machine", placement: "globalStorage file", detail: count(this.machineWriteScope.get().length, "place set") },
       { id: "spawn-registry", label: "Spawn registry", placement: "globalStorage file", detail: count(this.spawnRegistry.list().length, "process record") },
       {
         id: "preferences",
@@ -1756,9 +1767,9 @@ export class Orchestrator {
       },
       {
         id: "workspace-rules",
-        label: "Command rules & file-write scope — this workspace",
+        label: "Command rules & file writes — this workspace",
         placement: "workspaceState",
-        detail: `${count(rules.commandRules.length, "rule")} · scope: ${rules.fileWriteScope}`,
+        detail: `${count(rules.commandRules.length, "rule")} · ${count(rules.writeScope.length, "file-write override")}`,
       },
       { id: "machine-saved-roots", label: "Saved roots — every workspace", placement: "globalStorage file", detail: count(this.machineSavedRoots.list().length, "folder") },
       { id: "workspace-saved-roots", label: "Saved roots — this workspace", placement: "workspaceState", detail: count(this.workspaceSavedRoots.list().length, "folder") },
@@ -2035,13 +2046,12 @@ export class Orchestrator {
           .then(() => this.publishRules());
         break;
       }
-      case "setFileWriteScope": {
-        const rules = this.permissionRules.get();
-        void this.permissionRules
-          .set({ ...rules, fileWriteScope: action.scope })
-          .then(() => this.publishRules());
+      case "setWriteLocation":
+        void this.setWriteLocation(action.location, action.layer, action.on).then(() => this.publishRules());
         break;
-      }
+      case "pickWriteFolder":
+        void this.pickWriteFolder(action.layer).catch(this.logCatch("pickWriteFolder"));
+        break;
       case "setPreferences":
         void this.preferences.set(action.patch).then((preferences) => {
           // One truth, both channels: the Preferences page and the agent
@@ -2412,8 +2422,37 @@ export class Orchestrator {
       kind: "permissionRulesChanged",
       commandRules: rules.commandRules,
       machineCommandRules: this.machinePermissionRules.get().commandRules,
-      fileWriteScope: rules.fileWriteScope,
+      writeScope: this.writeScopeView(),
     });
+  }
+
+  private writeScopeView(): WriteScopeView {
+    return { rows: writeScopeRows(this.machineWriteScope.get(), this.permissionRules.get().writeScope), tempDir: tmpdir() };
+  }
+
+  /** One place's answer at one layer, written through that layer's store. */
+  private async setWriteLocation(location: WriteLocation, layer: "workspace" | "machine", on: boolean | null): Promise<void> {
+    if (layer === "machine") {
+      await this.machineWriteScope.set(withWriteEntry(this.machineWriteScope.get(), location, on));
+      return;
+    }
+    const rules = this.permissionRules.get();
+    await this.permissionRules.set({ ...rules, writeScope: withWriteEntry(rules.writeScope, location, on) });
+  }
+
+  /** File writes' add: a folder the user picks lands switched on, at the
+   * layer it was added at. */
+  private async pickWriteFolder(layer: "workspace" | "machine"): Promise<void> {
+    const picked = await vscode.window.showOpenDialog({
+      canSelectFolders: true,
+      canSelectFiles: false,
+      canSelectMany: false,
+      openLabel: "Approve writes here",
+    });
+    const uri = picked?.[0];
+    if (uri === undefined) return;
+    await this.setWriteLocation({ kind: "path", path: uri.fsPath }, layer, true);
+    this.publishRules();
   }
 
   /** Add — and every connect a door names by its source (Settings Connect,

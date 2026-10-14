@@ -11,19 +11,22 @@ import { parseCommandLine } from "../src/shared/command-line";
 import { DecisionAuditStore } from "../src/orchestrator/stores/decision-audit";
 import { MemoryKV } from "../src/orchestrator/stores/kv";
 import { MachineRulesStore, PermissionRulesStore } from "../src/orchestrator/stores/permission-rules";
+import { MachineWriteScopeStore } from "../src/orchestrator/stores/write-scope";
 import type { AgentViewEvent, PermissionCallView, PermissionOptionView, ToolCallKind } from "../src/shared/protocol";
 import type { PatchbayAgentId, PatchbayAskId, PatchbaySessionId } from "../src/shared/ids";
 
 let dir: string;
 let workspaceRoot: string;
-/** The roots the session under test was granted — the workspace alone
- * unless a test hands it more. */
+/** The roots the session under test was granted — the workspace folder
+ * alone, nothing added, unless a test hands it more. */
 let granted: string[];
+let added: string[];
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "patchbay-broker-"));
   workspaceRoot = join(dir, "workspace");
   await mkdir(workspaceRoot);
   granted = [workspaceRoot];
+  added = [];
 });
 afterEach(() => rm(dir, { recursive: true, force: true }));
 
@@ -40,6 +43,7 @@ function run(line: string, over: Partial<CreateTerminalParams> = {}): CreateTerm
 function harness() {
   const rules = new PermissionRulesStore(new MemoryKV());
   const machineRules = new MachineRulesStore(new MemoryKV());
+  const machineWriteScope = new MachineWriteScopeStore(new MemoryKV());
   const audit = new DecisionAuditStore(dir);
   const events: AgentViewEvent[] = [];
   const opened: string[] = [];
@@ -53,8 +57,9 @@ function harness() {
     pairOf: (patchbaySessionId) => ({ patchbayAgentId: "a1" as PatchbayAgentId, sessionId: `agent-${patchbaySessionId}` }),
     openLink: (href) => opened.push(href),
   });
-  const broker = new PermissionBroker(rules, asks, () => granted, (text) => text.split(HANDED_OUT).join("•••"), machineRules);
-  return { broker, asks, rules, machineRules, audit, events, opened, refreshCount: () => auditRefreshes };
+  const roots = () => ({ workspace: granted, added });
+  const broker = new PermissionBroker(rules, asks, roots, (text) => text.split(HANDED_OUT).join("•••"), machineRules, machineWriteScope);
+  return { broker, asks, roots, rules, machineRules, machineWriteScope, audit, events, opened, refreshCount: () => auditRefreshes };
 }
 
 describe("PermissionBroker.evaluateCommand", () => {
@@ -67,7 +72,7 @@ describe("PermissionBroker.evaluateCommand", () => {
     const { broker, rules } = harness();
     await rules.set({
       commandRules: [{ pattern: "npm run *", verdict: "allow" }],
-      fileWriteScope: "workspace",
+      writeScope: [],
     });
     expect(broker.evaluateCommand("npm run build")).toBe("allow");
     expect(broker.evaluateCommand("npm test")).toBe("ask");
@@ -80,7 +85,7 @@ describe("PermissionBroker.evaluateCommand", () => {
         { pattern: "git push *", verdict: "ask" },
         { pattern: "git *", verdict: "allow" },
       ],
-      fileWriteScope: "workspace",
+      writeScope: [],
     });
     expect(broker.evaluateCommand("git push origin main")).toBe("ask");
     expect(broker.evaluateCommand("git status")).toBe("allow");
@@ -90,7 +95,7 @@ describe("PermissionBroker.evaluateCommand", () => {
     const { broker, rules } = harness();
     await rules.set({
       commandRules: [{ pattern: "rm -rf *", verdict: "deny" }],
-      fileWriteScope: "workspace",
+      writeScope: [],
     });
     expect(broker.evaluateCommand("rm -rf /tmp/x")).toBe("deny");
   });
@@ -115,7 +120,7 @@ describe("PermissionBroker.evaluateCommand", () => {
         { pattern: "npm publish*", verdict: "deny" }, // tighten the machine allow
         { pattern: "./deploy.sh", verdict: "allow" }, // loosen the machine deny, this repo only
       ],
-      fileWriteScope: "workspace",
+      writeScope: [],
     });
     expect(broker.evaluateCommand("npm publish --tag next")).toBe("deny");
     expect(broker.evaluateCommand("npm run build")).toBe("allow"); // machine floor still covers the rest
@@ -134,16 +139,57 @@ describe("PermissionBroker.evaluateFileWrites", () => {
     expect(await broker.evaluateFileWrites("s1" as PatchbaySessionId, ["/etc/passwd"])).toBe("ask");
   });
 
-  it("workspace+temp also allows the system temp dir", async () => {
+  it("temp switched on also allows the system temp dir", async () => {
     const { broker, rules } = harness();
-    await rules.set({ commandRules: [], fileWriteScope: "workspace+temp" });
+    expect(await broker.evaluateFileWrites("s1" as PatchbaySessionId, [join(tmpdir(), "scratch.txt")])).toBe("ask");
+    await rules.set({ commandRules: [], writeScope: [{ location: { kind: "temp" }, on: true }] });
     expect(await broker.evaluateFileWrites("s1" as PatchbaySessionId, [join(tmpdir(), "scratch.txt")])).toBe("allow");
   });
 
-  it("always-ask overrides everything, even inside the workspace", async () => {
+  it("always ask overrides everything, even inside the workspace — every place kept as set", async () => {
     const { broker, rules } = harness();
-    await rules.set({ commandRules: [], fileWriteScope: "always-ask" });
+    await rules.set({ commandRules: [], writeScope: [{ location: { kind: "alwaysAsk" }, on: true }, { location: { kind: "temp" }, on: true }] });
     expect(await broker.evaluateFileWrites("s1" as PatchbaySessionId, [join(workspaceRoot, "a.ts")])).toBe("ask");
+    expect(await broker.evaluateFileWrites("s1" as PatchbaySessionId, [join(tmpdir(), "scratch.txt")])).toBe("ask");
+  });
+
+  // #102: a folder outside the workspace and temp — an agent's own config
+  // under home — approved where the user says, at either layer.
+  it("a folder the machine added is approved in every workspace", async () => {
+    const { broker, machineWriteScope } = harness();
+    const hermes = join(dir, "home", ".hermes");
+    await mkdir(hermes, { recursive: true });
+    expect(await broker.evaluateFileWrites("s1" as PatchbaySessionId, [join(hermes, "config.yaml")])).toBe("ask");
+    await machineWriteScope.set([{ location: { kind: "path", path: hermes }, on: true }]);
+    expect(await broker.evaluateFileWrites("s1" as PatchbaySessionId, [join(hermes, "config.yaml")])).toBe("allow");
+    // judged where it lands, as the roots are
+    expect(await broker.evaluateFileWrites("s1" as PatchbaySessionId, [`${hermes}/../escaped.txt`])).toBe("ask");
+  });
+
+  it("a folder one project added is approved there and asks everywhere else", async () => {
+    const infra = join(dir, "infra");
+    await mkdir(infra);
+    const here = harness();
+    // another workspace on the same machine: its own rules, the machine's places
+    const elsewhere = new PermissionBroker(new PermissionRulesStore(new MemoryKV()), here.asks, here.roots, (text) => text, null, here.machineWriteScope);
+    await here.rules.set({ commandRules: [], writeScope: [{ location: { kind: "path", path: infra }, on: true }] });
+    expect(await here.broker.evaluateFileWrites("s1" as PatchbaySessionId, [join(infra, "main.tf")])).toBe("allow");
+    expect(await elsewhere.evaluateFileWrites("s1" as PatchbaySessionId, [join(infra, "main.tf")])).toBe("ask");
+    // the machine never listed it
+    expect(here.machineWriteScope.get()).toEqual([]);
+  });
+
+  it("this workspace's answer overrides the machine's, either way", async () => {
+    const { broker, rules, machineWriteScope } = harness();
+    const hermes = join(dir, "hermes");
+    await mkdir(hermes);
+    await machineWriteScope.set([{ location: { kind: "path", path: hermes }, on: true }, { location: { kind: "alwaysAsk" }, on: true }]);
+    await rules.set({ commandRules: [], writeScope: [{ location: { kind: "alwaysAsk" }, on: false }, { location: { kind: "workspace" }, on: false }] });
+    // the machine's mute lifted here, the workspace switched off here, the folder as the machine has it
+    expect(await broker.evaluateFileWrites("s1" as PatchbaySessionId, [join(hermes, "a")])).toBe("allow");
+    expect(await broker.evaluateFileWrites("s1" as PatchbaySessionId, [join(workspaceRoot, "a.ts")])).toBe("ask");
+    await rules.set({ commandRules: [], writeScope: [{ location: { kind: "path", path: hermes }, on: false }] });
+    expect(await broker.evaluateFileWrites("s1" as PatchbaySessionId, [join(hermes, "a")])).toBe("ask");
   });
 
   // Judged where the write lands, never by the text the agent sent
@@ -184,7 +230,21 @@ describe("PermissionBroker.evaluateFileWrites", () => {
     expect(await broker.evaluateFileWrites("s1" as PatchbaySessionId, [])).toBe("ask");
   });
 
-  it("every root the session was granted counts — not only the first", async () => {
+  // A root added to the session — a framework's source beside the module
+  // being written — is read, not edited, unless the user says so.
+  it("a root added to the session asks by default — approved only with session roots on", async () => {
+    const { broker, rules } = harness();
+    const odoo = join(dir, "odoo");
+    await mkdir(odoo);
+    added = [odoo];
+    expect(await broker.evaluateFileWrites("s1" as PatchbaySessionId, [join(odoo, "models.py")])).toBe("ask");
+    expect(await broker.evaluateFileWrites("s1" as PatchbaySessionId, [join(workspaceRoot, "a.py")])).toBe("allow");
+    await rules.set({ commandRules: [], writeScope: [{ location: { kind: "sessionRoots" }, on: true }, { location: { kind: "workspace" }, on: false }] });
+    expect(await broker.evaluateFileWrites("s1" as PatchbaySessionId, [join(odoo, "models.py")])).toBe("allow");
+    expect(await broker.evaluateFileWrites("s1" as PatchbaySessionId, [join(workspaceRoot, "a.py")])).toBe("ask");
+  });
+
+  it("every workspace folder counts — not only the first", async () => {
     const { broker } = harness();
     const second = join(dir, "second");
     await mkdir(second);
@@ -303,7 +363,7 @@ describe("PermissionBroker audit trail", () => {
     const { broker, rules, audit, refreshCount } = harness();
     await rules.set({
       commandRules: [{ pattern: "npm run *", verdict: "allow" }],
-      fileWriteScope: "workspace",
+      writeScope: [],
     });
     const result = await broker.gateCommand("s1" as PatchbaySessionId, run("npm run build"));
     expect(result).toBe("accepted");
@@ -320,7 +380,7 @@ describe("PermissionBroker audit trail", () => {
     const { broker, rules, audit } = harness();
     await rules.set({
       commandRules: [{ pattern: "rm -rf *", verdict: "deny" }],
-      fileWriteScope: "workspace",
+      writeScope: [],
     });
     const result = await broker.gateCommand("s1" as PatchbaySessionId, run("rm -rf /"));
     expect(result).toBe("rejected");
@@ -461,7 +521,7 @@ describe("PermissionBroker.gateCommand — the card shows what will run (issue #
 
   it("a rule speaks for the command line alone — its directory and environment ride the trust", async () => {
     const { broker, rules, events } = harness();
-    await rules.set({ commandRules: [{ pattern: "npm test", verdict: "allow" }], fileWriteScope: "workspace" });
+    await rules.set({ commandRules: [{ pattern: "npm test", verdict: "allow" }], writeScope: [] });
     const other = run("npm test", { cwd: "/elsewhere", env: { NODE_OPTIONS: "--require ./x.js" } });
     await expect(broker.gateCommand("s1" as PatchbaySessionId, other)).resolves.toBe("accepted");
     expect(events.some((e) => e.kind === "permissionRequested")).toBe(false);
@@ -469,7 +529,7 @@ describe("PermissionBroker.gateCommand — the card shows what will run (issue #
 
   it("the audit names the variables, never their values", async () => {
     const { broker, rules, audit } = harness();
-    await rules.set({ commandRules: [{ pattern: "npm test", verdict: "allow" }], fileWriteScope: "workspace" });
+    await rules.set({ commandRules: [{ pattern: "npm test", verdict: "allow" }], writeScope: [] });
     await broker.gateCommand("s1" as PatchbaySessionId, run("npm test", { env: { API_KEY: HANDED_OUT } }));
     const [entry] = await audit.tail(1);
     expect(entry).toMatchObject({ kind: "auto-allow", command: "npm test", cwd: workspaceRoot, env: ["API_KEY"] });

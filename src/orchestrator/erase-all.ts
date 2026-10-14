@@ -9,6 +9,7 @@
 // platform contract either. Structural interfaces so the sweep is
 // unit-testable without vscode; the orchestrator supplies its real stores.
 import { DEFAULT_PERMISSION_RULES, type CommandRule, type PermissionRules } from "./stores/permission-rules";
+import type { WriteEntry } from "../shared/protocol";
 
 /** A record store whose ids key secrets that go with it. */
 interface IdKeyedRecords {
@@ -38,6 +39,7 @@ export interface EraseTargets {
   mcpServerTokens: SecretsById;
   permissionRules: { set(rules: PermissionRules): Promise<void> };
   machineRules: { set(rules: CommandRule[]): Promise<void> };
+  machineWriteScope: { set(entries: readonly WriteEntry[]): Promise<void> };
   decisionAudit: Wipeable;
   lastConnected: Wipeable;
   defaultAgentFold: Wipeable;
@@ -83,6 +85,7 @@ export async function eraseAllData(targets: EraseTargets): Promise<void> {
   // 3 — rules back to built-ins, file stores gone.
   await targets.permissionRules.set(DEFAULT_PERMISSION_RULES);
   await targets.machineRules.set([]);
+  await targets.machineWriteScope.set([]);
   await targets.decisionAudit.wipe();
   await targets.lastConnected.wipe();
   await targets.defaultAgentFold.wipe();
