@@ -14,6 +14,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { prepareLauncher } from "./launcher-health";
 import { nullLogger, type Logger } from "./logger";
+import { mergeEnv } from "./spawn-resolve";
 import { PRODUCT } from "../shared/product";
 
 export type ProbeTarget =
@@ -49,7 +50,7 @@ const MAX_TOOL_PAGES = 20;
  * a first download is the install's, never the handshake's. */
 export async function probeMcpServer(target: ProbeTarget, signal?: AbortSignal, log: Logger = nullLogger): Promise<ProbeOutcome> {
   if (target.kind === "stdio") {
-    await prepareLauncher(target, { ...process.env, ...target.env }, { signal, log, who: "MCP probe" });
+    await prepareLauncher(target, mergeEnv(process.env, target.env), { signal, log, who: "MCP probe" });
   }
   const transport =
     target.kind === "http"

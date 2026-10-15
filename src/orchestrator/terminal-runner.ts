@@ -7,6 +7,7 @@
 // the extension host (orchestrator.ts), not this module's concern.
 import { spawn } from "node:child_process";
 import { killTree, treeSpawnOptions } from "./process-tree";
+import { mergeEnv } from "./spawn-resolve";
 
 export interface ExitStatus {
   exitCode: number | null;
@@ -67,7 +68,7 @@ export class NodeTerminalRunner implements TerminalRunner {
 
     const child = spawn(params.command, params.args, {
       cwd: params.cwd,
-      env: { ...process.env, ...params.env },
+      env: mergeEnv(process.env, params.env),
       stdio: ["ignore", "pipe", "pipe"],
       // Group leader on POSIX (process-tree.ts): terminal/kill must end the
       // whole tree — build tools fork, and ACP's contract is "the command

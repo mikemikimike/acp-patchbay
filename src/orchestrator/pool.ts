@@ -46,7 +46,7 @@ import {
   type TurnEndFact,
 } from "./readers/responses";
 import { readSessionUpdate, type SessionUpdateFact } from "./readers/session-update";
-import { resolveSpawn } from "./spawn-resolve";
+import { mergeEnv, resolveSpawn } from "./spawn-resolve";
 import { commandOf, killTree, treeSpawnOptions } from "./process-tree";
 import type { PatchbayAgentId } from "../shared/ids";
 import { PRODUCT } from "../shared/product";
@@ -246,7 +246,7 @@ function timeOfDay(): string {
  * different package cache than the real launch reads (npm/uv honor
  * cache-location env vars). */
 function spawnEnv(spec: LaunchSpec): NodeJS.ProcessEnv {
-  return { ...process.env, ...spec.env };
+  return mergeEnv(process.env, spec.env);
 }
 
 /** shell comes from resolveSpawn (Windows .cmd shims only — stop() still

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **On Windows, an env value you set wins whatever its case.** Windows
+  reads env names without regard to case, and an agent's process got both
+  spellings when yours differed from the editor's (`path` beside `Path`,
+  `npm_config_cache` beside `NPM_CONFIG_CACHE`): the one that sorted first
+  won, often the editor's, so your value was silently ignored. Yours now
+  replaces it, for the agent, its package install, a login, a terminal it
+  runs, and an MCP server's check. (#109)
 - **Your messages read in every theme.** The bubble around your message
   took the theme's badge color but kept the page's text color: in Light
   2026 and High Contrast Light that was dark text on blue. The text now

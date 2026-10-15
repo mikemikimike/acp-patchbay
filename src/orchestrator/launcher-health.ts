@@ -45,6 +45,7 @@ import { checkPlatform } from "npm-install-checks";
 import { unlessAborted } from "./abort";
 import type { Logger } from "./logger";
 import { runToExit, type ExitAnswer } from "./run-to-exit";
+import { mergeEnv } from "./spawn-resolve";
 
 /** Normalized launcher name from a command that may be a path or a Windows
  * shim — THE one spelling of "is this an ecosystem launcher", shared by the
@@ -482,7 +483,7 @@ export async function checkPathDivergence(
   if (sibling === undefined) return null;
   const launchSpec = npxPackageSpec(spec);
   if (launchSpec === null) return null;
-  const env = { ...process.env, ...spec.env };
+  const env = mergeEnv(process.env, spec.env);
   const [npxRoot, pathVersion] = await Promise.all([
     npmNpxRoot(env),
     pathSiblingVersion(sibling.bin, env),

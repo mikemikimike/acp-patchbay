@@ -24,6 +24,7 @@ import {
 } from "../src/orchestrator/launcher-health";
 import { nullLogger } from "../src/orchestrator/logger";
 import { runToExit } from "../src/orchestrator/run-to-exit";
+import { mergeEnv } from "../src/orchestrator/spawn-resolve";
 
 describe("launcherKind", () => {
   it("normalizes paths and Windows shims — the one spelling warmupSpawn shares", () => {
@@ -147,7 +148,7 @@ describe("the npx entry", () => {
     const lock = JSON.parse(await readFile(hidden, "utf8")) as { packages: Record<string, { optionalDependencies: Record<string, string> }> };
     lock.packages["node_modules/@scope/agent-acp"]!.optionalDependencies["@scope/bin-undescribed"] = "1.0.0";
     await writeFile(hidden, JSON.stringify(lock));
-    expect(await droppedOptionals(dir, { ...process.env, npm_config_cache: join(root, "empty-cache") })).toEqual(["@scope/bin-dropped"]);
+    expect(await droppedOptionals(dir, mergeEnv(process.env, { npm_config_cache: join(root, "empty-cache") }))).toEqual(["@scope/bin-dropped"]);
   });
 
   // npm installs for its own node, which can differ from the editor's — an
@@ -181,7 +182,7 @@ describe("the npx entry", () => {
   describe("healNpxEntry — against the real npm, cache pointed at a temp dir", () => {
     const launch = { command: "npx", args: ["-y", pkgSpec] };
     let cache: string;
-    const env = () => ({ ...process.env, npm_config_cache: cache });
+    const env = () => mergeEnv(process.env, { npm_config_cache: cache });
 
     beforeEach(async () => {
       // npm's cache root; its entries live under `_npx`.
@@ -323,15 +324,15 @@ describe("an install npm finished short — the real npm, a registry that cuts t
     "short-elsewhere": { os: [`!${process.platform}`] },
   };
   const spec = () => ({ command: "npx", args: ["-y", "short-agent@1.0.0"], cwd: work });
-  const env = (extra: Record<string, string> = {}) => ({
-    ...process.env,
-    npm_config_cache: join(work, "cache"),
-    npm_config_registry: registry,
-    npm_config_audit: "false",
-    npm_config_fund: "false",
-    npm_config_update_notifier: "false",
-    ...extra,
-  });
+  const env = (extra: Record<string, string> = {}) =>
+    mergeEnv(process.env, {
+      npm_config_cache: join(work, "cache"),
+      npm_config_registry: registry,
+      npm_config_audit: "false",
+      npm_config_fund: "false",
+      npm_config_update_notifier: "false",
+      ...extra,
+    });
   const entryDir = () => npxEntryDir(join(work, "cache", "_npx"), "short-agent@1.0.0");
 
   beforeAll(async () => {

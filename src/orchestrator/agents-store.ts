@@ -42,7 +42,7 @@ import { checkPathDivergence } from "./launcher-health";
 import { nullLogger, type Logger } from "./logger";
 import type { TerminalAuthRecipe } from "./meta";
 import type { AgentPool, LaunchSpec } from "./pool";
-import { resolveExecutableWin32 } from "./spawn-resolve";
+import { mergeEnv, resolveExecutableWin32 } from "./spawn-resolve";
 import { type AcpRegistryStore, type RegistryAgent, type RegistryReadMoment, resolveDistribution } from "./stores/acp-registry";
 import type { AgentConfig, AgentConfigStore } from "./stores/agent-configs";
 import type { AuthLockStore } from "./stores/auth-locks";
@@ -390,7 +390,7 @@ export class AgentsStore implements ConnectionOperations {
   private async launch(patchbayAgentId: PatchbayAgentId): Promise<LaunchSpec | undefined> {
     const spec = this.spec(patchbayAgentId);
     if (spec === undefined) return undefined;
-    return { ...spec, env: { ...spec.env, ...(await this.deps.env.get(patchbayAgentId)) } };
+    return { ...spec, env: mergeEnv(spec.env, await this.deps.env.get(patchbayAgentId)) };
   }
 
   /** Re-resolves the registry's current (possibly newer) pinned version and
@@ -599,7 +599,7 @@ export class AgentsStore implements ConnectionOperations {
       // writes the credentials the agent reads with them. `authenticate`
       // is never called on it either (meta.ts).
       const launchEnv = (await this.launch(patchbayAgentId))?.env;
-      await this.loginViaTerminal(patchbayAgentId, { ...run.recipe, env: { ...launchEnv, ...run.recipe.env } }, signal);
+      await this.loginViaTerminal(patchbayAgentId, { ...run.recipe, env: mergeEnv(launchEnv ?? {}, run.recipe.env) }, signal);
       return;
     }
     await this.deps.tracker.authenticate(patchbayAgentId, methodId);
@@ -947,10 +947,10 @@ export class AgentsStore implements ConnectionOperations {
       this.log.warn(`typed terminal login: no configured spec for ${patchbayAgentId}`);
       return;
     }
-    const env = { ...spec.env, ...typed.env };
+    const env = mergeEnv(spec.env, typed.env);
     const command =
       process.platform === "win32"
-        ? (resolveExecutableWin32(spec.command, { ...process.env, ...env }) ?? spec.command)
+        ? (resolveExecutableWin32(spec.command, mergeEnv(process.env, env)) ?? spec.command)
         : spec.command;
     await this.loginViaTerminal(patchbayAgentId, { command, args: [...spec.args, ...typed.args], env }, signal);
   }

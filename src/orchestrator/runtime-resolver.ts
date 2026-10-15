@@ -33,6 +33,7 @@ import { launcherKind } from "./launcher-health";
 import type { Logger } from "./logger";
 import type { LaunchSpec } from "./pool";
 import { runToExit } from "./run-to-exit";
+import { mergeEnv } from "./spawn-resolve";
 import {
   ChecksumMismatch,
   installBinary,
@@ -233,12 +234,11 @@ export function runtimeInstallSpec(
   );
 }
 
-/** PATH-prepend into the spec's env map. The spawn env is
- * `{...process.env, ...spec.env}`, so writing the spec's PATH key replaces
- * the inherited one wholesale — the injected value must carry the full
- * existing PATH after the managed dir. The inherited key's own casing
- * (Windows convention is "Path") is reused: a spawn env block holding both
- * "PATH" and "Path" is undefined territory. Idempotent — a restart
+/** PATH-prepend into the spec's env map. The spawn env is `process.env`
+ * with `spec.env` laid over it (`mergeEnv`), so writing the spec's PATH key
+ * replaces the inherited one wholesale — the injected value must carry the
+ * full existing PATH after the managed dir, found under whatever casing
+ * holds it (Windows convention is "Path"). Idempotent — a restart
  * re-resolves the already-resolved snapshot and must not stack the dir. */
 export function prependPath(
   env: Record<string, string>,
@@ -389,7 +389,7 @@ export async function resolveRuntime(
   if (kind === null) return spec;
 
   const probes = { launcher: deps.probes?.launcher ?? spec.command, interpreter: deps.probes?.interpreter };
-  const system = await gateRuntime(kind, { ...process.env, ...spec.env }, probes, deps.signal);
+  const system = await gateRuntime(kind, mergeEnv(process.env, spec.env), probes, deps.signal);
   if (system.ok) {
     deps.log.debug(`${spec.patchbayAgentId}: system runtime OK (${system.detail})`);
     return spec;
@@ -420,7 +420,7 @@ export async function resolveRuntime(
   // runtime that can't answer --version (glibc build on musl, truncated
   // archive) must fail the connect with a real reason, not crash the agent
   // spawn cryptically.
-  const verified = await gateRuntime(kind, { ...process.env, ...env }, probes, deps.signal);
+  const verified = await gateRuntime(kind, mergeEnv(process.env, env), probes, deps.signal);
   if (!verified.ok) {
     // Evict only a failure the managed install could own: the bare
     // interpreter, or a bare-name launcher (both resolve through the

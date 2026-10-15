@@ -36,6 +36,22 @@ import { posix, win32 } from "node:path";
  * interpreter we won't invoke. */
 const EXECUTABLE_EXTS = [".COM", ".EXE", ".BAT", ".CMD"];
 
+/** `over` laid on `base`, as the spawned process will read it. Windows env
+ * names are case-insensitive, and a spawn handed two spellings of one name
+ * keeps whichever sorts first — an override spelled `path` loses to an
+ * inherited `Path`, `npm_config_cache` to `NPM_CONFIG_CACHE`. There a base
+ * name the override sets, in any case, is dropped first; elsewhere names
+ * are case-sensitive and the spread is the whole rule. */
+export function mergeEnv<T extends string | undefined>(
+  base: Readonly<Record<string, T>>,
+  over: Readonly<Record<string, T>> | undefined,
+  platform: NodeJS.Platform = process.platform,
+): Record<string, T> {
+  if (platform !== "win32") return { ...base, ...over };
+  const named = new Set(Object.keys(over ?? {}).map((k) => k.toUpperCase()));
+  return { ...Object.fromEntries(Object.entries(base).filter(([k]) => !named.has(k.toUpperCase()))), ...over };
+}
+
 function isFileSync(p: string): boolean {
   try {
     return statSync(p).isFile();

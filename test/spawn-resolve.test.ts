@@ -3,7 +3,7 @@
 // .cmd/.bat shims get shell:true scoped to exactly that case (Node ≥ 20.12,
 // CVE-2024-27980) with shell-active args refused rather than quoted-and-hoped.
 import { describe, expect, it } from "vitest";
-import { commandFound, resolveSpawn, resolveExecutableWin32 } from "../src/orchestrator/spawn-resolve";
+import { commandFound, mergeEnv, resolveSpawn, resolveExecutableWin32 } from "../src/orchestrator/spawn-resolve";
 import { warmupSpawn } from "../src/orchestrator/launcher-health";
 import type { LaunchSpec } from "../src/orchestrator/pool";
 import type { PatchbayAgentId } from "../src/shared/ids";
@@ -15,6 +15,17 @@ const files =
   (...paths: string[]) =>
   (p: string) =>
     paths.some((f) => f.toLowerCase() === p.toLowerCase());
+
+describe("mergeEnv", () => {
+  it("win32: an override replaces the inherited name in any case — never two spellings for the spawn to pick between", () => {
+    const merged = mergeEnv({ Path: "C:\\inherited", NPM_CONFIG_CACHE: "C:\\npm-cache", KEEP: "1" }, { path: "C:\\mine", npm_config_cache: "C:\\tmp" }, "win32");
+    expect(merged).toEqual({ KEEP: "1", path: "C:\\mine", npm_config_cache: "C:\\tmp" });
+  });
+
+  it("POSIX: names are case-sensitive — both spellings are separate variables", () => {
+    expect(mergeEnv({ PATH: "/usr/bin" }, { path: "/mine" }, "linux")).toEqual({ PATH: "/usr/bin", path: "/mine" });
+  });
+});
 
 describe("resolveSpawn", () => {
   it("POSIX: commands pass through untouched, never a shell", () => {
