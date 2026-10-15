@@ -90,6 +90,28 @@ function editorServer(wire: McpServerWire, contextToken: string): McpServerStdio
   ]);
 }
 
+/** The bridge as one attach is handed it for a remote server — the launch
+ * the agent spawns to reach it, with patchbay's credential asked per
+ * request over IPC under the attach's token. */
+export function bridgeServer(
+  wire: Pick<McpServerWire, "bridgeScript" | "socketPath">,
+  contextToken: string,
+  server: { id: string; name: string; url: string; header: { headerName: string; valuePrefix: string } | null },
+): McpServerStdio {
+  return ownScript(server.name, wire.bridgeScript, [
+    { name: "ACP_PATCHBAY_IPC", value: wire.socketPath() },
+    { name: "ACP_PATCHBAY_CONTEXT_TOKEN", value: contextToken },
+    { name: "ACP_PATCHBAY_MCP_SERVER_ID", value: server.id },
+    { name: "ACP_PATCHBAY_MCP_SERVER_URL", value: server.url },
+    ...(server.header !== null
+      ? [
+          { name: "ACP_PATCHBAY_AUTH_HEADER", value: server.header.headerName },
+          { name: "ACP_PATCHBAY_AUTH_PREFIX", value: server.header.valuePrefix },
+        ]
+      : []),
+  ]);
+}
+
 /** The operations that take time — a connect, an add, a probe, a remove —
  * each reached only through the gates, which order them on their lines. */
 export type McpServerLineOperations = Pick<
@@ -1019,20 +1041,7 @@ export class McpServersStore {
         given.push({ id: config.id, delivery: "http" });
         continue;
       }
-      servers.push(
-        ownScript(config.name, this.wire.bridgeScript, [
-          { name: "ACP_PATCHBAY_IPC", value: this.wire.socketPath() },
-          { name: "ACP_PATCHBAY_CONTEXT_TOKEN", value: contextToken },
-          { name: "ACP_PATCHBAY_MCP_SERVER_ID", value: config.id },
-          { name: "ACP_PATCHBAY_MCP_SERVER_URL", value: url },
-          ...(header !== null
-            ? [
-                { name: "ACP_PATCHBAY_AUTH_HEADER", value: header.headerName },
-                { name: "ACP_PATCHBAY_AUTH_PREFIX", value: header.valuePrefix },
-              ]
-            : []),
-        ]),
-      );
+      servers.push(bridgeServer(this.wire, contextToken, { id: config.id, name: config.name, url, header }));
       given.push({ id: config.id, delivery: "bridge" });
     }
     // Env and header values are secrets by classification. Over-redaction

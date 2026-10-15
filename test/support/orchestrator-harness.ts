@@ -59,8 +59,9 @@ export interface OrchestratorHarnessOptions {
   workspaceRoots?: readonly string[];
   /** Replaces a port's stand-in. */
   ports?: Partial<OrchestratorPorts>;
-  /** The network, as the registry and every download see it — absent, any
-   * fetch fails: no test reaches the real network. */
+  /** The network, as the registry and every download see it — absent, the
+   * test's own servers on loopback answer and anything else fails: no test
+   * reaches an outside host. */
   fetch?: typeof fetch;
 }
 
@@ -90,7 +91,14 @@ let orchestrators = 0;
  * and workspace storage, and — unless `workspace` names another — the
  * folder it works in. */
 export function orchestratorHarness(cwd: string, opts: OrchestratorHarnessOptions = {}): OrchestratorHarness {
-  vi.stubGlobal("fetch", opts.fetch ?? (() => Promise.reject(new Error("no network in tests"))));
+  const real = globalThis.fetch;
+  const loopbackOnly: typeof fetch = (input, init) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    return ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)
+      ? real(input, init)
+      : Promise.reject(new Error(`no network in tests: ${url.host}`));
+  };
+  vi.stubGlobal("fetch", opts.fetch ?? loopbackOnly);
   atTestEnd(() => vi.unstubAllGlobals());
   const asked: OrchestratorHarness["asked"] = [];
   const paths = { globalStorage: join(cwd, ".patchbay-global"), workspaceStorage: join(cwd, ".patchbay-workspace") };

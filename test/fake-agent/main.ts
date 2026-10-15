@@ -87,7 +87,9 @@ export type TurnStep =
    * finishes before the user answers — reports it done right behind the
    * request, with no pause, so the notice can overtake it; then withdraws. */
   | { type: "elicitUrl"; url: string; elicitationId: string; then?: "complete" | "withdraw" | "finishFirst" }
-  | { type: "callMcpTool"; tool: string; args?: Record<string, unknown> }
+  /** Calls `tool` on the session's MCP server named `server` — absent, the
+   * first one the session was handed. */
+  | { type: "callMcpTool"; tool: string; args?: Record<string, unknown>; server?: string }
   | { type: "infoUpdate"; title: string }
   /** Any session/update, sent as-is and recorded like the rest — the
    * whole update surface, every field and variant, for corpus tests. */
@@ -589,7 +591,8 @@ async function runTurn(
       case "callMcpTool": {
         let result: string;
         try {
-          const server = sessions.get(sessionId)?.mcpServers[0];
+          const servers = sessions.get(sessionId)?.mcpServers ?? [];
+          const server = step.server === undefined ? servers[0] : servers.find((s) => s.name === step.server);
           // McpServerStdio is the untagged union member — no "type" field to
           // discriminate on, so "has a command" is the structural check.
           if (!server || !("command" in server)) throw new Error("no stdio mcp server configured");
