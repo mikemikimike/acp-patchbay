@@ -20,6 +20,7 @@ import type { McpServer } from "@agentclientprotocol/sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   encodeLine,
+  ipcAddress,
   parseLines,
   type IpcRequest,
   type IpcResponse,
@@ -51,7 +52,7 @@ class FakeEditorStateHost {
   sessions: Pick<SessionsStore, "admits" | "sessionOfToken"> | null = null;
 
   constructor(id: string) {
-    this.socketPath = join(tmpdir(), `patchbay-e2e-${id}.sock`);
+    this.socketPath = ipcAddress(`patchbay-e2e-${id}`);
     this.server = createServer((socket) => {
       let buffer = "";
       socket.setEncoding("utf8");

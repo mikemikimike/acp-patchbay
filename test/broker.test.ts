@@ -202,18 +202,20 @@ describe("PermissionBroker.evaluateFileWrites", () => {
     expect(await broker.evaluateFileWrites("s1" as PatchbaySessionId, [`${workspaceRoot}/new/../a.ts`])).toBe("allow");
   });
 
+  // "junction": the link Windows lets anyone make (a symlink there needs
+  // admin or Developer Mode); everywhere else the type is ignored.
   it("a symlink inside the workspace that points outside asks — and so does a link to nowhere", async () => {
     const { broker } = harness();
     await mkdir(join(dir, "elsewhere"));
-    await symlink(join(dir, "elsewhere"), join(workspaceRoot, "link"));
-    await symlink(join(dir, "nowhere.txt"), join(workspaceRoot, "dangling"));
+    await symlink(join(dir, "elsewhere"), join(workspaceRoot, "link"), "junction");
+    await symlink(join(dir, "nowhere.txt"), join(workspaceRoot, "dangling"), "junction");
     expect(await broker.evaluateFileWrites("s1" as PatchbaySessionId, [join(workspaceRoot, "link", "x.txt")])).toBe("ask");
     expect(await broker.evaluateFileWrites("s1" as PatchbaySessionId, [join(workspaceRoot, "dangling")])).toBe("ask");
   });
 
   it("a workspace opened through a symlink is its real folder, whichever spelling the agent uses", async () => {
     const { broker } = harness();
-    await symlink(workspaceRoot, join(dir, "ws-link"));
+    await symlink(workspaceRoot, join(dir, "ws-link"), "junction");
     granted = [join(dir, "ws-link")];
     expect(await broker.evaluateFileWrites("s1" as PatchbaySessionId, [join(workspaceRoot, "a.ts")])).toBe("allow");
     expect(await broker.evaluateFileWrites("s1" as PatchbaySessionId, [join(dir, "ws-link", "a.ts")])).toBe("allow");
@@ -270,11 +272,23 @@ function request(
   };
 }
 
-async function cardOf(events: readonly AgentViewEvent[]): Promise<Extract<AgentViewEvent, { kind: "permissionRequested" }>> {
-  await new Promise((r) => setTimeout(r, 20));
-  const asked = events.find((e) => e.kind === "permissionRequested");
-  if (asked?.kind !== "permissionRequested") throw new Error("no card — the request was auto-allowed");
-  return asked;
+/** The card the request raised — waited for, never slept on: a request
+ * that settles before any card shows was answered without asking. */
+async function cardOf(
+  events: readonly AgentViewEvent[],
+  pending: Promise<unknown>,
+): Promise<Extract<AgentViewEvent, { kind: "permissionRequested" }>> {
+  let settled = false;
+  void pending.then(
+    () => (settled = true),
+    () => (settled = true),
+  );
+  for (;;) {
+    const asked = events.find((e) => e.kind === "permissionRequested");
+    if (asked?.kind === "permissionRequested") return asked;
+    if (settled) throw new Error("no card — the request was auto-allowed");
+    await new Promise((r) => setTimeout(r, 5));
+  }
 }
 
 describe("PermissionBroker.resolveAgentPermissionRequest — an edit is judged by every file it names", () => {
@@ -297,7 +311,7 @@ describe("PermissionBroker.resolveAgentPermissionRequest — an edit is judged b
   it("only an edit is judged by its locations — any other kind asks, even when every one is inside", async () => {
     const { broker, asks, events } = harness();
     const pending = broker.resolveAgentPermissionRequest("s1" as PatchbaySessionId, request("Delete", "delete", [join(workspaceRoot, "a.ts")], options));
-    const asked = await cardOf(events);
+    const asked = await cardOf(events, pending);
     expect(asked.title).toBe("Delete");
     // the card names the file, whatever the kind
     expect(asked.call?.locations.map((l) => l.path)).toEqual([join(workspaceRoot, "a.ts")]);
@@ -309,7 +323,7 @@ describe("PermissionBroker.resolveAgentPermissionRequest — an edit is judged b
     const { broker, asks, events } = harness();
     const mixed = [join(workspaceRoot, "a.ts"), `${workspaceRoot}/../escaped.txt`];
     const pending = broker.resolveAgentPermissionRequest("s1" as PatchbaySessionId, request("Edit", "edit", mixed, options));
-    const asked = await cardOf(events);
+    const asked = await cardOf(events, pending);
     expect(asked.call?.locations.map((l) => l.path)).toEqual(mixed);
     asks.answerOption(asked.patchbayAskId, "n");
     await expect(pending).resolves.toEqual({ optionId: "n" });
@@ -321,7 +335,7 @@ describe("PermissionBroker.resolveAgentPermissionRequest — an edit is judged b
       "s1" as PatchbaySessionId,
       request("Edit", "edit", [join(workspaceRoot, "a.ts")], options, { diffs: { "/etc/hosts": { additions: 1, deletions: 0, preview: null } } }),
     );
-    const asked = await cardOf(events);
+    const asked = await cardOf(events, pending);
     expect(asked.call?.diffs).toEqual({ "/etc/hosts": { additions: 1, deletions: 0, preview: null } });
     asks.answerOption(asked.patchbayAskId, "n");
     await expect(pending).resolves.toEqual({ optionId: "n" });
@@ -336,7 +350,7 @@ describe("PermissionBroker.resolveAgentPermissionRequest — an edit is judged b
         input: `{ "command": "curl -H ${HANDED_OUT}" }`,
       }),
     );
-    const asked = await cardOf(events);
+    const asked = await cardOf(events, pending);
     expect(JSON.stringify(asked)).not.toContain(HANDED_OUT);
     expect(asked.title).toBe("curl -H •••");
     expect(asked.call).toMatchObject({ content: [{ kind: "text", text: "will send •••" }], input: '{ "command": "curl -H •••" }' });
@@ -348,7 +362,7 @@ describe("PermissionBroker.resolveAgentPermissionRequest — an edit is judged b
     const { broker, asks, events, audit } = harness();
     const withdraw = new AbortController();
     const pending = broker.resolveAgentPermissionRequest("s1" as PatchbaySessionId, request("Run", "execute", [], options), withdraw.signal);
-    const asked = await cardOf(events);
+    const asked = await cardOf(events, pending);
     withdraw.abort();
     await expect(pending).resolves.toEqual({ cancelled: true });
     expect(events.find((e) => e.kind === "permissionResolved")).toMatchObject({ label: "Withdrawn by the agent", auto: true });

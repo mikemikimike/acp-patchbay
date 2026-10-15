@@ -112,9 +112,9 @@ describe("CapabilityTracker", () => {
     // from under it (CLI-fatal agent-side). Lifetime = agent config, not
     // the probe call.
     const { pool, tracker } = harness();
-    await pool.connect(spec({}, "rooted" as PatchbayAgentId));
-    await waitFor(() => (tracker.matrix("rooted" as PatchbayAgentId) !== undefined ? true : undefined));
-    await new Promise((r) => setTimeout(r, 100)); // let the probe's finally run
+    await pool.connect(spec({ declare: { sessionCapabilities: { close: {} } } }, "rooted" as PatchbayAgentId));
+    // the probe's close is its last step: once it's marked used, the probe is over
+    await waitFor(() => (tracker.matrix("rooted" as PatchbayAgentId)?.["session.close"]?.used ? true : undefined));
     expect((await stat(join(cwd, "probe", "rooted"))).isDirectory()).toBe(true);
     await pool.stop("rooted" as PatchbayAgentId);
   });

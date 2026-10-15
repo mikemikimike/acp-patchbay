@@ -9,7 +9,16 @@
 // whoever does. One socket for the orchestrator's whole lifetime; every
 // subprocess was spawned at one session's attach, and carries that attach's
 // token on every message.
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { PatchbayMcpServerId } from "../shared/ids";
+
+/** Where the channel named `name` listens: a named pipe on Windows, which
+ * refuses a socket at a file path, and a socket file in the temp folder
+ * everywhere else. */
+export function ipcAddress(name: string): string {
+  return process.platform === "win32" ? `\\\\.\\pipe\\${name}` : join(tmpdir(), `${name}.sock`);
+}
 
 export interface IpcRequest {
   id: number;

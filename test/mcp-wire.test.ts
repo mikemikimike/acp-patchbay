@@ -5,11 +5,11 @@
 // electron smoke) so this proves the wire protocol and routing without it.
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { createServer, type Server } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   encodeLine,
+  ipcAddress,
   parseLines,
   type IpcRequest,
   type IpcResponse,
@@ -27,7 +27,7 @@ class FakeIpcHost {
   elicitationAnswer: ElicitationAnswer = { action: "accept", content: { confirmed: true } };
 
   constructor(id: string) {
-    this.socketPath = join(tmpdir(), `patchbay-test-ipc-${id}.sock`);
+    this.socketPath = ipcAddress(`patchbay-test-ipc-${id}`);
     this.server = createServer((socket) => {
       let buffer = "";
       socket.setEncoding("utf8");

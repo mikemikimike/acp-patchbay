@@ -442,11 +442,10 @@ describe("SessionsStore", () => {
     );
     const patchbaySessionId = await h.sessions.createSession("sm3b" as PatchbayAgentId, "Fake Agent", cwd);
 
-    // Each step sleeps stepDelayMs *before* acting, so the wait here must
-    // clear the first step's own delay (the toolCall landing) but not the
-    // second's — otherwise there's nothing yet to strand.
+    // Stopped once the call has landed and before the next step's own
+    // delay runs out — otherwise there's nothing yet to strand.
     const promptDone = h.gates.prompt(patchbaySessionId, { text: "long turn" }).catch((err: unknown) => err);
-    await new Promise((r) => setTimeout(r, 220));
+    await vi.waitFor(() => expect(h.state().transcripts[patchbaySessionId]!.some((b) => b.id === "t1")).toBe(true), { interval: 10 });
     await h.gates.stop(patchbaySessionId);
     expect(await promptDone).toMatchObject({ by: "stop" });
 
@@ -1419,8 +1418,8 @@ describe("SessionsStore", () => {
     const echoed = h.state().transcripts[patchbaySessionId]!.find((b) => b.kind === "text");
     const kinds = JSON.parse(echoed?.kind === "text" ? echoed.text : "[]") as Array<Record<string, string>>;
     expect(kinds).toEqual([
-      { type: "resource_link", uri: "file:///ws/docs/report.pdf", name: "report.pdf", mimeType: "application/pdf" },
-      { type: "resource_link", uri: "file:///ws/blob.bin", name: "blob.bin" },
+      { type: "resource_link", uri: pathToFileURL("/ws/docs/report.pdf").toString(), name: "report.pdf", mimeType: "application/pdf" },
+      { type: "resource_link", uri: pathToFileURL("/ws/blob.bin").toString(), name: "blob.bin" },
       { type: "text" },
     ]);
     await h.pool.stop("att1" as PatchbayAgentId);
@@ -2243,7 +2242,7 @@ describe("SessionsStore", () => {
     const echoed = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text").at(-1);
     expect(echoed?.kind === "text" && JSON.parse(echoed.text)).toEqual([
       { type: "text" },
-      { type: "resource_link", uri: "file:///repo/src/app.ts", name: "app.ts" },
+      { type: "resource_link", uri: pathToFileURL("/repo/src/app.ts").toString(), name: "app.ts" },
       { type: "text" },
     ]);
     // the transcript records the prompt in the part vocabulary — the
@@ -2251,7 +2250,7 @@ describe("SessionsStore", () => {
     const user = h.state().transcripts[patchbaySessionId]!.find((b) => b.kind === "user");
     expect(user?.kind === "user" && user.parts).toEqual([
       { kind: "text", text: "look at " },
-      { kind: "mention", name: "app.ts", uri: "file:///repo/src/app.ts" },
+      { kind: "mention", name: "app.ts", uri: pathToFileURL("/repo/src/app.ts").toString() },
       { kind: "text", text: " please" },
     ]);
 

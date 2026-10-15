@@ -9,11 +9,10 @@
 // src/mcp/bridge-main.ts) are plain Node, spawned by the agent,
 // and never touch vscode directly.
 import { createServer, type Server, type Socket } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import * as vscode from "vscode";
 import {
   encodeLine,
+  ipcAddress,
   parseLines,
   type CurrentFileInfo,
   type DiagnosticInfo,
@@ -90,10 +89,7 @@ export class EditorStateHost {
     pid: string,
     private readonly hooks: EditorStateHostHooks,
   ) {
-    this.socketPath =
-      process.platform === "win32"
-        ? `\\\\.\\pipe\\acp-patchbay-${pid}`
-        : join(tmpdir(), `acp-patchbay-${pid}.sock`);
+    this.socketPath = ipcAddress(`acp-patchbay-${pid}`);
   }
 
   start(): void {

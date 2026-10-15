@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { assertKind } from "./support/assert-kind";
+import { formatCommandLine } from "../src/shared/command-line";
 import { AsksStore } from "../src/orchestrator/asks-store";
 import { PermissionBroker } from "../src/orchestrator/broker";
 import { applyFileWrite, ClientHost, clientRequestHooks, type ClientHostDeps } from "../src/orchestrator/client-host";
@@ -29,6 +30,9 @@ import { gatesFor } from "./support/session-gates";
 import type { PatchbayAgentId, PatchbayAskId, PatchbaySessionId } from "../src/shared/ids";
 
 const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
+/** Node as a command line spells it — quoted where its path has a space
+ * (`C:\Program Files\…` on Windows), the form a rule is matched against. */
+const NODE = formatCommandLine(process.execPath, []);
 
 let dir: string;
 let workspaceRoot: string;
@@ -37,7 +41,9 @@ beforeEach(async () => {
   workspaceRoot = join(dir, "workspace");
   await mkdir(workspaceRoot, { recursive: true });
 });
-afterEach(() => rm(dir, { recursive: true, force: true }));
+// Retried: on Windows a released terminal's process holds the folder
+// (EBUSY) until it has finished exiting.
+afterEach(() => rm(dir, { recursive: true, force: true, maxRetries: 10 }));
 
 function spec(script: FakeAgentScript, patchbayAgentId: PatchbayAgentId): LaunchSpec {
   return {
@@ -284,7 +290,7 @@ describe("fs/terminal — gated by the broker, same as everything else", () => {
     const h = harness();
     const { rules } = h;
     await rules.set({
-      commandRules: [{ pattern: `${process.execPath} *`, verdict: "allow" }],
+      commandRules: [{ pattern: `${NODE} *`, verdict: "allow" }],
       writeScope: [],
     });
     await h.pool.connect(
@@ -312,7 +318,7 @@ describe("fs/terminal — gated by the broker, same as everything else", () => {
     const turn = h.gates.prompt(patchbaySessionId, { text: "go" });
     await waitFor(() => h.state().transcripts[patchbaySessionId]?.some((b) => b.kind === "permission"));
     const card = assertKind(h.state().transcripts[patchbaySessionId]!.find((b) => b.kind === "permission"), "permission");
-    expect(card.detail).toBe(`${process.execPath} -e "${probe}"`);
+    expect(card.detail).toBe(formatCommandLine(process.execPath, ["-e", probe]));
     expect(card.facts).toEqual([
       { label: "cwd", value: dir },
       { label: "env", value: "PB_PROBE=set by agent" },
@@ -345,7 +351,7 @@ describe("fs/terminal — gated by the broker, same as everything else", () => {
   ] as const) {
     it(`a session re-attached by ${via} after a restart runs a cwd-less command in its own cwd (issue #64)`, async () => {
       const h = harness();
-      await h.rules.set({ commandRules: [{ pattern: `${process.execPath} *`, verdict: "allow" }], writeScope: [] });
+      await h.rules.set({ commandRules: [{ pattern: `${NODE} *`, verdict: "allow" }], writeScope: [] });
       const probe = { type: "runCommand" as const, command: process.execPath, args: ["-e", "console.log('cwd=' + process.cwd())"] };
       const patchbayAgentId = `c64-${via.slice(8)}` as PatchbayAgentId;
       await h.pool.connect(spec({ declare, turn: [probe] }, patchbayAgentId));
@@ -381,7 +387,7 @@ describe("fs/terminal — gated by the broker, same as everything else", () => {
     const patchbaySessionId = await h.sessions.createSession("c2" as PatchbayAgentId, "Fake Agent", workspaceRoot);
     await h.gates.prompt(patchbaySessionId, { text: "go" });
     expect(textOf(patchbaySessionId, h.events)).toContain(
-      `command: rejected (-32803 The user rejected the command \`${process.execPath} -e 1\`)`,
+      `command: rejected (-32803 The user rejected the command \`${NODE} -e 1\`)`,
     );
     expect(h.evidence).toContain("terminal:used");
     await h.pool.stop("c2" as PatchbayAgentId);
@@ -678,7 +684,7 @@ describe("ClientHost — a terminal answers only the session that made it (#76)"
 
   it("another session — its agent's or another's — finds no such terminal: no output, no wait, no kill, no release", async () => {
     const h = harness();
-    await h.rules.set({ commandRules: [{ pattern: `${process.execPath} *`, verdict: "allow" }], writeScope: [] });
+    await h.rules.set({ commandRules: [{ pattern: `${NODE} *`, verdict: "allow" }], writeScope: [] });
     const { terminalId } = await h.host.createTerminal(
       { sessionId: "agent-a", command: process.execPath, args: ["-e", "setTimeout(() => {}, 30000)"], env: {} },
       { id: A, cwd: workspaceRoot },

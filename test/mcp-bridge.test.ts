@@ -14,10 +14,11 @@ import { createServer, type Server as HttpServer } from "node:http";
 import { createServer as createNetServer, type Server as NetServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { McpServer } from "@agentclientprotocol/sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { IpcClient } from "../src/mcp/ipc-client";
-import { encodeLine, parseLines, type IpcRequest, type IpcResponse } from "../src/mcp/ipc-protocol";
+import { encodeLine, ipcAddress, parseLines, type IpcRequest, type IpcResponse } from "../src/mcp/ipc-protocol";
 import { AgentPool, type LaunchSpec } from "../src/orchestrator/pool";
 import { SessionsStore } from "../src/orchestrator/sessions-store";
 import { MemoryKV } from "../src/orchestrator/stores/kv";
@@ -43,7 +44,7 @@ class FakeMcpServerTokenHost {
   requests = 0;
 
   constructor(id: string, tokens: string[]) {
-    this.socketPath = join(tmpdir(), `patchbay-bridge-test-${id}.sock`);
+    this.socketPath = ipcAddress(`patchbay-bridge-test-${id}`);
     this.tokens = tokens;
     this.server = createNetServer((socket) => {
       let buffer = "";
@@ -141,7 +142,7 @@ class FakeSessionHost {
   watchers: Socket[] = [];
 
   constructor(id: string, roots: string[]) {
-    this.socketPath = join(tmpdir(), `patchbay-bridge-roots-${id}.sock`);
+    this.socketPath = ipcAddress(`patchbay-bridge-roots-${id}`);
     this.roots = roots;
     this.server = createNetServer((socket) => {
       let buffer = "";
@@ -403,8 +404,8 @@ describe("MCP bridge — real agent, real bridge subprocess, fake remote MCP ser
     const text = h.state().transcripts[patchbaySessionId]!.find((b) => b.kind === "text");
     expect(text?.kind === "text" && JSON.parse(text.text)).toEqual({
       roots: [
-        { uri: "file:///repo/frontend", name: "frontend" },
-        { uri: "file:///repo/backend", name: "backend" },
+        { uri: pathToFileURL("/repo/frontend").toString(), name: "frontend" },
+        { uri: pathToFileURL("/repo/backend").toString(), name: "backend" },
       ],
     });
     // declared on top of the agent's own (empty) capabilities
@@ -465,7 +466,7 @@ describe("MCP bridge — real agent, real bridge subprocess, fake remote MCP ser
     const bridge = spawn(process.execPath, [BRIDGE], {
       env: {
         ...process.env,
-        ACP_PATCHBAY_IPC: join(tmpdir(), "patchbay-bridge-eof-none.sock"),
+        ACP_PATCHBAY_IPC: ipcAddress("patchbay-bridge-eof-none"),
         ACP_PATCHBAY_MCP_SERVER_ID: "github",
         ACP_PATCHBAY_MCP_SERVER_URL: "http://127.0.0.1:9/never",
         ACP_PATCHBAY_AUTH_HEADER: "",
@@ -485,7 +486,7 @@ describe("MCP bridge — real agent, real bridge subprocess, fake remote MCP ser
   // P15a: a dead IPC socket rejects every in-flight request instead of
   // hanging the caller (and, through it, the agent's tool call) forever.
   it("IpcClient rejects in-flight requests when the socket dies", async () => {
-    const socketPath = join(tmpdir(), `patchbay-ipc-dies-${process.pid}.sock`);
+    const socketPath = ipcAddress(`patchbay-ipc-dies-${process.pid}`);
     const sockets: Socket[] = [];
     const server = createNetServer((socket) => sockets.push(socket)); // accepts, never replies
     await new Promise<void>((resolve) => server.listen(socketPath, resolve));

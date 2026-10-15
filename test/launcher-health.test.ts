@@ -9,7 +9,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   bundledVersionInNpxCache,
   droppedOptionals,
@@ -149,7 +149,7 @@ describe("the npx entry", () => {
     lock.packages["node_modules/@scope/agent-acp"]!.optionalDependencies["@scope/bin-undescribed"] = "1.0.0";
     await writeFile(hidden, JSON.stringify(lock));
     expect(await droppedOptionals(dir, mergeEnv(process.env, { npm_config_cache: join(root, "empty-cache") }))).toEqual(["@scope/bin-dropped"]);
-  });
+  }, 120_000);
 
   // npm installs for its own node, which can differ from the editor's — an
   // x64 node under Rosetta or on Windows ARM. A stand-in node on the
@@ -179,7 +179,7 @@ describe("the npx entry", () => {
     expect(await npxEntryState(dir)).toBe("unfinished");
   });
 
-  describe("healNpxEntry — against the real npm, cache pointed at a temp dir", () => {
+  describe("healNpxEntry — against the real npm, cache pointed at a temp dir", { timeout: 120_000 }, () => {
     const launch = { command: "npx", args: ["-y", pkgSpec] };
     let cache: string;
     const env = () => mergeEnv(process.env, { npm_config_cache: cache });
@@ -217,7 +217,9 @@ describe("the npx entry", () => {
       await mkdir(join(dir, "concurrency.lock"));
       const phases: string[] = [];
       const healing = healNpxEntry(launch, env(), { log: nullLogger, onPhase: (p) => phases.push(p) });
-      await new Promise((r) => setTimeout(r, 1_500));
+      // released only once the heal is seen waiting on it — npm's own
+      // answer can take seconds to come back
+      await vi.waitFor(() => expect(phases).toHaveLength(1), { timeout: 60_000 });
       // The other npm finishes: its marker written, its lock released.
       await writeFile(join(dir, "node_modules", ".package-lock.json"), "{}");
       await rm(join(dir, "concurrency.lock"), { recursive: true });
@@ -367,7 +369,7 @@ describe("an install npm finished short — the real npm, a registry that cuts t
     });
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     registry = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
-  });
+  }, 120_000);
   afterAll(async () => {
     await new Promise((r) => server.close(r));
     await rm(work, { recursive: true, force: true });
