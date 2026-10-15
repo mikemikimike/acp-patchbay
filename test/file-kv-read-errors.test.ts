@@ -60,12 +60,13 @@ describe("FileKV — a file it can't read", () => {
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ a: 1, b: 2 });
   });
 
-  it("serves the last good read while the file can't be read, and reads again once it can", () => {
+  it("serves the last good read while the file can't be read, and reads again once it can", async () => {
     writeFileSync(file, JSON.stringify({ a: 1 }));
     const kv = new FileKV(file);
     expect(kv.get("a")).toBe(1);
-    // Another window's save lands, and this window can't read it yet.
-    writeFileSync(file, JSON.stringify({ a: 2 }));
+    // Another window's save lands, saved as every window saves (a new file
+    // renamed into place), and this window can't read it yet.
+    await new FileKV(file).update("a", 2);
     failing.set(file, "EBUSY");
     expect(kv.get("a")).toBe(1);
     failing.clear();
