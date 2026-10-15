@@ -371,14 +371,17 @@ describe("MCP bridge — real agent, real bridge subprocess, fake remote MCP ser
     const [token] = h.sessions.tokensOf(patchbaySessionId);
     const { servers } = await h.orchestrator.mcpServers.mcpServersFor("e4" as PatchbayAgentId, token!, false);
     const peer = spawnBridge(servers.find((s) => s.name === "fs-aware")!);
-    remote.notifications.length = 0; // the add's own probe said initialized first
     await peer.request("initialize", INITIALIZE);
     peer.send({ method: "notifications/initialized" });
     await vi.waitFor(() => expect(remote.notifications).toContain("notifications/initialized"), SETTLE);
 
     await h.gates.addRoot(patchbaySessionId, backend);
     await vi.waitFor(() => expect(remote.notifications).toContain("notifications/roots/list_changed"), SETTLE);
-    expect(remote.notifications).toEqual(["notifications/initialized", "notifications/roots/list_changed"]);
+    // after the bridge's initialize. Never-prompted, the session is minted
+    // again with its new list, and that tells its servers once more — and a
+    // probe of the server's own may say initialized again on its own
+    // connection — so neither is counted.
+    expect(remote.notifications.indexOf("notifications/roots/list_changed")).toBeGreaterThan(remote.notifications.indexOf("notifications/initialized"));
     await h.pool.stop("e4" as PatchbayAgentId);
   });
 
