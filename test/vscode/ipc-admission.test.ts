@@ -12,7 +12,7 @@ import { waitFor } from "./wait-for";
 /** The socket is this suite's subject: its path is the one thing it
  * reaches behind the views. */
 interface Internal {
-  orchestrator: { editorStateHost: { socketPath: string } };
+  host: { editorStateHost: { socketPath: string } };
 }
 
 /** One request on the socket, the way a spawned subprocess sends it —
@@ -36,7 +36,7 @@ function ask(socketPath: string, request: object): Promise<{ result?: unknown; e
 
 suite("IPC admission (issue #72)", () => {
   test("a token no attach minted gets nothing — editor reads, roots, forms and credentials alike", async () => {
-    const { orchestrator } = await internals<Internal>();
+    const { host } = await internals<Internal>();
     const requests = [
       { method: "getSelection" },
       { method: "getCurrentFile" },
@@ -46,7 +46,7 @@ suite("IPC admission (issue #72)", () => {
       { method: "getMcpServerToken", params: { patchbayMcpServerId: "github" } },
     ];
     for (const [i, request] of requests.entries()) {
-      const answer = await ask(orchestrator.editorStateHost.socketPath, { id: i + 1, patchbaySessionId: "ctx-1", ...request });
+      const answer = await ask(host.editorStateHost.socketPath, { id: i + 1, patchbaySessionId: "ctx-1", ...request });
       assert.strictEqual(answer.result, undefined, `${request.method} answered a forged token`);
       assert.match(answer.error ?? "", /unknown session token/, request.method);
     }

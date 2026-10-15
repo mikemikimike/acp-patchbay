@@ -4,7 +4,7 @@
 // Runs the child process behind an ACP terminal/create call. vscode-free (so
 // it's testable against the fake agent without a real extension host) —
 // visibility in a real VS Code terminal is a thin wrapper layered on top in
-// the extension host (orchestrator.ts), not this module's concern.
+// the extension host (orchestrator-host.ts), not this module's concern.
 import { spawn } from "node:child_process";
 import { killTree, treeSpawnOptions } from "./process-tree";
 import { mergeEnv } from "./spawn-resolve";

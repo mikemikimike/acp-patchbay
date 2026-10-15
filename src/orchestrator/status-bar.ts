@@ -4,7 +4,7 @@
 // Status bar content (active session, connection health, usage when
 // available): a pure function of canonical AgentViewState, kept
 // vscode-free so the formatting is unit-testable without a real extension
-// host. Orchestrator just assigns the result to a real StatusBarItem.
+// host. OrchestratorHost just assigns the result to a real StatusBarItem.
 import type { AgentViewState } from "../shared/protocol";
 
 export interface StatusBarContent {

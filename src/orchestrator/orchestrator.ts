@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Solutions Unity
 
-// Orchestrator: the Node process in the extension host — single source of
-// truth for sessions, capability tables, permission rules, secrets,
-// configuration. Webviews only ever see its snapshots and patches.
+// Orchestrator: the single source of truth for sessions, capability tables,
+// permission rules, secrets and configuration — every part of the window's
+// work that runs without VS Code, composed in one place. Webviews only ever
+// see its snapshots and patches; what it needs from the editor arrives
+// through its ports (orchestrator-host.ts fills them).
 import { existsSync, statSync } from "node:fs";
-import { mkdir, rm, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { RequestError } from "@agentclientprotocol/sdk";
-import * as vscode from "vscode";
 import {
   chatPaneShows,
   coalesceAgentViewEvent,
@@ -33,16 +34,14 @@ import {
   type WriteLocation,
   type WriteScopeView,
 } from "../shared/protocol";
-import { askNotice } from "../shared/ask-notice";
 import { openAsks, type OpenAsk } from "../shared/attention";
 import { AgentGates, endQuestion, type AgentOperation } from "./agent-gates";
 import { AgentsStore, type ConnectionOperations } from "./agents-store";
-import { ATTACHMENTS_DIR, chipId, fileChipLabel, pickedFileForm } from "./attachments";
+import { ATTACHMENTS_DIR } from "./attachments";
 import { AsksStore, type AskPlace } from "./asks-store";
 import { sessionOwner, type SessionOwner } from "./session-owner";
 import { PermissionBroker } from "./broker";
-import { applyFileWrite, ClientHost, clientRequestHooks } from "./client-host";
-import { configurationText, exportConfiguration, writeConfigurationFile } from "./config-export";
+import { ClientHost, clientRequestHooks } from "./client-host";
 import { readConfiguration, type ConfigurationRead } from "./config-import";
 import { applyImport, type ImportOutcome } from "./config-import-apply";
 import { localConfiguration, planImport, type ImportPlan } from "./config-import-plan";
@@ -53,27 +52,23 @@ import { DefaultsEditor } from "./defaults-editor";
 import { ChannelHost } from "./channel";
 import { count } from "../shared/count";
 import type { RequestUserInputParams } from "../mcp/ipc-protocol";
-import { EditorStateHost } from "./editor-state-host";
 import { McpServerGates } from "./mcp-server-gates";
 import { McpServersStore, type McpServerLineOperations } from "./mcp-servers-store";
 import { OAuthCallbackRegistry } from "./oauth-callback";
 import { elicitationResponseOf, formFieldsOf, type ElicitationScope } from "./readers/elicitation";
-import { runLoginTask } from "./login-task";
 import { AgentPool } from "./pool";
 import { agentErrorText, authRequiredReasonOf } from "./readers/agent-error";
 import { commandOf, killTree, reapOrphans } from "./process-tree";
 import { Cancelled, Queue } from "./queue";
-import type { ExportPart, McpServerWork } from "../shared/protocol";
+import type { McpServerWork } from "../shared/protocol";
 import { type AttachWork, SessionGates } from "./session-gates";
-import { normalizeRootPath, SessionsStore, type SessionConnectionOperations } from "./sessions-store";
-import { nonce } from "./webview-host";
+import { SessionsStore, type SessionConnectionOperations } from "./sessions-store";
 import { WireLog } from "./wire-log";
 import { listDoneSounds, playDoneSound } from "./sound";
 import {
   AcpRegistryStore,
   binaryDigestFor,
   registryAgentView,
-  resolveDistribution,
 } from "./stores/acp-registry";
 import { AgentConfigStore } from "./stores/agent-configs";
 import { ComposerKnobsStore } from "./stores/composer-knobs";
@@ -81,8 +76,6 @@ import { PreferencesStore } from "./stores/preferences";
 import { SecretEnvStore } from "./stores/secret-env";
 import { resolveLaunch, runtimeName, type DownloadAsk, type DownloadCheck } from "./runtime-resolver";
 import { DecisionAuditStore } from "./stores/decision-audit";
-import { FileKV } from "./stores/file-kv";
-import { recoverLegacyGlobalState } from "./stores/vscdb-recovery";
 import { McpServerConfigStore } from "./stores/mcp-server-configs";
 import { McpServerTokenStore } from "./stores/mcp-server-tokens";
 import { LastActiveSessionStore } from "./stores/last-active-session";
@@ -98,9 +91,13 @@ import { SessionContinuityStore } from "./stores/session-continuity";
 import { adoptStashedChips, SessionFilesStore } from "./stores/session-files";
 import { UsedCapabilityStore } from "./stores/used-capabilities";
 import { sessionsActiveToday } from "./session-stats";
-import { statusBarContent } from "./status-bar";
-import { editorLineOf } from "./tool-locations";
 import type { PatchbayAgentId, PatchbayAskId, PatchbayMcpServerId, PatchbaySessionId } from "../shared/ids";
+import type { AgentsStoreHooks } from "./agents-store";
+import type { KV } from "./stores/kv";
+import type { Logger } from "./logger";
+import type { OAuthUserAgent } from "./mcp-oauth";
+import type { SecretsLike } from "./stores/mcp-server-tokens";
+import type { WireLogSink } from "./wire-log";
 
 /** What the download prompt says of the check — only what is known: held
  * to a published digest, nothing published, or the registry unreadable. */
@@ -110,22 +107,52 @@ const DOWNLOAD_CHECK_TEXT: Record<DownloadCheck, string> = {
   "registry-unreachable": "The ACP registry couldn't be reached for its SHA-256, so the download can't be checked.",
 };
 
-/** A web page in the system browser — outside the editor, so neither
- * patchbay nor an agent's model sees the page or what the user types. The
- * one way patchbay opens a page: an MCP server's sign-in and an agent's link
- * alike. */
-function openInBrowser(href: string): Thenable<boolean> {
-  return vscode.env.openExternal(vscode.Uri.parse(href));
-}
-
-/** A modal question with one affirmative choice — true when it was chosen. */
-async function askModal(message: string, choice: string): Promise<boolean> {
-  return (await vscode.window.showWarningMessage(message, { modal: true }, choice)) === choice;
-}
-
 /** A permission card's title when neither the request nor the call it
  * asks about named one. */
 const PERMISSION_UNTITLED = "Permission request";
+
+/** Where the orchestrator lives: the storage it is given and the folder it
+ * works in. The host builds these from its editor; a test, from memory. */
+export interface OrchestratorPlace {
+  /** This machine's settings and records — shared by every window. */
+  machineKV: KV;
+  /** This workspace's own — its rules, its saved roots, its last session. */
+  workspaceKV: KV;
+  secrets: SecretsLike;
+  globalStoragePath: string;
+  /** The workspace's own storage folder; null in a window with none. */
+  storagePath: string | null;
+  workspaceCwd: string;
+  /** The bundled scripts an agent spawns as MCP servers. */
+  scripts: { editorServer: string; bridge: string };
+}
+
+/** What the orchestrator asks of the editor it runs in — every step that
+ * needs VS Code itself: its views' actions, its folders, its dialogs and
+ * notifications, its open documents, its browser, its output. */
+export interface OrchestratorPorts {
+  handleAction(action: Action): void;
+  workspaceRoots(): string[];
+  socketPath(): string;
+  notifyRootsChanged(contextToken: string): void;
+  redirectUri: OAuthUserAgent["redirectUri"];
+  openLink(href: string): PromiseLike<boolean>;
+  confirm(message: string, choice: string): Promise<boolean>;
+  warn(message: string): void;
+  runLoginTask: AgentsStoreHooks["runLoginTask"];
+  announceUpdates(): Promise<void>;
+  wireSink(): WireLogSink;
+  onWireLogStateChanged(active: boolean, until: string | null): void;
+  pinnedSessions(): readonly string[];
+  readTextFileLive(path: string): Promise<string>;
+  writeTextFileLive(path: string, content: string): Promise<void>;
+  closeAskDiffs(patchbayAskId: PatchbayAskId): Promise<void>;
+  connectStartupAgents(): Promise<void>;
+  focusComposer(): Promise<void>;
+  notifyAsk(patchbaySessionId: PatchbaySessionId, title: string, ask: OpenAsk): void;
+  syncDetachContext(): void;
+  warnCatch(context: string, what: string): (err: unknown) => void;
+}
 
 export class Orchestrator {
   readonly agentView: ChannelHost<AgentViewState, AgentViewEvent>;
@@ -157,7 +184,7 @@ export class Orchestrator {
   private readonly sessionFiles: SessionFilesStore;
   /** The updates already announced this window ("patchbayAgentId@version") — each
    * newer version is told once. */
-  private readonly announcedUpdates = new Set<string>();
+  readonly announcedUpdates = new Set<string>();
   readonly pool: AgentPool;
   /** The agents store without its connection operations — those are
    * reached only through the gates. */
@@ -168,10 +195,9 @@ export class Orchestrator {
   readonly sessions: Omit<SessionsStore, keyof SessionConnectionOperations>;
   readonly sessionGates: SessionGates;
   readonly capabilityTracker: CapabilityTracker;
-  private readonly defaultsEditor: DefaultsEditor;
+  readonly defaultsEditor: DefaultsEditor;
   readonly broker: PermissionBroker;
-  private readonly asks: AsksStore;
-  readonly editorStateHost: EditorStateHost;
+  readonly asks: AsksStore;
   readonly mcpServerTokens: McpServerTokenStore;
   /** The MCP-servers store without the operations that take time — those
    * are reached only through the MCP gates. */
@@ -186,7 +212,7 @@ export class Orchestrator {
    * cwd stands in when no folder is open. Derived once — VS Code restarts
    * the extension host when the first folder changes, so it is a process
    * constant; every consumer reads this field, none re-derives it. */
-  private readonly workspaceCwd: string;
+  readonly workspaceCwd: string;
   private readonly binaryCacheDir: string;
   private readonly clientHost: ClientHost;
   /** The session the last-open pointer names, by this window's id for it —
@@ -197,9 +223,8 @@ export class Orchestrator {
   private readonly pendingSyncs = new Map<string, Promise<void>>();
   /** The import the Import/Export page is reviewing: the file as read.
    * Lives as long as the review. */
-  private configImport: { id: number; fileName: string; read: ConfigurationRead } | null = null;
+  configImport: { id: number; fileName: string; read: ConfigurationRead } | null = null;
   private importCount = 0;
-  private readonly editorSubscriptions: vscode.Disposable[] = [];
   /** Visible agent-view surfaces → the session each pins (null = follows
    * the active-session pointer). Hidden or disposed surfaces are absent;
    * the view hosts report through noteSurface. */
@@ -207,54 +232,26 @@ export class Orchestrator {
   /** Open asks already accounted for by the native notification — each
    * new one is judged once, as it arrives. */
   private knownAsks = new Set<string>();
-  /** Sessions shown in their own detached panels (AgentPanelHost, assigned
-   * in extension.ts) — reaper-exempt like the active-in-view session: a
-   * session in its own window is being looked at. */
-  pinnedSessions: () => readonly string[] = () => [];
-  private statusBarItem!: vscode.StatusBarItem;
   /** Wire log (Audit page): channel and status pill exist only while it's
    * ever been / is on — a transient state gets transient surfaces. */
-  private wireLog!: WireLog;
-  private wireChannel: vscode.OutputChannel | null = null;
-  private wireStatusItem: vscode.StatusBarItem | null = null;
-  private wireStatusTimer: ReturnType<typeof setInterval> | null = null;
-
+  wireLog!: WireLog;
   constructor(
-    context: vscode.ExtensionContext,
-    private readonly log: vscode.LogOutputChannel,
+    place: OrchestratorPlace,
+    private readonly ports: OrchestratorPorts,
+    private readonly log: Logger,
   ) {
-    this.workspaceCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
-    this.binaryCacheDir = join(context.globalStorageUri.fsPath, "bin-cache");
-
-    // Machine scope lives in a file this extension owns (file-kv.ts), not
-    // in globalState: state.vscdb is editor-owned, shared by every
-    // extension, and has been observed truncated to zero bytes by an
-    // unclean shutdown — taking every agent config with it. First load
-    // drains any old globalState keys into the file.
-    const machineKV = new FileKV(
-      join(context.globalStorageUri.fsPath, "state.json"),
-      context.globalState,
-      (message) => log.info(`state file: ${message}`),
-    );
-    // One-shot fill of anything the 0.82.6 publisher-casing flip orphaned
-    // in the old-cased globalState row. FileKV updates take effect as they
-    // are issued (microtask-paced at worst), and this constructor only
-    // wires stores — their first real read comes later on the event loop,
-    // after the fill has fully landed.
-    void recoverLegacyGlobalState({
-      kv: machineKV,
-      vscdbPath: join(dirname(context.globalStorageUri.fsPath), "state.vscdb"),
-      log: (message) => log.info(`legacy recovery: ${message}`),
-    }).catch((error: unknown) => log.info(`legacy recovery failed: ${String(error)}`));
-    this.permissionRules = new PermissionRulesStore(context.workspaceState);
+    this.workspaceCwd = place.workspaceCwd;
+    this.binaryCacheDir = join(place.globalStoragePath, "bin-cache");
+    const machineKV = place.machineKV;
+    this.permissionRules = new PermissionRulesStore(place.workspaceKV);
     this.machinePermissionRules = new MachineRulesStore(machineKV);
     this.machineWriteScope = new MachineWriteScopeStore(machineKV);
-    this.workspaceSavedRoots = new SavedRootsStore(context.workspaceState, "workspace");
+    this.workspaceSavedRoots = new SavedRootsStore(place.workspaceKV, "workspace");
     this.machineSavedRoots = new SavedRootsStore(machineKV, "machine");
-    this.decisionAudit = new DecisionAuditStore(context.storageUri?.fsPath ?? null);
-    this.lastConnected = new LastConnectedStore(context.workspaceState);
+    this.decisionAudit = new DecisionAuditStore(place.storagePath);
+    this.lastConnected = new LastConnectedStore(place.workspaceKV);
     this.defaultAgentFold = new DefaultAgentFoldStore(machineKV);
-    this.lastActiveSession = new LastActiveSessionStore(context.workspaceState);
+    this.lastActiveSession = new LastActiveSessionStore(place.workspaceKV);
     // Agents and MCP servers are developer-env, not code-env: global to
     // this machine, never a repo-committed file. Deliberately global-only —
     // workspace binding may return later as an opt-in (see
@@ -265,21 +262,15 @@ export class Orchestrator {
     this.preferences = new PreferencesStore(machineKV);
     this.composerKnobs = new ComposerKnobsStore(machineKV);
     this.sessionContinuity = new SessionContinuityStore(machineKV);
-    this.sessionFiles = new SessionFilesStore(join(context.globalStorageUri.fsPath, "session-files"));
+    this.sessionFiles = new SessionFilesStore(join(place.globalStoragePath, "session-files"));
     this.usedCapabilities = new UsedCapabilityStore(machineKV);
     this.authLocks = new AuthLockStore(machineKV);
     this.spawnRegistry = new SpawnRegistryStore(machineKV);
-    this.agentEnv = new SecretEnvStore(context.secrets, "acpPatchbay.agent", (m) => log.warn(`agent env: ${m}`));
-    this.mcpServerEnv = new SecretEnvStore(context.secrets, "acpPatchbay.integration", (m) =>
+    this.agentEnv = new SecretEnvStore(place.secrets, "acpPatchbay.agent", (m) => log.warn(`agent env: ${m}`));
+    this.mcpServerEnv = new SecretEnvStore(place.secrets, "acpPatchbay.integration", (m) =>
       log.warn(`MCP server env: ${m}`),
     );
-    this.mcpServerTokens = new McpServerTokenStore(context.secrets);
-    // OAuth browser/redirect step:
-    // the redirect target is this extension's own vscode:// URI, passed
-    // through asExternalUri so VS Code resolves it correctly under SSH
-    // remote / WSL / Codespaces — never a hand-rolled 127.0.0.1 server.
-    // extension.ts's registerUriHandler feeds callbacks into oauthCallbacks.
-    const extensionId = context.extension.id; // "solutionsunity.acp-patchbay"
+    this.mcpServerTokens = new McpServerTokenStore(place.secrets);
     // The management side's tools for MCP servers: a line per server (its
     // probe, its remove) and one per connect under way, and the gates over
     // them. What the lines hold is the MCP side's busy state, so every move
@@ -295,22 +286,17 @@ export class Orchestrator {
       { emit: (...events) => this.settings.emit(...events) },
       { busy: (patchbayMcpServerId) => serverLine.held(patchbayMcpServerId), connecting: () => connectLine.holding() },
       {
-        editorServerScript: vscode.Uri.joinPath(context.extensionUri, "out", "mcp-server.js").fsPath,
-        bridgeScript: vscode.Uri.joinPath(context.extensionUri, "out", "mcp-bridge.js").fsPath,
-        socketPath: () => this.editorStateHost.socketPath,
+        editorServerScript: place.scripts.editorServer,
+        bridgeScript: place.scripts.bridge,
+        socketPath: () => this.ports.socketPath(),
         crossing: (value) => this.wireLog.registerSecret(value),
       },
       this.workspaceCwd,
       {
-        redirectUri: async () => {
-          const callback = await vscode.env.asExternalUri(
-            vscode.Uri.parse(`${vscode.env.uriScheme}://${extensionId}/oauth-callback`),
-          );
-          return callback.toString(true);
-        },
+        redirectUri: () => this.ports.redirectUri(),
         authorize: async (authorizationUrl, state, signal) => {
           const pending = this.oauthCallbacks.wait(state, signal);
-          await openInBrowser(authorizationUrl);
+          await this.ports.openLink(authorizationUrl);
           return pending;
         },
       },
@@ -321,9 +307,8 @@ export class Orchestrator {
 
     // The registry starts empty — the picker fills when the first fetch
     // (cache or network) resolves and publishes via registryChanged.
-    const onAction = (action: Action) => this.handleAction(action);
-    const workspaceRootsView = () =>
-      (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+    const onAction = (action: Action) => this.ports.handleAction(action);
+    const workspaceRootsView = () => this.ports.workspaceRoots();
     this.agentView = new ChannelHost(
       {
         ...initialAgentViewState,
@@ -358,12 +343,12 @@ export class Orchestrator {
     );
 
     this.acpRegistry = new AcpRegistryStore(
-      join(context.globalStorageUri.fsPath, "registry"),
+      join(place.globalStoragePath, "registry"),
       // A fetch that landed is the registry's fresh word — the moment a
       // newer version becomes news (the cached copy at start is not).
       () => {
         this.publishRegistry();
-        void this.announceUpdates();
+        void this.ports.announceUpdates();
       },
       log,
     );
@@ -371,11 +356,8 @@ export class Orchestrator {
     // Wire log: sink is lazy (no empty Output channel for a feature never
     // used); state changes feed the settings channel and the status pill.
     this.wireLog = new WireLog(
-      () => {
-        this.wireChannel ??= vscode.window.createOutputChannel("ACP Patchbay — Wire");
-        return this.wireChannel;
-      },
-      (active, until) => this.onWireLogStateChanged(active, until),
+      () => this.ports.wireSink(),
+      (active, until) => this.ports.onWireLogStateChanged(active, until),
     );
 
     // Pool hooks close over `this` and only fire once the pool is actually
@@ -525,55 +507,6 @@ export class Orchestrator {
           readRegistry: async () => (await this.acpRegistry.read("download")).ok,
         }),
     });
-    // The socket answers only through what each attach was given: its
-    // token, the session it served, and the servers it got.
-    this.editorStateHost = new EditorStateHost(String(process.pid), {
-      admits: (contextToken) => this.sessions.admits(contextToken),
-      requestUserInput: (contextToken, params) => this.requestUserInput(contextToken, params),
-      // Same token discipline as requestUserInput: a token whose session is
-      // gone has no roots.
-      sessionRoots: (contextToken) => {
-        const patchbaySessionId = this.sessions.sessionOfToken(contextToken);
-        return patchbaySessionId === undefined ? [] : this.sessions.rootsOf(patchbaySessionId);
-      },
-      getMcpServerToken: (contextToken, patchbayMcpServerId) => {
-        const patchbayAgentId = this.sessions.bridgedTo(contextToken, patchbayMcpServerId);
-        return patchbayAgentId === undefined ? Promise.resolve(null) : this.mcpServers.credentialFor(patchbayMcpServerId, patchbayAgentId);
-      },
-    });
-    this.editorStateHost.start();
-
-    // Live editor context for the composer (the selection
-    // ghost chip appears only while the IDE has a selection; the @ mention
-    // picker lists open editors). Position/paths only — the selection text
-    // is read host-side at the moment the user solidifies it. High-frequency
-    // sources; the channel's coalescing keeps only the latest.
-    const pushEditorContext = () => {
-      const s = this.editorStateHost.getSelection();
-      this.agentView.emit({
-        kind: "editorContextChanged",
-        selection: s === null ? null : { file: s.file, startLine: s.startLine, endLine: s.endLine },
-        openEditors: this.editorStateHost.getOpenEditors(),
-      });
-    };
-    this.editorSubscriptions.push(
-      vscode.window.onDidChangeTextEditorSelection(pushEditorContext),
-      vscode.window.onDidChangeActiveTextEditor(pushEditorContext),
-      vscode.workspace.onDidOpenTextDocument(pushEditorContext),
-      vscode.workspace.onDidCloseTextDocument(pushEditorContext),
-      vscode.workspace.onDidChangeTextDocument(pushEditorContext), // dirty-flag flips
-      vscode.workspace.onDidSaveTextDocument(pushEditorContext),
-      vscode.workspace.onDidChangeWorkspaceFolders(() => {
-        // The chip and the wire read the same folders: the view re-renders
-        // from reality, and every live session's additional directories are
-        // re-applied so the agent's list moves with it.
-        this.agentView.emit({ kind: "workspaceRootsChanged", roots: workspaceRootsView() });
-        // the first folder in, or the last out, opens or closes this
-        // workspace's saved list
-        this.publishSavedRoots();
-        void this.sessionGates.reapplyWorkspaceRoots().catch(this.logCatch("reapply workspace roots"));
-      }),
-    );
 
     const sessions = new SessionsStore(
       this.pool,
@@ -608,7 +541,7 @@ export class Orchestrator {
         rootsChanged: (patchbaySessionId) => {
           // Every subprocess of the session was spawned with one of its
           // tokens (one per attach; a re-attach mints a fresh one).
-          for (const token of this.sessions.tokensOf(patchbaySessionId)) this.editorStateHost.notifyRootsChanged(token);
+          for (const token of this.sessions.tokensOf(patchbaySessionId)) this.ports.notifyRootsChanged(token);
         },
         workspaceRoots: workspaceRootsView,
         savedRoots: () => {
@@ -623,7 +556,7 @@ export class Orchestrator {
         capabilities: (patchbayAgentId) => this.agents.matrix(patchbayAgentId),
         isActiveSession: (patchbaySessionId) =>
           this.agentView.current.activePatchbaySessionId === patchbaySessionId ||
-          this.pinnedSessions().includes(patchbaySessionId),
+          this.ports.pinnedSessions().includes(patchbaySessionId),
         isUnseen: (patchbaySessionId) =>
           this.agentView.current.sessions.find((s) => s.id === patchbaySessionId)?.unseen === true,
         cancelAsks: (patchbaySessionId) => this.asks.stopSession(patchbaySessionId),
@@ -715,7 +648,7 @@ export class Orchestrator {
         busy: (patchbayAgentId) => queue.held(patchbayAgentId),
         workspaceCwd: this.workspaceCwd,
         binaryCacheDir: this.binaryCacheDir,
-        probeRootBase: join(context.globalStorageUri.fsPath, "probe"),
+        probeRootBase: join(place.globalStoragePath, "probe"),
       },
       {
         emit: (...events) => {
@@ -723,8 +656,8 @@ export class Orchestrator {
           this.settings.emit(...events);
         },
         emitSettings: (...events) => this.settings.emit(...events),
-        warn: (message) => void vscode.window.showWarningMessage(message),
-        runLoginTask: (name, recipe) => runLoginTask(name, recipe),
+        warn: (message) => this.ports.warn(message),
+        runLoginTask: (name, recipe) => this.ports.runLoginTask(name, recipe),
         removed: (patchbayAgentId) => {
           this.sessions.forgetAgentSessions(patchbayAgentId);
           void this.mcpServers.forgetAgent(patchbayAgentId).catch(this.logCatch(`forget ${patchbayAgentId} in MCP reach`));
@@ -743,7 +676,7 @@ export class Orchestrator {
     this.gates = new AgentGates(agents, queue, {
       name: (patchbayAgentId) => agents.name(patchbayAgentId),
       openWork: (patchbayAgentId) => this.sessions.openWork(patchbayAgentId),
-      confirm: askModal,
+      confirm: (message, choice) => this.ports.confirm(message, choice),
     });
     // The editor's sessions exist only to serve the open panel — they end
     // with it.
@@ -757,8 +690,8 @@ export class Orchestrator {
       turnOf: (patchbaySessionId) => this.sessions.turnOf(patchbaySessionId),
       onAuditWritten: () => void this.refreshAuditTail(),
       pairOf: (patchbaySessionId) => this.sessions.pairOf(patchbaySessionId),
-      openLink: (href) => void openInBrowser(href),
-      ended: (patchbayAskId) => void this.closeAskDiffs(patchbayAskId).catch(this.logCatch(`closeAskDiffs ${patchbayAskId}`)),
+      openLink: (href) => void this.ports.openLink(href),
+      ended: (patchbayAskId) => void this.ports.closeAskDiffs(patchbayAskId).catch(this.logCatch(`closeAskDiffs ${patchbayAskId}`)),
     });
     this.broker = new PermissionBroker(
       this.permissionRules,
@@ -767,12 +700,12 @@ export class Orchestrator {
       (text) => this.wireLog.redact(text),
       this.machinePermissionRules,
       this.machineWriteScope,
-      (path) => this.readTextFileLive(path),
+      (path) => this.ports.readTextFileLive(path),
     );
     this.clientHost = new ClientHost({
       broker: this.broker,
-      readLive: (path) => this.readTextFileLive(path),
-      writeLive: (path, content) => this.writeTextFileLive(path, content),
+      readLive: (path) => this.ports.readTextFileLive(path),
+      writeLive: (path, content) => this.ports.writeTextFileLive(path, content),
       emit: (event) => this.agentView.emit(event),
       trackProcess: (handle) => {
         if (handle.pid === null) return;
@@ -796,20 +729,13 @@ export class Orchestrator {
     });
 
     // Projections of canonical Agent View state via ChannelHost.onChange —
-    // the status bar (native surface, no webview in the path) and the
-    // Settings "active today" tile (another channel, same source): same
+    // the Settings "active today" tile (another channel, same source): same
     // state, read where it lives, never a second counter.
-    this.statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    this.statusBarItem.command = "acpPatchbay.focusComposer";
-    this.statusBarItem.show();
     this.agentView.onChange(() => {
-      this.refreshStatusBar();
       this.publishSessionStats();
       this.notifyNewAsks();
     });
-    this.refreshStatusBar();
     this.publishSessionStats();
-    this.syncDetachContext();
 
     // Orphan reaping strictly before any startup agent spawns: the
     // registry must be settled before new pids start landing in it. Chips
@@ -819,7 +745,7 @@ export class Orchestrator {
       .then(() =>
         adoptStashedChips(this.sessionContinuity, this.sessionFiles, ATTACHMENTS_DIR).catch(this.logCatch("adopt stashed chips")),
       )
-      .then(() => this.connectStartupAgents())
+      .then(() => this.ports.connectStartupAgents())
       // Settles the view's restore hold no matter how the connects went —
       // the loading page must never outlive the startup sequence.
       .finally(() => this.agentView.emit({ kind: "startupSettled" }));
@@ -845,7 +771,7 @@ export class Orchestrator {
   /** "Disconnect & erase all data": everything stopped, the erase sweep
    * (erase-all.ts owns the ordering constraint), everything republished —
    * empty. Never automatic; the Settings action is the only caller. */
-  private async eraseEverything(): Promise<void> {
+  async eraseEverything(): Promise<void> {
     this.log.info("erase all data: stopping every process");
     await this.stopEverything();
     await eraseAllData({
@@ -881,54 +807,9 @@ export class Orchestrator {
     this.log.info("erase all data: complete — factory state");
   }
 
-  /** Export: the picked parts read fresh from the stores, written where
-   * the user says. */
-  private async exportToFile(parts: readonly ExportPart[]): Promise<void> {
-    const file = await exportConfiguration(new Set(parts), {
-      entries: [
-        this.agentConfigs,
-        this.composerKnobs,
-        this.mcpServerConfigs,
-        this.preferences,
-        this.machinePermissionRules,
-        this.machineWriteScope,
-        this.machineSavedRoots,
-      ],
-      agents: {
-        ids: () => this.agentConfigs.list().map((c) => c.id),
-        env: (id) => this.agentEnv.get(id),
-      },
-      mcpServers: {
-        ids: () => this.mcpServerConfigs.list().map((c) => c.id),
-        env: (id) => this.mcpServerEnv.get(id),
-        headerKey: (id) => this.mcpServers.headerKey(id as PatchbayMcpServerId),
-      },
-    });
-    const target = await vscode.window.showSaveDialog({
-      title: "Export patchbay configuration",
-      defaultUri: vscode.Uri.file(join(homedir(), `patchbay-config-${file.exportedAt.slice(0, 10)}.json`)),
-      filters: { JSON: ["json"] },
-    });
-    if (target === undefined) return;
-    try {
-      // A remote window's dialog also offers the machine the editor runs on
-      // (Windows, from WSL): that file is not on this host's disk, so it is
-      // written through the editor's file system, where no mode can be set.
-      if (target.scheme === "file") await writeConfigurationFile(target.fsPath, file);
-      else await vscode.workspace.fs.writeFile(target, Buffer.from(configurationText(file), "utf8"));
-    } catch (err) {
-      this.log.error(`export to ${target.toString()}: ${err instanceof Error ? err.message : String(err)}`);
-      void vscode.window.showErrorMessage(`Export failed — ${err instanceof Error ? err.message : String(err)}`);
-      return;
-    }
-    void vscode.window.showInformationMessage(
-      `Exported to ${target.fsPath}. It holds your env values and keys in plain text — keep it as you would a password.`,
-    );
-  }
-
   /** Import, first half: the file the user picked, read and set against
    * this machine for review — or refused, saying why. Nothing moves yet. */
-  private async readConfigImport(fileName: string, text: string): Promise<void> {
+  async readConfigImport(fileName: string, text: string): Promise<void> {
     const id = ++this.importCount;
     this.configImport = null;
     const outcome = readConfiguration(text);
@@ -959,7 +840,7 @@ export class Orchestrator {
    * the one question first when work is open, everything stopped, the
    * items written, everything republished, and what was running (and what
    * connects on window open) connected again. */
-  private async applyConfigImport(importId: number, take: readonly string[]): Promise<void> {
+  async applyConfigImport(importId: number, take: readonly string[]): Promise<void> {
     const pending = this.configImport;
     if (pending === null || pending.id !== importId) return;
     const work = this.agentConfigs.list().reduce(
@@ -970,7 +851,7 @@ export class Orchestrator {
       { conversations: 0, turns: 0 },
     );
     const question = endQuestion("import", "patchbay", work);
-    if (question !== null && !(await askModal(question.message, question.choice))) return;
+    if (question !== null && !(await this.ports.confirm(question.message, question.choice))) return;
     if (this.configImport?.id !== importId) return;
     this.configImport = null;
     const { fileName } = pending;
@@ -1006,7 +887,7 @@ export class Orchestrator {
       kind: "configImportChanged",
       configImport: { id: importId, stage: "applied", fileName, landed: outcome.landed, failures: outcome.failures },
     });
-    await this.connectStartupAgents();
+    await this.ports.connectStartupAgents();
   }
 
   /** A file's plan against this machine as its stores hold it now. */
@@ -1062,7 +943,7 @@ export class Orchestrator {
     const preferences = this.preferences.get();
     this.settings.emit({ kind: "preferencesChanged", preferences });
     this.agentView.emit({ kind: "preferencesChanged", preferences });
-    this.syncDetachContext();
+    this.ports.syncDetachContext();
     await this.refreshAuditTail();
     await this.publishDataInventory();
   }
@@ -1088,33 +969,6 @@ export class Orchestrator {
     await Promise.all([this.gates.stopAll(), this.sessionGates.endAll(), this.mcpServerGates.endAll()]);
   }
 
-  /** Startup: what the agents store says this window opens with is
-   * connected, and the last open session is restored once its own agent's
-   * connect has settled — a connect waits for its agent's answer however
-   * long it takes, and another agent's slow download or silent start is no
-   * reason to keep the chat away. A bare id still to fold needs every
-   * startup list, so it (and a pointer at an agent nothing started) waits
-   * for them all. The raw
-   * `acpPatchbay.defaultAgent` value stays readable after the
-   * contribution's removal — unregistered keys still surface — and the
-   * store folds it into the per-agent flag. */
-  private async connectStartupAgents(): Promise<void> {
-    const legacy = vscode.workspace.getConfiguration("acpPatchbay").get<string>("defaultAgent", "");
-    const sources = await this.agents.startupSources(legacy);
-    const pointed = this.lastActiveSession.get()?.patchbayAgentId;
-    let pointedSettled!: () => void;
-    const pointedConnect = new Promise<void>((resolve) => (pointedSettled = resolve));
-    const all = Promise.allSettled(
-      sources.map((source) =>
-        this.connectFrom(source).then((patchbayAgentId) => {
-          if (patchbayAgentId !== undefined && patchbayAgentId === pointed) pointedSettled();
-        }),
-      ),
-    );
-    await Promise.race([pointedConnect, all]);
-    await this.restoreLastActiveSession();
-  }
-
   /** Reload continuity's third rung (flag → list → pointer): return to the
    * session that was open when the window went down. One rule, found or
    * not: the pointer (an agent and its id for the session) is looked up in
@@ -1127,7 +981,7 @@ export class Orchestrator {
    * not erase where a later window could still return. A bare id an older
    * version stored is folded into its pair against the same lists. Never
    * spawns a process the startup rules didn't start. */
-  private async restoreLastActiveSession(): Promise<void> {
+  async restoreLastActiveSession(): Promise<void> {
     if (!this.lastActiveSession.stored()) return;
     await Promise.allSettled([...this.pendingSyncs.values()]);
     const pointer = await this.lastActiveSession.resolve((sessionId) => this.sessions.pairsNamed(sessionId));
@@ -1138,138 +992,12 @@ export class Orchestrator {
     this.sessionGates.activate(patchbaySessionId);
   }
 
-  /** Mirrors the detachWindows preference into a when-clause context key —
-   * package.json gates the view-title button and the palette command on it
-   * (native surfaces can't read the store; this is their one bridge). */
-  private syncDetachContext(): void {
-    void vscode.commands.executeCommand(
-      "setContext",
-      "acpPatchbay.detachEnabled",
-      this.preferences.get().detachWindows,
-    );
-  }
-
-  /** Active session · agent health · usage when reported —
-   * click jumps to the Agent View, which already shows that same session. */
-  private refreshStatusBar(): void {
-    const { text, tooltip } = statusBarContent(this.agentView.current);
-    this.statusBarItem.text = text;
-    this.statusBarItem.tooltip = tooltip;
-  }
-
-  /** Command palette: "new session" — every configured
-   * agent with its readiness inline, single agent skips the pick, and a
-   * not-running choice connects on demand (the same startChat path as
-   * the view's "+"). */
-  async newSessionCommand(): Promise<void> {
-    const agents = this.agents.rows();
-    if (agents.length === 0) {
-      void vscode.window.showInformationMessage("Add an agent first — Patchbay Settings › Agents.");
-      this.handleAction({ kind: "openSettings", section: "agents" });
-      return;
-    }
-    let patchbayAgentId = agents[0]!.id;
-    if (agents.length > 1) {
-      const picked = await vscode.window.showQuickPick(
-        agents.map((a) => ({
-          label: a.name,
-          description: a.detail ?? (a.status === "running" ? "ready" : a.status === "untested" ? "never connected" : a.status),
-          patchbayAgentId: a.id,
-        })),
-        { placeHolder: "New session with…" },
-      );
-      if (picked === undefined) return;
-      patchbayAgentId = picked.patchbayAgentId;
-    }
-    await this.startChat(patchbayAgentId);
-    await this.focusComposer();
-  }
-
-  /** "Switch session." The pick is a read of the list — the same re-read
-   * as the drawer opening — and, like the drawer, it opens on what is known
-   * now and re-fills when the re-read lands: a running agent that never
-   * answers must not hold the palette hostage (pool requests carry no
-   * deadline). */
-  async switchSessionCommand(): Promise<void> {
-    type Item = vscode.QuickPickItem & { patchbaySessionId: PatchbaySessionId };
-    const items = (): Item[] =>
-      this.agentView.current.sessions.map((s) => ({
-        label: s.title,
-        description: this.agents.name(s.patchbayAgentId) ?? s.patchbayAgentId,
-        patchbaySessionId: s.id,
-      }));
-    const pick = vscode.window.createQuickPick<Item>();
-    pick.placeholder = "Switch to session…";
-    pick.items = items();
-    pick.busy = true;
-    const picked = await new Promise<Item | undefined>((resolve) => {
-      let open = true;
-      pick.onDidAccept(() => resolve(pick.selectedItems[0]));
-      pick.onDidHide(() => {
-        open = false;
-        resolve(undefined);
-      });
-      void this.sessions.syncRunningAgents().finally(() => {
-        if (!open) return;
-        pick.items = items();
-        pick.busy = false;
-        if (pick.items.length === 0) {
-          void vscode.window.showInformationMessage("No sessions yet.");
-          pick.hide();
-        }
-      });
-      pick.show();
-    });
-    pick.dispose();
-    if (picked === undefined) return;
-    await this.revealSession(picked.patchbaySessionId);
-  }
-
-  /** "Connect agent" — the palette shortcut, through the same `connectFrom`
-   * Settings uses: a saved agent connects as it stands; a registry entry or
-   * a command line adds an agent first — so an entry added before adds a
-   * second one, as in Settings. */
-  async connectAgentCommand(): Promise<void> {
-    const items: (vscode.QuickPickItem & { source?: ConnectAgentSource })[] = [
-      ...this.agents.rows().map((row) => ({ label: row.name, description: row.status, source: { patchbayAgentId: row.id } })),
-      ...this.acpRegistry.current().agents
-        .filter((a) => !("error" in resolveDistribution(a)))
-        .map((a) => ({ label: a.name, description: "add from the ACP registry", source: { registryId: a.id } })),
-      { label: "Custom command…", description: "add" },
-    ];
-    const picked = await vscode.window.showQuickPick(items, { placeHolder: "Connect agent…" });
-    if (picked === undefined) return;
-    if (picked.source === undefined) {
-      const command = await vscode.window.showInputBox({ placeHolder: "command that speaks ACP…" });
-      if (command === undefined || command.trim() === "") return;
-      await this.connectFrom({ command });
-    } else {
-      await this.connectFrom(picked.source);
-    }
-    await this.focusComposer();
-  }
-
-  /** Editor right-click ("add to context / ask the agent
-   * about it") — reuses the composer's own add-selection action so there's
-   * one path for "a selection became context," native gesture or button
-   * alike; focusing the Agent View afterward is what lets the user ask
-   * about it, the same composer flow either way. */
-  async addSelectionToContextCommand(): Promise<void> {
-    const patchbaySessionId = this.agentView.current.activePatchbaySessionId;
-    if (patchbaySessionId === null) {
-      void vscode.window.showInformationMessage("Start a Patchbay session first, then add a selection.");
-      return;
-    }
-    this.handleAction({ kind: "addSelectionContext", patchbaySessionId });
-    await this.focusComposer();
-  }
-
   /** The local MCP server's `request_user_input` tool — the fallback for an
    * agent that asks through MCP instead of ACP's own elicitation request.
    * `contextToken` is what the MCP server subprocess was spawned with —
    * translated back to the session it was minted for, so the form lands in
    * the right transcript. */
-  private requestUserInput(
+  requestUserInput(
     contextToken: string,
     params: RequestUserInputParams,
   ): Promise<ElicitationAnswer> {
@@ -1334,198 +1062,6 @@ export class Orchestrator {
     const count = sessionsActiveToday(this.agentView.current.sessions);
     if (count === this.settings.current.sessionsActiveToday) return;
     this.settings.emit({ kind: "sessionStatsChanged", sessionsActiveToday: count });
-  }
-
-  /** Opens a file in the editor its type calls for (text, image preview,
-   * …). A location line puts the cursor on that line's first non-blank
-   * character, scrolled into view; a file with no text to land in (binary)
-   * opens without one. A directory — some agents report a shell command's
-   * working directory as its location — is revealed in the Explorer, never
-   * opened as a folder. */
-  private async openFileAt(path: string, line: number | undefined): Promise<void> {
-    const uri = vscode.Uri.file(path);
-    if ((await vscode.workspace.fs.stat(uri)).type & vscode.FileType.Directory) {
-      await vscode.commands.executeCommand("revealInExplorer", uri);
-      return;
-    }
-    let selection: vscode.Range | undefined;
-    if (line !== undefined) {
-      const doc = await vscode.workspace.openTextDocument(uri).then(
-        (d) => d,
-        () => null,
-      );
-      if (doc !== null) {
-        const at = doc.lineAt(editorLineOf(line, doc.lineCount));
-        const pos = new vscode.Position(at.lineNumber, at.firstNonWhitespaceCharacterIndex);
-        selection = new vscode.Range(pos, pos);
-      }
-    }
-    await vscode.commands.executeCommand("vscode.open", uri, selection === undefined ? undefined : { selection });
-  }
-
-  /** Live-buffer read: an open, possibly-unsaved editor wins over disk
-   * ("the agent sees what the user sees"). Falls back to disk for files
-   * with no open editor. */
-  private async readTextFileLive(path: string): Promise<string> {
-    const uri = vscode.Uri.file(path);
-    const open = vscode.workspace.textDocuments.find((d) => d.uri.fsPath === path);
-    if (open !== undefined) return open.getText();
-    const bytes = await vscode.workspace.fs.readFile(uri);
-    return Buffer.from(bytes).toString("utf8");
-  }
-
-  /** Live-buffer write — the mirror of readTextFileLive: when the file is
-   * open in an editor the write lands in that
-   * buffer via WorkspaceEdit, then saves — the user sees the change, it joins
-   * the undo stack, and disk matches the buffer at once. This closes the
-   * divergence window both ways: no more agent write silently lost to a stale
-   * dirty buffer's next save, no more terminal reading a disk the buffer
-   * contradicts. Falls back to a plain disk write when no editor holds the
-   * file. A failed apply throws — the agent must know the write didn't land;
-   * a silent disk fallback would recreate the divergence. */
-  private async writeTextFileLive(path: string, content: string): Promise<void> {
-    const open = vscode.workspace.textDocuments.find((d) => d.uri.fsPath === path);
-    if (open === undefined) return applyFileWrite(path, content);
-    const edit = new vscode.WorkspaceEdit();
-    edit.replace(open.uri, new vscode.Range(open.positionAt(0), open.positionAt(open.getText().length)), content);
-    if (!(await vscode.workspace.applyEdit(edit))) {
-      throw new Error(`failed to apply write to the open editor for ${path}`);
-    }
-    // save() resolves false for a non-dirty doc (identical content → no-op
-    // edit), which is success here, not failure — only save a dirty buffer.
-    if (open.isDirty && !(await open.save())) {
-      throw new Error(`failed to save ${path} after write`);
-    }
-  }
-
-  /** A rendered mermaid SVG, opened as an editor-area panel — the agent
-   * view's column is narrow (even the in-chat fullscreen stops at it); the
-   * files area is where a diagram can breathe. Pan/zoom is hand-rolled
-   * vanilla (wheel = zoom around cursor, drag = pan, double-click = reset):
-   * CSP allows exactly one nonce'd inline script for it — a deliberate,
-   * recorded widening of this panel's previous no-script posture, still
-   * default-src 'none' and the SVG is mermaid's sanitized output. */
-  private openDiagram(svg: string): void {
-    const panel = vscode.window.createWebviewPanel(
-      "acpPatchbay.diagram",
-      "Diagram",
-      vscode.ViewColumn.Active,
-      { enableScripts: true },
-    );
-    const n = nonce();
-    panel.webview.html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy"
-        content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${n}'; img-src data:;">
-  <style>
-    body { margin: 0; height: 100vh; overflow: hidden; cursor: grab; }
-    body.dragging { cursor: grabbing; }
-    #stage { height: 100%; display: grid; place-items: center; }
-    #wrap { transform-origin: 0 0; }
-    svg { max-width: 95vw; max-height: 95vh; height: auto; display: block; }
-  </style>
-</head>
-<body>
-  <div id="stage"><div id="wrap">${svg}</div></div>
-  <script nonce="${n}">
-    "use strict";
-    const wrap = document.getElementById("wrap");
-    let scale = 1, x = 0, y = 0, drag = null;
-    const apply = () => { wrap.style.transform = \`translate(\${x}px, \${y}px) scale(\${scale})\`; };
-    window.addEventListener("wheel", (e) => {
-      e.preventDefault();
-      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-      const next = Math.min(10, Math.max(0.2, scale * factor));
-      // keep the point under the cursor fixed while scaling
-      x = e.clientX - (e.clientX - x) * (next / scale);
-      y = e.clientY - (e.clientY - y) * (next / scale);
-      scale = next;
-      apply();
-    }, { passive: false });
-    window.addEventListener("pointerdown", (e) => {
-      drag = { x: e.clientX, y: e.clientY };
-      document.body.classList.add("dragging");
-    });
-    window.addEventListener("pointermove", (e) => {
-      if (drag === null) return;
-      x += e.clientX - drag.x;
-      y += e.clientY - drag.y;
-      drag = { x: e.clientX, y: e.clientY };
-      apply();
-    });
-    const end = () => { drag = null; document.body.classList.remove("dragging"); };
-    window.addEventListener("pointerup", end);
-    window.addEventListener("pointercancel", end);
-    window.addEventListener("dblclick", () => { scale = 1; x = 0; y = 0; apply(); });
-  </script>
-</body>
-</html>`;
-  }
-
-  /** Where one scope's diff texts are written — a tool call's, or an
-   * ask's. */
-  private diffDir(scope: string): string {
-    return join(tmpdir(), "acp-patchbay-diffs", scope.replace(/[^a-zA-Z0-9_-]/g, "_"));
-  }
-
-  /** One stash text → one temp file with a real URI, for vscode.diff — both
-   * native-diff openers share this (diffs always open in VS Code's own diff
-   * editor, never an inline webview diff). */
-  private async diffTempFile(scope: string, fileName: string, content: string): Promise<vscode.Uri> {
-    const dir = this.diffDir(scope);
-    await mkdir(dir, { recursive: true });
-    const file = join(dir, fileName);
-    await writeFile(file, content, "utf8");
-    return vscode.Uri.file(file);
-  }
-
-  /** What a pending ask would change, in full, one tab per file — the card
-   * shows at most a preview, and the decision deserves the whole change.
-   * Left: the file as it was when asked (a new file diffs against empty);
-   * right: what the agent would write. Both are snapshots the asks store
-   * holds only while the ask is open, so a stale click after it ended is a
-   * no-op, like the other openers. */
-  private async openProposedDiff(patchbayAskId: PatchbayAskId): Promise<void> {
-    for (const [i, proposal] of this.asks.proposals(patchbayAskId).entries()) {
-      // numbered: two files of one name in different folders keep their own texts
-      const name = basename(proposal.path);
-      await vscode.commands.executeCommand(
-        "vscode.diff",
-        await this.diffTempFile(patchbayAskId, `${i}-current-${name}`, proposal.oldText),
-        await this.diffTempFile(patchbayAskId, `${i}-proposed-${name}`, proposal.newText),
-        `${name} — proposed change (decide on the card)`,
-      );
-    }
-  }
-
-  /** An ask ended: the tabs its card opened show a change that is no
-   * longer proposed, so they close, and their texts go. The open tabs are
-   * read, not remembered — a tab the user already closed is simply not
-   * there. */
-  private async closeAskDiffs(patchbayAskId: PatchbayAskId): Promise<void> {
-    const dir = this.diffDir(patchbayAskId);
-    const inDir = (uri: vscode.Uri) => uri.scheme === "file" && dirname(uri.fsPath) === dir;
-    const tabs = vscode.window.tabGroups.all
-      .flatMap((group) => group.tabs)
-      .filter((tab) => tab.input instanceof vscode.TabInputTextDiff && (inDir(tab.input.original) || inDir(tab.input.modified)));
-    if (tabs.length > 0) await vscode.window.tabGroups.close(tabs, true);
-    await rm(dir, { recursive: true, force: true });
-  }
-
-  /** Agent-reported tool-call diffs — the texts come back from the
-   * sessions store's stash; both sides are snapshots, so both ride temp files. */
-  private async openToolCallDiff(patchbaySessionId: PatchbaySessionId, toolCallId: string, path: string): Promise<void> {
-    const diff = this.sessions.toolCallDiff(patchbaySessionId, toolCallId, path);
-    if (diff === null) return; // stale id after a close — nothing to show
-    const name = basename(path);
-    await vscode.commands.executeCommand(
-      "vscode.diff",
-      await this.diffTempFile(toolCallId, `before-${name}`, diff.oldText),
-      await this.diffTempFile(toolCallId, `after-${name}`, diff.newText),
-      `${name} — agent-proposed change`,
-    );
   }
 
   /** A surface became visible or hidden (or went away): the view hosts
@@ -1595,42 +1131,17 @@ export class Orchestrator {
     for (const session of state.sessions) {
       for (const ask of openAsks(state.transcripts[session.id] ?? [])) {
         open.add(ask.id);
-        if (!this.knownAsks.has(ask.id) && !shown.has(session.id)) this.notifyAsk(session.id, session.title, ask);
+        if (!this.knownAsks.has(ask.id) && !shown.has(session.id)) this.ports.notifyAsk(session.id, session.title, ask);
       }
     }
     this.knownAsks = open;
   }
 
-  /** Mirrors the inline card: its own answers where the line shows all the
-   * card does (the same actions the card sends, so whichever surface the
-   * user acts on first wins — a second answer is a no-op), and Open, which
-   * brings the session up (askNotice decides which). */
-  private notifyAsk(patchbaySessionId: PatchbaySessionId, title: string, ask: OpenAsk): void {
-    const { line, answers } = askNotice(ask);
-    const labels = [...answers.map((a) => a.label), "Open"];
-    void vscode.window.showWarningMessage(`${title} — ${line}`, ...labels).then((picked) => {
-      if (picked === "Open") void this.revealSession(patchbaySessionId);
-      else {
-        const answer = answers.find((a) => a.label === picked);
-        if (answer !== undefined) this.handleAction(answer.action);
-      }
-    });
-  }
-
-  /** A chat opened for typing: the Agent View takes focus, then its
-   * composer takes the keyboard. The view goes first — a view only focuses
-   * its composer while it has focus itself, so it never pulls focus from
-   * where the user is. */
-  async focusComposer(): Promise<void> {
-    await vscode.commands.executeCommand("acpPatchbay.agentView.focus");
-    this.agentView.emit({ kind: "composerFocusRequested" });
-  }
-
   /** Brings a session up in the Agent View — the one path for every
    * "take me there" (the switch-session command, a notification's Open). */
-  private async revealSession(patchbaySessionId: PatchbaySessionId): Promise<void> {
+  async revealSession(patchbaySessionId: PatchbaySessionId): Promise<void> {
     this.sessionGates.open(patchbaySessionId);
-    await this.focusComposer();
+    await this.ports.focusComposer();
   }
 
   private async refreshAuditTail(): Promise<void> {
@@ -1638,93 +1149,10 @@ export class Orchestrator {
     this.settings.emit({ kind: "auditTailChanged", entries });
   }
 
-  /** Enable goes through the disclosure prompt — every entry point (Audit
-   * page toggle, status pill, palette command) shares this one consent
-   * gate; the confirming state event fires only after the user says yes. */
-  private async setWireLog(active: boolean): Promise<void> {
-    if (!active) {
-      this.wireLog.disable();
-      return;
-    }
-    if (this.wireLog.active) return;
-    const ENABLE = "Enable for 30 minutes";
-    const pick = await vscode.window.showWarningMessage(
-      "Enable the ACP wire log?",
-      {
-        modal: true,
-        detail:
-          "Every JSON-RPC frame on the agent wire goes to the Output panel — prompts, file contents, " +
-          "and tool traffic will be readable there. Credentials patchbay injected are masked at the seam; " +
-          "anything an agent echoes back on its own is not. Turns itself off in 30 minutes.",
-      },
-      ENABLE,
-    );
-    if (pick !== ENABLE) return;
-    this.wireLog.enable();
-    this.wireChannel?.show(true);
-  }
-
-  /** Status-pill click and the palette command land here: consent+enable
-   * when off; a stop-first quick pick when on (at minute 25 the state
-   * you're usually in is "not done yet" — extending must not require
-   * re-toggling, but stop stays the fast path). */
-  async wireLogCommand(): Promise<void> {
-    if (!this.wireLog.active) {
-      await this.setWireLog(true);
-      return;
-    }
-    const pick = await vscode.window.showQuickPick(
-      [
-        { label: "$(debug-stop) Stop now", action: "stop" as const },
-        { label: "$(watch) Extend 30 minutes", action: "extend" as const },
-      ],
-      {
-        placeHolder: `Wire log is on — auto-off at ${new Date(this.wireLog.until ?? Date.now()).toLocaleTimeString()}`,
-      },
-    );
-    if (pick?.action === "stop") this.wireLog.disable();
-    else if (pick?.action === "extend") this.wireLog.extend();
-  }
-
-  private onWireLogStateChanged(active: boolean, until: string | null): void {
-    this.settings.emit({ kind: "wireLogChanged", active, until });
-    if (!active) {
-      this.wireStatusItem?.dispose();
-      this.wireStatusItem = null;
-      if (this.wireStatusTimer !== null) clearInterval(this.wireStatusTimer);
-      this.wireStatusTimer = null;
-      return;
-    }
-    if (this.wireStatusItem === null) {
-      // Transient pill, right side next to the main item — its existence IS
-      // the state; warning background is the platform's own "temporarily
-      // elevated" grammar.
-      this.wireStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
-      this.wireStatusItem.command = "acpPatchbay.wireLog";
-      this.wireStatusItem.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
-    }
-    this.updateWireStatusText();
-    this.wireStatusItem.show();
-    if (this.wireStatusTimer === null) {
-      this.wireStatusTimer = setInterval(() => this.updateWireStatusText(), 30_000);
-      this.wireStatusTimer.unref?.();
-    }
-  }
-
-  private updateWireStatusText(): void {
-    if (this.wireStatusItem === null) return;
-    const until = this.wireLog.until;
-    const mins =
-      until === null ? 0 : Math.max(0, Math.ceil((new Date(until).getTime() - Date.now()) / 60_000));
-    this.wireStatusItem.text = `$(pulse) Wire log · ${mins}m`;
-    this.wireStatusItem.tooltip =
-      "ACP wire log is on — every frame goes to Output. Click to stop or extend.";
-  }
-
   /** The Data page's storage inventory — recomputed from the live stores on
    * every request, never cached (reality is the source of truth). Counts
    * only — never values. */
-  private async publishDataInventory(): Promise<void> {
+  async publishDataInventory(): Promise<void> {
     const agentConfigs = this.agentConfigs.list();
     const agentEnvCount = (await Promise.all(agentConfigs.map((c) => this.agentEnv.get(c.id)))).reduce(
       (sum, env) => sum + Object.keys(env).length,
@@ -1792,43 +1220,6 @@ export class Orchestrator {
     this.agents.registryChanged();
   }
 
-  /** Tells the user about each newer agent version once per window, with
-   * the upgrade one click away: a single update upgrades from the
-   * notification; several open a pick of which to upgrade, all checked.
-   * Every upgrade takes the one Upgrade path, its confirmation included —
-   * and only while the update is still the fact: a notification answered
-   * after the agent was upgraded elsewhere restarts nothing. */
-  private async announceUpdates(): Promise<void> {
-    const fresh = [...this.agents.updates()].filter(([patchbayAgentId, u]) => !this.announcedUpdates.has(`${patchbayAgentId}@${u.to}`));
-    if (fresh.length === 0) return;
-    for (const [patchbayAgentId, u] of fresh) this.announcedUpdates.add(`${patchbayAgentId}@${u.to}`);
-    if (fresh.length === 1) {
-      const [patchbayAgentId, u] = fresh[0]!;
-      const picked = await vscode.window.showInformationMessage(
-        `${this.agentName(patchbayAgentId)} ${u.to} is available — you run ${u.from}.`,
-        "Upgrade",
-      );
-      if (picked === "Upgrade" && this.agents.updates().has(patchbayAgentId)) {
-        await this.gates.upgrade(patchbayAgentId).catch(this.logCatch(`upgrade ${patchbayAgentId}`));
-      }
-      return;
-    }
-    const picked = await vscode.window.showInformationMessage(
-      `Updates are available for ${fresh.length} agents.`,
-      "Upgrade…",
-    );
-    if (picked !== "Upgrade…") return;
-    const chosen = await vscode.window.showQuickPick(
-      fresh.map(([patchbayAgentId, u]) => ({ label: this.agentName(patchbayAgentId), description: `${u.from} → ${u.to}`, picked: true, patchbayAgentId })),
-      { canPickMany: true, placeHolder: "Upgrade which agents?" },
-    );
-    for (const item of chosen ?? []) {
-      if (this.agents.updates().has(item.patchbayAgentId)) {
-        await this.gates.upgrade(item.patchbayAgentId).catch(this.logCatch(`upgrade ${item.patchbayAgentId}`));
-      }
-    }
-  }
-
   /** The one explicit, visible gate on any download the launch phase needs
    * — a managed runtime or a registry agent's own binary; nothing is ever
    * fetched and run silently, and the ask says whether the bytes will be
@@ -1840,475 +1231,14 @@ export class Orchestrator {
       ask.kind === "runtime"
         ? `This agent is launched with ${ask.runtime === "node" ? "npx, which needs Node.js" : "uvx, which needs uv"} — and no usable install was found on this system. Download ${runtimeName(ask.runtime)} ${ask.version} into the extension's own storage? ${DOWNLOAD_CHECK_TEXT[ask.check]} Nothing is installed system-wide, and removing the extension removes it.`
         : `${ask.name} ${ask.version} is distributed as a binary. Download it from ${new URL(ask.archiveUrl).host} into the extension's own storage and run it? ${DOWNLOAD_CHECK_TEXT[ask.check]} Once per version; nothing is installed system-wide, and removing the extension removes it.`;
-    return askModal(message, "Download");
-  }
-
-  /** Settings moves to a section. Opening MCP Servers reads what
-   * patchbay's own servers serve — once a window; the card's refresh reads
-   * again. */
-  private showSettingsSection(section: SettingsSectionId): void {
-    this.settings.emit({ kind: "sectionChanged", section });
-    if (section === "mcpServers")
-      void this.mcpServerGates.checkBuiltin().catch(this.logCatch("check the built-in MCP servers"));
-  }
-
-  private handleAction(action: Action): void {
-    switch (action.kind) {
-      case "openSettings":
-        // Navigate after the reveal settles: an already-open panel keeps its
-        // section, so without this a deep-linking caller ("Add or manage
-        // agents") reads as a dead click.
-        void vscode.commands
-          .executeCommand("acpPatchbay.openSettings")
-          .then(() => {
-            if (action.section !== undefined) this.showSettingsSection(action.section);
-          }, this.logCatch("openSettings"));
-        break;
-      case "setSettingsSection":
-        this.showSettingsSection(action.section);
-        break;
-      case "connectAgent":
-        void this.connectFrom(action.source);
-        break;
-      case "restartAgent":
-        // failure surfaces as a crashed status patch — no reply channel by design
-        void this.gates.restart(action.patchbayAgentId).catch(this.logCatch(`restart ${action.patchbayAgentId}`));
-        break;
-      case "stopAgent":
-        void this.gates.stop(action.patchbayAgentId).catch(this.logCatch(`stop ${action.patchbayAgentId}`));
-        break;
-      case "startChat":
-        void this.startChat(action.patchbayAgentId);
-        break;
-      case "dismissChatConnect":
-        this.agentView.emit({ kind: "chatConnectResolved" });
-        break;
-      case "eraseAllData":
-        void this.eraseEverything().catch(this.logCatch("eraseAllData"));
-        break;
-      case "exportConfiguration":
-        void this.exportToFile(action.parts);
-        break;
-      case "readConfigImport":
-        void this.readConfigImport(action.fileName, action.text).catch(this.logCatch("import: read"));
-        break;
-      case "applyConfigImport":
-        void this.applyConfigImport(action.importId, action.take).catch(this.logCatch("import: apply"));
-        break;
-      case "dismissConfigImport":
-        if (this.configImport?.id === action.importId) this.configImport = null;
-        if (this.settings.current.configImport?.id === action.importId) {
-          this.settings.emit({ kind: "configImportChanged", configImport: null });
-        }
-        break;
-      case "setWireLog":
-        void this.setWireLog(action.active);
-        break;
-      case "refreshDataInventory":
-        void this.publishDataInventory();
-        break;
-      case "syncSessions":
-        void this.sessions.syncRunningAgents();
-        break;
-      case "switchSession":
-        // Switching NEVER closes the session being left — open sessions
-        // stay attached until the idle reaper's full predicate says
-        // otherwise (sessions-store `idle`).
-        this.sessionGates.open(action.patchbaySessionId);
-        break;
-      case "forkSession":
-        void this.forkSession(action.patchbaySessionId);
-        break;
-      case "deleteSession":
-        void this.deleteSession(action.patchbaySessionId);
-        break;
-      case "closeSession":
-        void this.sessionGates.close(action.patchbaySessionId).catch(this.logCatch(`close ${action.patchbaySessionId}`));
-        break;
-      case "copySessionId": {
-        const sessionId = this.sessions.sessionIdOf(action.patchbaySessionId);
-        if (sessionId !== undefined) void vscode.env.clipboard.writeText(sessionId);
-        break;
-      }
-      case "reloadSession":
-        void this.sessionGates.reload(action.patchbaySessionId).catch(this.logCatch(`reload ${action.patchbaySessionId}`));
-        break;
-      // A rejected set leaves authoritative state unchanged — republish it
-      // (fresh identity) so the pill's pending spinner settles back to truth.
-      case "setSessionKnob":
-        void this.sessionGates
-          .setKnob(action.patchbaySessionId, action.knobId, action.value)
-          .catch((err) => {
-            this.warnCatch(`setKnob ${action.patchbaySessionId}`, "The agent didn't take the change")(err);
-            const knobs = this.agentView.current.sessionKnobs[action.patchbaySessionId];
-            if (knobs !== undefined) {
-              this.agentView.emit({ kind: "sessionKnobsSet", patchbaySessionId: action.patchbaySessionId, knobs: [...knobs] });
-            }
-          });
-        break;
-      case "sendPrompt":
-        // Pure dispatch: the turn-start door is the session gates', where
-        // every prompt passes — a guard here would cover only this entrance.
-        // A failure leaves the turn's end, or the words held, with no reply
-        // channel by design.
-        void this.sessionGates
-          .prompt(action.patchbaySessionId, {
-            text: action.text,
-            ...(action.parts !== undefined ? { parts: action.parts } : {}),
-            ...(action.draft !== undefined ? { draft: action.draft } : {}),
-          })
-          .catch(this.logCatch(`sendPrompt ${action.patchbaySessionId}`));
-        break;
-      case "detachSession":
-        // Preference-gated at the source of truth, not only in the menu
-        // that hid itself (render-only webviews don't get to be the gate).
-        if (!this.preferences.get().detachWindows) break;
-        // The panel host lives in extension.ts (like Settings) — reach it by
-        // command. Then the one open ceremony, pinned: the panel renders
-        // this session by id, so the active pointer stays where it is.
-        void vscode.commands.executeCommand("acpPatchbay.detachSession", action.patchbaySessionId);
-        this.sessionGates.open(action.patchbaySessionId, { pin: true });
-        break;
-      case "removeQueuedPrompt":
-        this.sessions.removeQueuedPrompt(action.patchbaySessionId, action.promptId);
-        break;
-      case "reclaimQueuedPrompt":
-        this.sessions.takeBack(action.patchbaySessionId, action.promptId);
-        break;
-      case "restagePromptFiles":
-        void this.sessions.restagePromptFiles(action.patchbaySessionId, action.blockId).then((missed) => {
-          if (missed.length > 0) void vscode.window.showWarningMessage(`Reused without ${missed.join("; ")}.`);
-        }, this.logCatch(`restage prompt files ${action.patchbaySessionId}`));
-        break;
-      case "setSessionDraft":
-        // The composer's debounced durable save.
-        this.sessions.saveDraft(action.patchbaySessionId, action.draft);
-        break;
-      case "stopTurn":
-        void this.sessionGates.stop(action.patchbaySessionId).catch(this.logCatch(`stop turn ${action.patchbaySessionId}`));
-        break;
-      case "editAgentDefaults":
-        void (action.open ? this.defaultsEditor.open(action.patchbayAgentId) : this.defaultsEditor.close(action.patchbayAgentId));
-        break;
-      case "resolvePermission":
-        this.asks.answerOption(action.patchbayAskId, action.optionId);
-        break;
-      case "resolveDiff":
-        this.asks.answerWrite(action.patchbayAskId, action.accept);
-        break;
-      case "authenticateAgent":
-        // a failure leaves needsAuth set, and says why where the user is
-        void this.gates
-          .login(action.patchbayAgentId, action.methodId)
-          .catch(this.warnCatch(`login ${action.patchbayAgentId}`, `Log in to ${this.agentName(action.patchbayAgentId)} failed`));
-        break;
-      case "logoutAgent":
-        // the UI only offers this on a declared auth.logout; a successful
-        // logout raises needsAuth directly (capability-tracker.logout)
-        void this.gates
-          .logout(action.patchbayAgentId)
-          .catch(this.warnCatch(`logout ${action.patchbayAgentId}`, `Log out of ${this.agentName(action.patchbayAgentId)} failed`));
-        break;
-      case "upgradeAgent":
-        void this.gates.upgrade(action.patchbayAgentId).catch(this.logCatch(`upgrade ${action.patchbayAgentId}`));
-        break;
-      case "refreshRegistry":
-        void this.acpRegistry.read("manual");
-        break;
-      case "addCommandRule": {
-        if (action.layer === "machine") {
-          const machine = this.machinePermissionRules.get().commandRules;
-          void this.machinePermissionRules
-            .set([...machine, action.rule])
-            .then(() => this.publishRules());
-          break;
-        }
-        const rules = this.permissionRules.get();
-        void this.permissionRules
-          .set({ ...rules, commandRules: [...rules.commandRules, action.rule] })
-          .then(() => this.publishRules());
-        break;
-      }
-      case "removeCommandRule": {
-        if (action.layer === "machine") {
-          const machine = this.machinePermissionRules.get().commandRules;
-          void this.machinePermissionRules
-            .set(machine.filter((r) => r.pattern !== action.pattern))
-            .then(() => this.publishRules());
-          break;
-        }
-        const rules = this.permissionRules.get();
-        void this.permissionRules
-          .set({
-            ...rules,
-            commandRules: rules.commandRules.filter((r) => r.pattern !== action.pattern),
-          })
-          .then(() => this.publishRules());
-        break;
-      }
-      case "setWriteLocation":
-        void this.setWriteLocation(action.location, action.layer, action.on).then(() => this.publishRules());
-        break;
-      case "pickWriteFolder":
-        void this.pickWriteFolder(action.layer).catch(this.logCatch("pickWriteFolder"));
-        break;
-      case "setPreferences":
-        void this.preferences.set(action.patch).then((preferences) => {
-          // One truth, both channels: the Preferences page and the agent
-          // view (composer stats) render the same stored object.
-          this.settings.emit({ kind: "preferencesChanged", preferences });
-          this.agentView.emit({ kind: "preferencesChanged", preferences });
-          this.syncDetachContext();
-        });
-        break;
-      case "previewDoneSound":
-        // Preview only — plays exactly what a finishing turn would, stores
-        // nothing (the selection persists via setPreferences on change).
-        playDoneSound(this.log, action.sound);
-        break;
-      case "resolveElicitation":
-        this.asks.answerQuestion(action.patchbayAskId, action.answer);
-        break;
-      case "reopenElicitationLink":
-        this.asks.reopenLink(action.patchbayAskId);
-        break;
-      case "addSelectionContext": {
-        const selection = this.editorStateHost.getSelection();
-        if (selection === null) {
-          void vscode.window.showInformationMessage("No selection — select text in a visible editor first.");
-          break;
-        }
-        void this.sessions
-          .addContext(action.patchbaySessionId, {
-            id: chipId(),
-            kind: "selection",
-            label: `Selection: ${selection.file}:${selection.startLine}-${selection.endLine}`,
-            content: selection.text,
-            sourceUri: `${vscode.Uri.file(selection.file)}#L${selection.startLine}-${selection.endLine}`,
-          })
-          .catch(this.logCatch(`add context ${action.patchbaySessionId}`));
-        break;
-      }
-      case "addFileContext": {
-        const file = this.editorStateHost.getCurrentFile();
-        if (file === null) {
-          void vscode.window.showInformationMessage("No current file — open a file in an editor first.");
-          break;
-        }
-        void this.sessions
-          .addContext(action.patchbaySessionId, {
-            id: chipId(),
-            kind: "file",
-            label: `File: ${file.file}`,
-            content: file.content,
-            sourceUri: vscode.Uri.file(file.file).toString(),
-          })
-          .catch(this.logCatch(`add context ${action.patchbaySessionId}`));
-        break;
-      }
-      case "addDiagnosticsContext": {
-        const diagnostics = this.editorStateHost.getDiagnostics();
-        if (diagnostics.length === 0) break;
-        void this.sessions
-          .addContext(action.patchbaySessionId, {
-            id: chipId(),
-            kind: "diagnostics",
-            label: `Problems (${diagnostics.length})`,
-            content: diagnostics.map((d) => `${d.file}:${d.line} [${d.severity}] ${d.message}`).join("\n"),
-          })
-          .catch(this.logCatch(`add context ${action.patchbaySessionId}`));
-        break;
-      }
-      case "removeContextChip":
-        this.sessions.removeContext(action.patchbaySessionId, action.chipId);
-        break;
-      // A connect's failure is the store's to hold and show; the log has it
-      // already.
-      case "connectCatalogKey":
-        void this.mcpServerGates.connectWithKey(action.catalogId, action.name, action.token, action.url).catch(() => {});
-        break;
-      case "connectCatalogOAuth":
-        void this.mcpServerGates.connectOAuth(action.catalogId, action.name, action.url).catch(() => {});
-        break;
-      case "addCustomMcpServer":
-        void this.mcpServerGates.addCustom(action.name, action.source, action.routing).catch(() => {});
-        break;
-      case "importMcpServersJson":
-        void this.mcpServerGates.importJson(action.json).catch(this.logCatch("import MCP servers"));
-        break;
-      case "addImportedMcpServers":
-        void this.mcpServerGates.addImported(action.importId, action.names).catch(this.logCatch("add imported MCP servers"));
-        break;
-      case "cancelMcpServersImport":
-        void this.mcpServers.cancelImport(action.importId);
-        break;
-      case "updateMcpServerJson":
-        void this.mcpServers.updateFromJson(action.patchbayMcpServerId, action.json);
-        break;
-      case "cancelMcpServerConnect":
-        void this.mcpServerGates.cancel(action.key).catch(this.logCatch(`cancel ${action.key}`));
-        break;
-      case "setMcpServerActive":
-        // Switched on, it is probed at once: the user just acted on it.
-        void this.mcpServers
-          .setActive(action.patchbayMcpServerId, action.active)
-          .then(() => (action.active ? this.mcpServerGates.probe(action.patchbayMcpServerId) : undefined))
-          .catch(this.logCatch(`switch ${action.patchbayMcpServerId}`));
-        break;
-      case "removeMcpServer":
-        void this.mcpServerGates.remove(action.patchbayMcpServerId).catch(this.logCatch(`remove ${action.patchbayMcpServerId}`));
-        break;
-      case "setMcpServerRouting":
-        void this.mcpServers.setRouting(action.patchbayMcpServerId, action.routing);
-        break;
-      case "setMcpServerTransport":
-        void this.mcpServers.setTransport(action.patchbayMcpServerId, action.transport);
-        break;
-      case "probeMcpServer":
-        void this.mcpServerGates.probe(action.patchbayMcpServerId).catch(this.logCatch(`probe ${action.patchbayMcpServerId}`));
-        break;
-      case "copyMcpServerJson":
-        void this.copyMcpServerJson(action.patchbayMcpServerId);
-        break;
-      case "openProposedDiff":
-        void this.openProposedDiff(action.patchbayAskId).catch(this.logCatch(`openProposedDiff ${action.patchbayAskId}`));
-        break;
-      case "openToolCallDiff":
-        void this.openToolCallDiff(action.patchbaySessionId, action.toolCallId, action.path).catch(
-          this.logCatch(`openToolCallDiff ${action.path}`),
-        );
-        break;
-      case "openDiagram":
-        this.openDiagram(action.svg);
-        break;
-      case "reportWebviewError":
-        // the webviews' own runtime errors — surfaced here so the Output
-        // channel is the durable record behind the in-view errors chip
-        this.log.error(`webview ${action.view}: ${action.message}`);
-        break;
-      case "openFile":
-        // files panel rows and tool-call locations — absolute paths
-        void this.openFileAt(action.path, action.line).catch(this.logCatch(`openFile ${action.path}`));
-        break;
-      case "addOrUpdateAgentConfig":
-        void this.agents.save(action.config);
-        break;
-      case "removeAgentConfig":
-        void this.gates.remove(action.patchbayAgentId).catch(this.logCatch(`remove ${action.patchbayAgentId}`));
-        break;
-      case "reorderAgentConfigs":
-        void this.agents.reorder(action.patchbayAgentIds).catch(this.logCatch("reorderAgentConfigs"));
-        break;
-      case "reorderMcpServers":
-        void this.mcpServers.reorder(action.patchbayMcpServerIds);
-        break;
-      case "addContextRoot":
-        void this.addContextRoot(action.patchbaySessionId);
-        break;
-      case "saveRoot":
-        void this.saveRoot(action.scope, action.path).catch(this.logCatch("saveRoot"));
-        break;
-      case "pickSavedRoot":
-        void this.pickSavedRoot(action.scope, action.replacing).catch(this.logCatch("pickSavedRoot"));
-        break;
-      case "unsaveRoot":
-        void this.savedRootsIn(action.scope)
-          .remove(action.path)
-          .then(() => this.publishSavedRoots(), this.logCatch("unsaveRoot"));
-        break;
-      case "removeContextRoot":
-        void this.sessionGates
-          .removeRoot(action.patchbaySessionId, action.path)
-          .catch(this.logCatch(`removeRoot ${action.patchbaySessionId}`));
-        break;
-      case "addImageContext":
-        void this.sessions
-          .addContext(action.patchbaySessionId, {
-            id: chipId(),
-            kind: "image",
-            label: action.label,
-            content: action.base64,
-            mimeType: action.mimeType,
-          })
-          .catch(this.logCatch(`add context ${action.patchbaySessionId}`));
-        break;
-      case "addDroppedFileContext":
-        void this.sessions
-          .addDroppedFile(action.patchbaySessionId, { chipId: chipId(), name: action.name, mimeType: action.mimeType, base64: action.base64 })
-          .catch(this.logCatch(`addDroppedFileContext ${action.name}`));
-        break;
-      case "addFilePickerContext":
-        void this.addFilePickerContext(action.patchbaySessionId);
-        break;
-      case "queryWorkspaceFiles":
-        void this.queryWorkspaceFiles(action.query).catch(
-          this.logCatch(`queryWorkspaceFiles "${action.query}"`),
-        );
-        break;
-    }
-  }
-
-  /** The `@` mention picker's workspace tier (the
-   * webview asks, never reads the filesystem). One findFiles sweep per
-   * query, ranked host-side — basename prefix, then basename substring,
-   * then path substring — and cut to a menu-sized answer. Directories come
-   * from the same sweep (every matched file's ancestors up to its workspace
-   * folder) — no second walk. `files.exclude` applies through findFiles
-   * itself; node_modules is excluded explicitly since only `search.exclude`
-   * covers it by default. */
-  private async queryWorkspaceFiles(query: string): Promise<void> {
-    const uris = await vscode.workspace.findFiles("**/*", "**/node_modules/**", 2000);
-    const q = query.toLowerCase();
-    const rankOf = (path: string): number => {
-      const name = basename(path).toLowerCase();
-      return name.startsWith(q) ? 0 : name.includes(q) ? 1 : path.toLowerCase().includes(q) ? 2 : 3;
-    };
-    const rank = (paths: Iterable<string>) =>
-      [...paths]
-        .map((path) => ({ path, rank: rankOf(path) }))
-        .filter((e) => e.rank < 3)
-        .sort((a, b) => a.rank - b.rank || a.path.length - b.path.length);
-    const dirSet = new Set<string>();
-    for (const uri of uris) {
-      const stop = vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath;
-      let dir = uri.fsPath;
-      for (;;) {
-        const cut = Math.max(dir.lastIndexOf("/"), dir.lastIndexOf("\\"));
-        const parent = cut > 0 ? dir.slice(0, cut) : "";
-        if (parent === "" || parent === stop || parent === dir) break;
-        dirSet.add(parent);
-        dir = parent;
-      }
-    }
-    this.agentView.emit({
-      kind: "workspaceFilesListed",
-      query,
-      files: rank(uris.map((u) => u.fsPath)).slice(0, 20).map((e) => e.path),
-      dirs: rank(dirSet).slice(0, 8).map((e) => e.path),
-    });
-  }
-
-  /** "Add workspace folders as session context roots" —
-   * a native folder picker, since only the extension host can browse the
-   * real filesystem; the result is just another context-root path,
-   * patchbay never indexes what's inside it. */
-  private async addContextRoot(patchbaySessionId: PatchbaySessionId): Promise<void> {
-    const picked = await vscode.window.showOpenDialog({
-      canSelectFolders: true,
-      canSelectFiles: false,
-      canSelectMany: false,
-      openLabel: "Add as context root",
-    });
-    const uri = picked?.[0];
-    if (uri === undefined) return;
-    await this.sessionGates.addRoot(patchbaySessionId, uri.fsPath);
+    return this.ports.confirm(message, "Download");
   }
 
   /** The saved roots as both channels show them: this workspace's list
    * exists only while a folder is open — an empty window has no workspace
    * to save to. */
-  private savedRootsView(): SavedRootsView {
-    const workspaceOpen = (vscode.workspace.workspaceFolders ?? []).length > 0;
+  savedRootsView(): SavedRootsView {
+    const workspaceOpen = this.ports.workspaceRoots().length > 0;
     const workspace = workspaceOpen ? this.workspaceSavedRoots.list() : null;
     const machine = this.machineSavedRoots.list();
     return {
@@ -2318,105 +1248,26 @@ export class Orchestrator {
     };
   }
 
-  private savedRootsIn(scope: SavedRootScope): SavedRootsStore {
+  /** Settings moves to a section. Opening MCP Servers reads what
+   * patchbay's own servers serve — once a window; the card's refresh reads
+   * again. */
+  showSettingsSection(section: SettingsSectionId): void {
+    this.settings.emit({ kind: "sectionChanged", section });
+    if (section === "mcpServers")
+      void this.mcpServerGates.checkBuiltin().catch(this.logCatch("check the built-in MCP servers"));
+  }
+
+  savedRootsIn(scope: SavedRootScope): SavedRootsStore {
     return scope === "workspace" ? this.workspaceSavedRoots : this.machineSavedRoots;
   }
 
-  /** The one writer of a saved root, from the chip or from Settings.
-   * Saving shapes the sessions born from now on — never a live one. What
-   * is stored is an absolute path to a folder that exists: a relative one
-   * resolves against the workspace here, once, so every later session
-   * reads the same folder; anything that isn't a folder is refused, said. */
-  private async saveRoot(scope: SavedRootScope, path: string, replacing?: string): Promise<void> {
-    if (scope === "workspace" && this.savedRootsView().workspace === null) return;
-    const absolute = normalizeRootPath(isAbsolute(path) ? path : resolve(this.workspaceCwd, path));
-    if (!isFolder(absolute)) {
-      void vscode.window.showWarningMessage(`Not saved: ${absolute} is not a folder on this machine.`);
-      return;
-    }
-    const store = this.savedRootsIn(scope);
-    await (replacing === undefined ? store.add(absolute) : store.replace(replacing, absolute));
-    this.publishSavedRoots();
-  }
-
-  /** Settings' add, or its edit of one entry: the picker opens where that
-   * entry points while the folder still exists — a gone one opens at the
-   * picker's default, the user is finding its new home. */
-  private async pickSavedRoot(scope: SavedRootScope, replacing?: string): Promise<void> {
-    const picked = await vscode.window.showOpenDialog({
-      canSelectFolders: true,
-      canSelectFiles: false,
-      canSelectMany: false,
-      openLabel: replacing === undefined ? "Save as root" : "Use this folder",
-      ...(replacing !== undefined && isFolder(replacing) ? { defaultUri: vscode.Uri.file(replacing) } : {}),
-    });
-    const uri = picked?.[0];
-    if (uri === undefined) return;
-    await this.saveRoot(scope, uri.fsPath, replacing);
-  }
-
-  private publishSavedRoots(): void {
+  publishSavedRoots(): void {
     const event = { kind: "savedRootsChanged", savedRoots: this.savedRootsView() } as const;
     this.settings.emit(event);
     this.agentView.emit(event);
   }
 
-  /** "Attach file" picker — the host-side byte producer: the file already
-   * has a host path, so no bytes cross the webview. Images in the wire set
-   * ride as image chips (bytes read here); everything else — including
-   * images too big or too exotic for the wire — becomes an attachment chip
-   * at its real path, whose resource_link the agent reads itself. That
-   * fallback is strictly honest, so nothing picked is ever refused. A
-   * picked file is at rest on disk, hence a link, not a text snapshot: the
-   * inline `file` chip is for the editor buffer, which may be dirty. */
-  private async addFilePickerContext(patchbaySessionId: PatchbaySessionId): Promise<void> {
-    const picked = await vscode.window.showOpenDialog({
-      canSelectFolders: false,
-      canSelectFiles: true,
-      canSelectMany: false,
-      openLabel: "Attach to context",
-    });
-    const uri = picked?.[0];
-    if (uri === undefined) return;
-    const name = basename(uri.fsPath);
-    const { size } = await vscode.workspace.fs.stat(uri);
-    const form = pickedFileForm(name, size, this.preferences.get().attachmentMaxMB * 1024 * 1024);
-    if (form.kind === "image") {
-      const bytes = await vscode.workspace.fs.readFile(uri);
-      await this.sessions.addContext(patchbaySessionId, {
-        id: chipId(),
-        kind: "image",
-        label: `Image: ${name}`,
-        content: Buffer.from(bytes).toString("base64"),
-        mimeType: form.mimeType,
-      });
-    } else {
-      await this.sessions.addContext(patchbaySessionId, {
-        id: chipId(),
-        kind: "attachment",
-        label: fileChipLabel(name),
-        name,
-        path: uri.fsPath,
-      });
-    }
-  }
-
-  /** Copy config: the server as an `mcpServers` document (the shape Import
-   * reads back) goes to the clipboard, carrying what its owner typed — env
-   * values, a header key — and never an OAuth token. Copy and paste are
-   * the owner's explicit acts; configs never ride a repo, so nothing can
-   * follow a user between workspaces on its own. */
-  private async copyMcpServerJson(patchbayMcpServerId: PatchbayMcpServerId): Promise<void> {
-    const config = this.mcpServerConfigs.get(patchbayMcpServerId);
-    const json = await this.mcpServers.exportJson(patchbayMcpServerId);
-    if (config === undefined || json === undefined) return;
-    await vscode.env.clipboard.writeText(json);
-    void vscode.window.showInformationMessage(
-      `Copied "${config.name}" as an mcpServers entry.`,
-    );
-  }
-
-  private publishRules(): void {
+  publishRules(): void {
     const rules = this.permissionRules.get();
     this.settings.emit({
       kind: "permissionRulesChanged",
@@ -2431,7 +1282,7 @@ export class Orchestrator {
   }
 
   /** One place's answer at one layer, written through that layer's store. */
-  private async setWriteLocation(location: WriteLocation, layer: "workspace" | "machine", on: boolean | null): Promise<void> {
+  async setWriteLocation(location: WriteLocation, layer: "workspace" | "machine", on: boolean | null): Promise<void> {
     if (layer === "machine") {
       await this.machineWriteScope.set(withWriteEntry(this.machineWriteScope.get(), location, on));
       return;
@@ -2440,26 +1291,11 @@ export class Orchestrator {
     await this.permissionRules.set({ ...rules, writeScope: withWriteEntry(rules.writeScope, location, on) });
   }
 
-  /** File writes' add: a folder the user picks lands switched on, at the
-   * layer it was added at. */
-  private async pickWriteFolder(layer: "workspace" | "machine"): Promise<void> {
-    const picked = await vscode.window.showOpenDialog({
-      canSelectFolders: true,
-      canSelectFiles: false,
-      canSelectMany: false,
-      openLabel: "Approve writes here",
-    });
-    const uri = picked?.[0];
-    if (uri === undefined) return;
-    await this.setWriteLocation({ kind: "path", path: uri.fsPath }, layer, true);
-    this.publishRules();
-  }
-
   /** Add — and every connect a door names by its source (Settings Connect,
    * the palette, startup): the store saves what is new, then the connect
    * passes the gates (and runs the free check, as every connect does).
    * Answers which agent, once its connect has settled either way. */
-  private async connectFrom(source: ConnectAgentSource): Promise<PatchbayAgentId | undefined> {
+  async connectFrom(source: ConnectAgentSource): Promise<PatchbayAgentId | undefined> {
     const patchbayAgentId = await this.agents.saveFrom(source);
     if (patchbayAgentId === undefined) return undefined;
     try {
@@ -2477,7 +1313,7 @@ export class Orchestrator {
    * pool.connect. Failure lands inline with the
    * specific reason and a Retry — never a silent bounce to the empty
    * state. */
-  private async startChat(patchbayAgentId: PatchbayAgentId): Promise<void> {
+  async startChat(patchbayAgentId: PatchbayAgentId): Promise<void> {
     void this.acpRegistry.read("new-session");
     const agentName = this.agents.name(patchbayAgentId);
     if (agentName === undefined) return; // unknown agent — nothing to start
@@ -2533,14 +1369,14 @@ export class Orchestrator {
 
   /** The menu's Fork: its agent connected if it is off, then the fork —
    * which opens in the view; one the agent refuses says why. */
-  private async forkSession(patchbaySessionId: PatchbaySessionId): Promise<void> {
+  async forkSession(patchbaySessionId: PatchbaySessionId): Promise<void> {
     const session = this.agentView.current.sessions.find((s) => s.id === patchbaySessionId);
     if (session === undefined) return;
     try {
       if (this.agents.row(session.patchbayAgentId)?.status !== "running") await this.gates.connect(session.patchbayAgentId);
       await this.sessionGates.fork(patchbaySessionId, session.title);
     } catch (err) {
-      this.warnCatch(`fork ${patchbaySessionId}`, `"${session.title}" was not forked`)(err);
+      this.ports.warnCatch(`fork ${patchbaySessionId}`, `"${session.title}" was not forked`)(err);
     }
   }
 
@@ -2548,11 +1384,11 @@ export class Orchestrator {
    * history, which nothing brings back — so the user confirms first. The
    * delete needs the agent: one that is off is connected for it. A delete
    * that fails says why, and the session stays. */
-  private async deleteSession(patchbaySessionId: PatchbaySessionId): Promise<void> {
+  async deleteSession(patchbaySessionId: PatchbaySessionId): Promise<void> {
     const session = this.agentView.current.sessions.find((s) => s.id === patchbaySessionId);
     const agent = session === undefined ? undefined : this.agents.row(session.patchbayAgentId);
     if (session === undefined || agent === undefined) return;
-    const confirmed = await askModal(
+    const confirmed = await this.ports.confirm(
       `Delete "${session.title}"? ${agent.name} removes it from its history, and this can't be undone.`,
       "Delete",
     );
@@ -2561,7 +1397,7 @@ export class Orchestrator {
       if (this.agents.row(agent.id)?.status !== "running") await this.gates.connect(agent.id);
       await this.sessionGates.delete(patchbaySessionId);
     } catch (err) {
-      this.warnCatch(`delete ${patchbaySessionId}`, `"${session.title}" was not deleted`)(err);
+      this.ports.warnCatch(`delete ${patchbaySessionId}`, `"${session.title}" was not deleted`)(err);
     }
   }
 
@@ -2607,16 +1443,7 @@ export class Orchestrator {
     return this.agents.row(patchbayAgentId)?.detail ?? raw;
   }
 
-  /** logCatch for what the user asked for themselves: the failure is also
-   * said where they are — what didn't happen, and the reason. */
-  private warnCatch(context: string, what: string): (err: unknown) => void {
-    return (err) => {
-      this.logCatch(context)(err);
-      if (!(err instanceof Cancelled)) void vscode.window.showWarningMessage(`${what} — ${agentErrorText(err)}`);
-    };
-  }
-
-  private agentName(patchbayAgentId: PatchbayAgentId): string {
+  agentName(patchbayAgentId: PatchbayAgentId): string {
     return this.agents.name(patchbayAgentId) ?? patchbayAgentId;
   }
 
@@ -2624,7 +1451,7 @@ export class Orchestrator {
    * actions have no reply channel by design (state itself is the only
    * signal back to the UI), but silently dropping the error entirely left
    * nothing to debug from. */
-  private logCatch(context: string): (err: unknown) => void {
+  logCatch(context: string): (err: unknown) => void {
     return (err) => {
       // Ended by the user's own hand — an agent's Stop or Remove, a
       // session's Stop, Reload or Close — no failure.
@@ -2632,27 +1459,22 @@ export class Orchestrator {
       else this.log.error(`${context}: ${agentErrorText(err)}`);
     };
   }
-
+  /** Ends this window's work and flushes the views; the host releases
+   * its own surfaces around it. */
   dispose(): void {
     this.sessionGates.dispose();
-    for (const d of this.editorSubscriptions) d.dispose();
-    this.editorStateHost.stop();
     void this.sessionGates.endAll();
     void this.mcpServerGates.endAll();
     void this.gates.stopAll();
     this.agentView.flushNow();
     this.settings.flushNow();
-    this.statusBarItem.dispose();
     this.wireLog.dispose();
-    this.wireChannel?.dispose();
-    this.wireStatusItem?.dispose();
-    if (this.wireStatusTimer !== null) clearInterval(this.wireStatusTimer);
   }
 }
 
 /** A root is a folder on disk right now — the one reality read behind
  * every lifecycle request's roots, the MCP servers' list, the saved lists'
  * marks, and a save. */
-function isFolder(path: string): boolean {
+export function isFolder(path: string): boolean {
   return statSync(path, { throwIfNoEntry: false })?.isDirectory() === true;
 }

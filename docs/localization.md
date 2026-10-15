@@ -144,9 +144,10 @@ mechanisms. There is no fourth, hand-rolled path.
    `package.nls.<locale>.json`, the VS Code-native mechanism. This is the correct
    home for declared surface — never free text in `contributes.configuration`
    that would have to be synced by hand.
-2. **Orchestrator-originated user strings** (notifications, error and toast copy,
+2. **Extension-host user strings** (notifications, error and toast copy,
    anything whose key and parameters live in the extension host) → **`vscode.l10n`**,
-   resolved in the orchestrator *before* the string enters a state snapshot. The
+   resolved on the extension-host side *before* the string enters a state
+   snapshot — by the orchestrator's host, which owns everything VS Code does. The
    webview receives finished text, never a key it must look up — consistent with
    the webview holding render state only, not a translation catalog for
    host-owned copy.

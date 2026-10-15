@@ -52,9 +52,13 @@ export interface ViewSync<S> {
 }
 
 interface Orchestrator {
-  handleAction(action: { kind: string } & Record<string, unknown>): void;
   agentView: ViewSync<AgentViewState>;
   settings: ViewSync<SettingsState>;
+}
+
+/** The orchestrator's host: the views' actions arrive there. */
+interface OrchestratorHost {
+  handleAction(action: { kind: string } & Record<string, unknown>): void;
 }
 
 /** For a suite whose subject is a mechanism behind the views: the
@@ -77,15 +81,19 @@ export class Patchbay {
    * keeps records in — what `removeAdded` takes away. */
   private readonly added = new Map<string, string | undefined>();
 
-  private constructor(private readonly orchestrator: Orchestrator) {}
+  private constructor(
+    private readonly orchestrator: Orchestrator,
+    private readonly host: OrchestratorHost,
+  ) {}
 
   static async open(): Promise<Patchbay> {
-    return new Patchbay((await internals<{ orchestrator: Orchestrator }>()).orchestrator);
+    const { orchestrator, host } = await internals<{ orchestrator: Orchestrator; host: OrchestratorHost }>();
+    return new Patchbay(orchestrator, host);
   }
 
   /** The views' one door — the action a click sends. */
   act(action: { kind: string } & Record<string, unknown>): void {
-    this.orchestrator.handleAction(action);
+    this.host.handleAction(action);
   }
 
   /** The Agent View's state and its sync with the mounted webview. */

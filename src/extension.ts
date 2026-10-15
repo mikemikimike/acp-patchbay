@@ -3,7 +3,8 @@
 
 import * as vscode from "vscode";
 import { runLoginTask } from "./orchestrator/login-task";
-import { Orchestrator } from "./orchestrator/orchestrator";
+import type { Orchestrator } from "./orchestrator/orchestrator";
+import { OrchestratorHost } from "./orchestrator/orchestrator-host";
 import {
   AgentPanelHost,
   AgentViewProvider,
@@ -15,6 +16,7 @@ import type { PatchbaySessionId } from "./shared/ids";
 
 export interface ExtensionInternal {
   orchestrator: Orchestrator;
+  host: OrchestratorHost;
   settingsPanelHost: SettingsPanelHost;
   /** The login executor, reachable for the electron suite to drive against
    * the real task engine — it needs no agent, only a recipe. */
@@ -34,7 +36,8 @@ export function activate(context: vscode.ExtensionContext): {
   // checks, and swallowed action failures are visible without opening devtools.
   const log = vscode.window.createOutputChannel("Patchbay", { log: true });
   context.subscriptions.push(log);
-  const orchestrator = new Orchestrator(context, log);
+  const host = new OrchestratorHost(context, log);
+  const orchestrator = host.orchestrator;
   activeOrchestrator = orchestrator;
   const settingsPanelHost = new SettingsPanelHost(
     context.extensionUri,
@@ -46,7 +49,7 @@ export function activate(context: vscode.ExtensionContext): {
   const reportSurface: SurfaceReporter = (surface, visible, pinned) =>
     orchestrator.noteSurface(surface, visible, pinned);
   const agentPanelHost = new AgentPanelHost(context.extensionUri, orchestrator.agentView, reportSurface);
-  orchestrator.pinnedSessions = () => agentPanelHost.pinnedPatchbaySessionIds();
+  host.pinnedSessions = () => agentPanelHost.pinnedPatchbaySessionIds();
   const agentViewProvider = new AgentViewProvider(context.extensionUri, orchestrator.agentView, reportSurface);
   const unsubscribeViewSync = orchestrator.agentView.onChange(() => {
     agentPanelHost.syncSessions(orchestrator.agentView.current.sessions);
@@ -54,7 +57,7 @@ export function activate(context: vscode.ExtensionContext): {
   });
 
   context.subscriptions.push(
-    orchestrator,
+    host,
     vscode.window.registerWebviewViewProvider("acpPatchbay.agentView", agentViewProvider),
     vscode.commands.registerCommand("acpPatchbay.openSettings", () =>
       settingsPanelHost.openOrReveal(),
@@ -72,15 +75,15 @@ export function activate(context: vscode.ExtensionContext): {
       if (session === undefined) return;
       void agentPanelHost.openPinned(session.id, session.title);
     }),
-    vscode.commands.registerCommand("acpPatchbay.newSession", () => orchestrator.newSessionCommand()),
-    vscode.commands.registerCommand("acpPatchbay.switchSession", () => orchestrator.switchSessionCommand()),
-    vscode.commands.registerCommand("acpPatchbay.connectAgent", () => orchestrator.connectAgentCommand()),
+    vscode.commands.registerCommand("acpPatchbay.newSession", () => host.newSessionCommand()),
+    vscode.commands.registerCommand("acpPatchbay.switchSession", () => host.switchSessionCommand()),
+    vscode.commands.registerCommand("acpPatchbay.connectAgent", () => host.connectAgentCommand()),
     vscode.commands.registerCommand("acpPatchbay.addSelectionToContext", () =>
-      orchestrator.addSelectionToContextCommand(),
+      host.addSelectionToContextCommand(),
     ),
-    vscode.commands.registerCommand("acpPatchbay.wireLog", () => orchestrator.wireLogCommand()),
+    vscode.commands.registerCommand("acpPatchbay.wireLog", () => host.wireLogCommand()),
     // The status bar item's door: the chat, ready to type into.
-    vscode.commands.registerCommand("acpPatchbay.focusComposer", () => orchestrator.focusComposer()),
+    vscode.commands.registerCommand("acpPatchbay.focusComposer", () => host.focusComposer()),
     // OAuth redirect target: MCP servers'
     // browser flows come back as vscode://solutionsunity.acp-patchbay/...
     // URIs — resolved correctly in every environment by asExternalUri,
@@ -92,7 +95,7 @@ export function activate(context: vscode.ExtensionContext): {
     }),
   );
 
-  return { internal: { orchestrator, settingsPanelHost, runLoginTask } };
+  return { internal: { orchestrator, host, settingsPanelHost, runLoginTask } };
 }
 
 // Fires on window close, reload, disable, and uninstall alike — best-effort

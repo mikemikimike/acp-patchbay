@@ -11,8 +11,18 @@ for all extension-host code, esbuild, npm.
 
 Terms are contracts — one meaning each, held everywhere (docs, code, UI copy):
 
-- **Orchestrator** — the Node process in the extension host. Single source of truth
-  for sessions, capability tables, permission rules, secrets, configuration.
+- **Orchestrator** — everything the window's work runs on that needs no VS Code,
+  composed in one place, in the extension host's Node process. Single source of
+  truth for sessions, capability tables, permission rules, secrets,
+  configuration; it decides who answers an agent's traffic. It reaches the
+  editor only through its ports.
+- **Orchestrator host** — the VS Code side of the window: it builds the
+  orchestrator from this editor's storage and answers its ports — the webviews
+  and their actions, the editor's state and open documents, dialogs,
+  notifications, the status bar, the browser. *(Decided 2026-10-15: whether a
+  piece needs VS Code is the one key for which side it lives on. The webviews'
+  action router still lives in the host — its arms call VS Code throughout —
+  and moves by the same key, its VS Code arms becoming ports.)*
 - **Agent View** — the one blended webview: agents + sessions + chat. Not three panels.
 - **Known sessions** — the sessions store's index of the sessions this
   window knows, repopulated from the agent's own `session/list` every
