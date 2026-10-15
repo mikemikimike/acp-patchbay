@@ -13,7 +13,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type Server as HttpServer } from "node:http";
 import { createServer as createNetServer, type Server as NetServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { McpServer } from "@agentclientprotocol/sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -29,6 +29,12 @@ import type { FakeAgentScript } from "./fake-agent/main";
 import { stubFsTerminalHooks } from "./support/stub-hooks";
 import { gatesFor } from "./support/session-gates";
 import type { PatchbayAgentId } from "../src/shared/ids";
+
+// Roots as an editor reports them: absolute, drive included on Windows —
+// "/repo" alone means the current drive there, which the test and the
+// bridge subprocess (each in its own cwd) can read differently.
+const FRONTEND = resolve("/repo/frontend");
+const BACKEND = resolve("/repo/backend");
 
 const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
 const BRIDGE = join(process.cwd(), "out", "mcp-bridge.js");
@@ -382,7 +388,7 @@ describe("MCP bridge — real agent, real bridge subprocess, fake remote MCP ser
   it("the bridge declares roots on the agent's initialize and answers roots/list from the session's list (issue #34)", async () => {
     const remote = new FakeRootsUsingRemote();
     await remote.listen();
-    const host = new FakeSessionHost(`${process.pid}-r`, ["/repo/frontend", "/repo/backend"]);
+    const host = new FakeSessionHost(`${process.pid}-r`, [FRONTEND, BACKEND]);
     await host.listen();
 
     const bridgeEntry: McpServer = {
@@ -404,8 +410,8 @@ describe("MCP bridge — real agent, real bridge subprocess, fake remote MCP ser
     const text = h.state().transcripts[patchbaySessionId]!.find((b) => b.kind === "text");
     expect(text?.kind === "text" && JSON.parse(text.text)).toEqual({
       roots: [
-        { uri: pathToFileURL("/repo/frontend").toString(), name: "frontend" },
-        { uri: pathToFileURL("/repo/backend").toString(), name: "backend" },
+        { uri: pathToFileURL(FRONTEND).toString(), name: "frontend" },
+        { uri: pathToFileURL(BACKEND).toString(), name: "backend" },
       ],
     });
     // declared on top of the agent's own (empty) capabilities
@@ -422,7 +428,7 @@ describe("MCP bridge — real agent, real bridge subprocess, fake remote MCP ser
   it("a root change pushed by the orchestrator reaches the remote server as notifications/roots/list_changed (issue #34)", async () => {
     const remote = new FakeRootsUsingRemote();
     await remote.listen();
-    const host = new FakeSessionHost(`${process.pid}-p`, ["/repo/frontend"]);
+    const host = new FakeSessionHost(`${process.pid}-p`, [FRONTEND]);
     await host.listen();
     const bridge = spawn(process.execPath, [BRIDGE], {
       env: {
@@ -450,7 +456,7 @@ describe("MCP bridge — real agent, real bridge subprocess, fake remote MCP ser
     await until(() => host.watchers.length > 0, "the bridge's watchRoots");
     await until(() => remote.notifications.includes("notifications/initialized"), "initialized at the remote");
 
-    host.roots.push("/repo/backend");
+    host.roots.push(BACKEND);
     host.push();
     await until(() => remote.notifications.includes("notifications/roots/list_changed"), "list_changed at the remote");
     expect(remote.notifications).toEqual(["notifications/initialized", "notifications/roots/list_changed"]);
