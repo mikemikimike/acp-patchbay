@@ -39,6 +39,17 @@ function check(label, ok) {
   if (!ok) failures++;
 }
 
+/** Waits until the page's finite animations have run out — an entry rise,
+ * a drawer's drop, a closing sheet's exit — before a shot, a geometry read,
+ * or a check that something stayed put once a move ended. An endless one
+ * (a spinner) never ends and isn't waited on. */
+const settled = (p) =>
+  p.waitForFunction(
+    () => document.getAnimations().every((a) => a.effect?.getTiming().iterations === Infinity || a.playState !== "running"),
+    null,
+    { timeout: 3000 },
+  );
+
 async function page(browser, themeName, { width, height }) {
   const p = await browser.newPage({ viewport: { width, height } });
   p.on("pageerror", (e) => {
@@ -106,7 +117,10 @@ for (const theme of Object.keys(THEMES)) {
   await renderView(p, "agent-view", agentViewState({ live: false }));
   await p.waitForSelector(".chat .msg-user");
   await p.waitForSelector('[data-streamdown="mermaid-block"] svg', { timeout: 8000 });
-  await p.waitForTimeout(400); // shiki async highlight
+  // shiki highlights after the block renders: wait for its tokens
+  await p.waitForFunction(() =>
+    [...document.querySelectorAll('[data-streamdown="code-block-body"] code')].every((c) => c.querySelector("span[style]") !== null),
+  );
   await p.screenshot({ path: `${OUT}/chat-${theme}.png`, fullPage: true });
 
   const dirs = await p.$$eval(".msg-agent [dir]", (els) =>
@@ -289,7 +303,7 @@ for (const theme of Object.keys(THEMES)) {
   check(`[${theme}] plan chip reads open once clicked`, (await p.locator('.readout-strip .chip.plan[aria-expanded="true"]').count()) === 1);
   check(`[${theme}] plan panel opens with checklist`, (await p.waitForSelector(".plan-panel .items .in_progress", { timeout: 3000 })) !== null);
   check(`[${theme}] a cancelled task carries its own mark`, (await p.$(".plan-panel .items .cancelled .codicon-circle-slash")) !== null);
-  await p.waitForTimeout(250); // the panel's entry animation (rise) settles
+  await settled(p); // the panel's entry animation (rise)
   const [strip, panel] = await Promise.all([
     p.$eval(".readout-strip", (el) => el.getBoundingClientRect().toJSON()),
     p.$eval(".plan-panel", (el) => el.getBoundingClientRect().toJSON()),
@@ -308,7 +322,7 @@ for (const theme of Object.keys(THEMES)) {
   await p.waitForSelector(".readout-strip .chip.plan", { state: "detached", timeout: 3000 });
   await p.evaluate((entries) => window.__patch([{ kind: "planUpdated", patchbaySessionId: "s1", entries }]), planOf(3));
   await p.waitForSelector(".readout-strip .chip.plan", { timeout: 3000 });
-  await p.waitForTimeout(250);
+  await settled(p);
   check(`[${theme}] a returning plan arrives collapsed`, (await p.$(".plan-panel")) === null);
 
   const filesChip = await p.$eval(".readout-strip .chip.files", (el) => el.textContent.trim());
@@ -319,8 +333,8 @@ for (const theme of Object.keys(THEMES)) {
   check(`[${theme}] files panel opens from the strip`, (await p.waitForSelector(".files-panel .file-row", { timeout: 3000 })) !== null);
   check(`[${theme}] the other chip's panel closes — one open at a time`, (await p.$(".plan-panel")) === null);
   // the closing sibling must not pull focus back to its own chip — that
-  // reads as focus-outside to the fresh panel and closed it (~its exit)
-  await p.waitForTimeout(300);
+  // reads as focus-outside to the fresh panel and closed it, at its exit
+  await settled(p);
   check(`[${theme}] the switched-to panel stays open once the switch settles`, (await p.$(".files-panel")) !== null);
   check(`[${theme}] dirty editor dot on the touched file`, (await p.$(".files-panel .file-row .dirty")) !== null);
   check(`[${theme}] a list wholly inside the one workspace carries no group heads`, (await p.$(".files-panel .group-head")) === null);
@@ -380,7 +394,7 @@ for (const theme of Object.keys(THEMES)) {
     JSON.stringify(promptRows) === JSON.stringify([["2", "keep going"], ["1", "find foo in @api.ts and fix it@notes.md"]]),
   );
   check(`[${theme}] a prompt shows a few lines at most`, (await p.$eval(".prompts-panel .prompt-row .words", (el) => getComputedStyle(el).webkitLineClamp)) === "3");
-  await p.waitForTimeout(250);
+  await settled(p);
   await p.locator(".prompts-panel").screenshot({ path: `${OUT}/readout-prompts-${theme}.png` });
   const landedAtTop = (id) =>
     p.waitForFunction(
@@ -500,7 +514,7 @@ for (const theme of Object.keys(THEMES)) {
   check(`[${theme}] adder popover opens`, (await p.waitForSelector('[data-slot="popover-content"] .it:has-text("Problems")', { timeout: 3000 })) !== null);
   await p.screenshot({ path: `${OUT}/composer-adder-${theme}.png` });
   await p.mouse.click(210, 300); // anywhere outside
-  await p.waitForTimeout(150);
+  await p.waitForSelector('[data-slot="popover-content"]', { state: "detached", timeout: 3000 }).catch(() => {});
   check(`[${theme}] adder closes on outside click`, (await p.$('[data-slot="popover-content"]')) === null);
   // a click on a control elsewhere in the chat — a chevron, a tool card's
   // ± — closes it too: no control keeps its click to itself (the tool
@@ -578,7 +592,7 @@ for (const theme of Object.keys(THEMES)) {
   // ── sessions drawer: latest activity on top, blue dot on unseen ──
   await p.click('button[aria-label="Sessions"]');
   await p.waitForSelector(".drawer .s-row");
-  await p.waitForTimeout(250); // let the drop animation settle before shooting
+  await settled(p); // the drawer's drop, before shooting
   const firstTitle = await p.$eval(".drawer .s-row .nm", (el) => el.textContent);
   check(`[${theme}] drawer sorts latest activity on top`, firstTitle === "refactor bar");
   check(`[${theme}] unseen completion shows the blue dot`, (await p.$(".drawer .unseen-dot")) !== null);
@@ -632,10 +646,15 @@ for (const theme of Object.keys(THEMES)) {
   );
   await p.waitForFunction(() => document.querySelector(".prompt-editor")?.getAttribute("aria-placeholder")?.startsWith("Message"));
   check(`[${theme}] landed session starts with an empty box`, (await p.$eval(".prompt-editor", (el) => el.textContent.trim())) === "");
-  await p.waitForTimeout(500); // past the draft debounce
+  // Every save waits out the same debounce: one for the landed session,
+  // typed after the locked box's keystrokes, fires after any save those
+  // could have started — so once it is in, every earlier save is too.
+  await p.click(".prompt-editor");
+  await p.keyboard.type("x");
+  await p.waitForFunction(() => window.__actions.some((a) => a.kind === "setSessionDraft" && a.patchbaySessionId === "s3"));
   const drafts = await p.evaluate(() =>
     window.__actions
-      .filter((a) => a.kind === "setSessionDraft")
+      .filter((a) => a.kind === "setSessionDraft" && a.patchbaySessionId !== "s3")
       .map((a) => ({ id: a.patchbaySessionId, newWords: a.draft.includes("new words"), oldWords: a.draft.includes("old words") })),
   );
   check(`[${theme}] previous session's draft keeps only its own words`, drafts.some((d) => d.id === "s1") && drafts.every((d) => d.id === "s1" && d.oldWords && !d.newWords));
@@ -1010,8 +1029,12 @@ for (const theme of Object.keys(THEMES)) {
 // stays inside a short view. Theme-independent: run once. ──
 {
   const theme0 = Object.keys(THEMES)[0];
-  const focusIn = (p, sel) => p.evaluate((s) => document.querySelector(s)?.contains(document.activeElement) === true, sel);
-  const focusOn = (p, sel) => p.evaluate((s) => document.activeElement === document.querySelector(s), sel);
+  // Focus moves when the overlay's own effects run, a frame or so after
+  // the key or click: waited for, never read once.
+  const focusIn = (p, sel) =>
+    p.waitForFunction((s) => document.querySelector(s)?.contains(document.activeElement) === true, sel, { timeout: 3000 }).then(() => true, () => false);
+  const focusOn = (p, sel) =>
+    p.waitForFunction((s) => document.activeElement === document.querySelector(s), sel, { timeout: 3000 }).then(() => true, () => false);
   const shown = (p, sel) => p.waitForSelector(sel, { timeout: 3000 }).then(() => true, () => false);
   const gone = (p, sel) => p.waitForSelector(sel, { state: "detached", timeout: 3000 }).then(() => true, () => false);
   let p = await page(browser, theme0, { width: 420, height: 900 });
@@ -1077,7 +1100,7 @@ for (const theme of Object.keys(THEMES)) {
   await p.click(sessions, { timeout: 3000 }).catch(() => {});
   await p.click('.drawer .foot:has-text("New session")', { timeout: 3000 }).catch(() => {});
   check("New session in the sessions drawer opens the agents drawer", await shown(p, '.drawer h3:text-is("New chat with…")'));
-  await p.waitForTimeout(100); // past the closing sheet's focus return
+  await settled(p); // the closing sheet's exit, and the focus return it makes
   check("focus stays inside the agents drawer", await focusIn(p, ".drawer"));
   await p.keyboard.press("Escape");
   await gone(p, ".drawer");
@@ -1485,7 +1508,7 @@ for (const theme of Object.keys(THEMES)) {
   await p.waitForSelector(".section h1");
   for (const section of ["Agents", "Capability matrix", "MCP Servers", "Preferences", "Saved roots", "Import/Export", "Edits", "Commands", "Audit", "Data"]) {
     await p.click(`.nav .it:has-text("${section}")`);
-    await p.waitForTimeout(150);
+    await p.waitForFunction((name) => document.querySelector(".section h1")?.textContent === name, section, { timeout: 3000 }).catch(() => {});
     // a section that failed to render shows no controls at all — never a pass
     check(`[narrow] settings › ${section} renders`, (await p.$(".section h1")) !== null);
     await sweep(p, `settings › ${section}`);
@@ -1675,7 +1698,7 @@ for (const theme of Object.keys(THEMES)) {
     ...fw.writeScope,
     rows: fw.writeScope.rows.map((r) => (r.location.kind === "alwaysAsk" ? { ...r, workspace: true, on: true } : r)),
   });
-  await p.waitForTimeout(100);
+  await machineCard.locator("text=Always ask is on").waitFor({ timeout: 3000 }).catch(() => {}); // the patch rendered
   check(
     "[file writes] always ask dims every other place, kept as set",
     (await machineCard.locator(".rule.opacity-50").count()) === fw.writeScope.rows.filter((r) => r.machine !== null).length - 1 &&
