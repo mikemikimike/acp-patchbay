@@ -6,10 +6,10 @@
 // queue — its holdings riding the row as busy — with Stop and Remove
 // ending whatever it holds.
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { tempDir } from "./support/teardown";
 import { SETTLE } from "./support/wait-for";
 import { Cancelled } from "../src/orchestrator/queue";
 import { AgentConfigStore } from "../src/orchestrator/stores/agent-configs";
@@ -23,11 +23,10 @@ const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
 
 let dir: string;
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "patchbay-agents-"));
+  dir = await tempDir("patchbay-agents-");
 });
 afterEach(async () => {
   vi.unstubAllGlobals();
-  await rm(dir, { recursive: true, force: true });
 });
 
 function fakeConfig(id: string, script: FakeAgentScript, over: Partial<AgentConfigView> = {}): AgentConfigView {

@@ -1,10 +1,10 @@
 // Export: the picked parts of the machine store, read from the real stores
 // over one in-memory KV, beside the secrets their records name.
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { tempDir } from "./support/teardown";
 import {
   exportConfiguration,
   STORED_KEYS,
@@ -225,16 +225,12 @@ describe("configuration export", () => {
   });
 
   it.skipIf(process.platform === "win32")("the file is written readable by its owner only — an existing one too", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "patchbay-export-"));
-    try {
-      const path = join(dir, "config.json");
-      await writeFile(path, "old", { mode: 0o644 });
-      const file = await exported("agents");
-      await writeConfigurationFile(path, file);
-      expect((await stat(path)).mode & 0o777).toBe(0o600);
-      expect(JSON.parse(await readFile(path, "utf8"))).toEqual(file);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+    const dir = await tempDir("patchbay-export-");
+    const path = join(dir, "config.json");
+    await writeFile(path, "old", { mode: 0o644 });
+    const file = await exported("agents");
+    await writeConfigurationFile(path, file);
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual(file);
   });
 });

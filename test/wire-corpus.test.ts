@@ -6,10 +6,9 @@
 // of that file, reviewed like code — never as a silent difference.
 //
 // Regenerate after a deliberate change: `npx vitest run test/wire-corpus -u`.
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { tempDir } from "./support/teardown";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import type { LaunchSpec } from "../src/orchestrator/pool";
 import type { AgentViewState } from "../src/shared/protocol";
@@ -21,9 +20,8 @@ const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
 
 let cwd: string;
 beforeEach(async () => {
-  cwd = await mkdtemp(join(tmpdir(), "patchbay-corpus-"));
+  cwd = await tempDir("patchbay-corpus-");
 });
-afterEach(() => rm(cwd, { recursive: true, force: true }));
 
 function spec(script: FakeAgentScript, patchbayAgentId: string): LaunchSpec {
   return {

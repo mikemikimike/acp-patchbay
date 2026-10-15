@@ -2,10 +2,10 @@
 // in code tables (META_EXTENSIONS, knob quirks). registryAgentView
 // is the registry × curation × platform join — tested against a fixture
 // payload (network-free, same fixture philosophy as the fake agent).
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { tempDir } from "./support/teardown";
 import type { Logger } from "../src/orchestrator/logger";
 import {
   AcpRegistryStore,
@@ -167,10 +167,9 @@ describe("AcpRegistryStore", () => {
     return { log, lines };
   };
   let dir: string;
-  const fresh = async () => (dir = await mkdtemp(join(tmpdir(), "patchbay-registry-")));
+  const fresh = async () => (dir = await tempDir("patchbay-registry-"));
   afterEach(async () => {
     vi.unstubAllGlobals();
-    await rm(dir, { recursive: true, force: true });
   });
 
   it("overlapping triggers share one read", async () => {

@@ -3,11 +3,10 @@
 // the bytes checked are the bytes fetched.
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { fileTempDir } from "./support/teardown";
 import {
   ChecksumMismatch,
   installBinary,
@@ -22,14 +21,13 @@ let server: Server;
 let url: string;
 let root: string;
 beforeAll(async () => {
-  root = await mkdtemp(join(tmpdir(), "patchbay-installer-"));
+  root = await fileTempDir("patchbay-installer-");
   server = createServer((_req, res) => res.end(BYTES));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/agent`;
 });
 afterAll(async () => {
   server.close();
-  await rm(root, { recursive: true, force: true });
 });
 
 const spec = (distribution: string, sha256: string | null): BinaryInstallSpec => ({

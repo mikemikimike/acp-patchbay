@@ -3,11 +3,11 @@
 // wholesale from session/load replay after a crash. Sessions are the
 // agent's truth: patchbay persists no index and no transcripts.
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { tempDir } from "./support/teardown";
 import { SETTLE } from "./support/wait-for";
 import { assertKind } from "./support/assert-kind";
 import { ATTACHMENTS_DIR, imageFileName } from "../src/orchestrator/attachments";
@@ -35,9 +35,8 @@ const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
 // files collide on disk.
 let cwd: string;
 beforeEach(async () => {
-  cwd = await mkdtemp(join(tmpdir(), "patchbay-sm-"));
+  cwd = await tempDir("patchbay-sm-");
 });
-afterEach(() => rm(cwd, { recursive: true, force: true }));
 
 function spec(script: FakeAgentScript, patchbayAgentId = "fake"): LaunchSpec {
   return {
@@ -3944,9 +3943,9 @@ describe("a session's files live with the session", () => {
     const h = harness();
     await h.pool.connect(spec({ turn: [{ type: "echoBlockKinds" }] }, "f59a"));
     const patchbaySessionId = await h.sessions.createSession("f59a" as PatchbayAgentId, "Fake Agent", cwd);
-    const notes = join(tmpdir(), `patchbay-f59a-${Date.now()}.txt`);
+    const notes = join(cwd, "f59a-notes.txt");
     await writeFile(notes, "notes");
-    const gonePath = join(tmpdir(), `patchbay-f59a-gone-${Date.now()}.txt`);
+    const gonePath = join(cwd, "f59a-gone.txt");
     await h.sessions.addContext(patchbaySessionId, { id: "chip-f59a-img", kind: "image", label: "Image", content: PNG, mimeType: "image/png" });
     await h.sessions.addContext(patchbaySessionId, { id: "chip-f59a-file", kind: "attachment", label: "File: notes", name: basename(notes), path: notes });
     await h.sessions.addContext(patchbaySessionId, { id: "chip-f59a-gone", kind: "attachment", label: "File: gone", name: basename(gonePath), path: gonePath });
@@ -3966,7 +3965,6 @@ describe("a session's files live with the session", () => {
     expect(staged.every((c) => c.id.startsWith("chip-") && !c.id.startsWith("chip-f59a"))).toBe(true);
     expect(staged[0]).toMatchObject({ content: PNG });
     expect(await h.sessions.restagePromptFiles(patchbaySessionId, "no-such-block")).toEqual([]);
-    await rm(notes, { force: true });
     await h.pool.stop("f59a" as PatchbayAgentId);
   });
 

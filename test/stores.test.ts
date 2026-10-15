@@ -1,11 +1,11 @@
 // Stores: session index over KV, permission rules defaults, decision audit
 // JSONL append/tail, the generic globalState-backed record store agents/
 // MCP servers/used-capabilities all share.
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { tempDir } from "./support/teardown";
 import { ATTACHMENTS_DIR } from "../src/orchestrator/attachments";
 import { DecisionAuditStore } from "../src/orchestrator/stores/decision-audit";
 import { GlobalRecordStore } from "../src/orchestrator/stores/global-record-store";
@@ -353,9 +353,8 @@ describe("SavedRootsStore — the roots every new session starts with", () => {
 describe("DecisionAuditStore", () => {
   let dir: string;
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), "patchbay-audit-"));
+    dir = await tempDir("patchbay-audit-");
   });
-  afterEach(() => rm(dir, { recursive: true, force: true }));
 
   it("appends JSONL in order and tails", async () => {
     const store = new DecisionAuditStore(dir);

@@ -2,10 +2,10 @@
 // record store empty (strays included), every secret the config lists name
 // deleted, rules back to built-ins, file stores gone. Real stores over
 // MemoryKV/MemorySecrets and a real temp dir; only vscode itself is absent.
-import { mkdtemp, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { tempDir } from "./support/teardown";
 import { eraseAllData } from "../src/orchestrator/erase-all";
 import { AgentConfigStore } from "../src/orchestrator/stores/agent-configs";
 import { DecisionAuditStore } from "../src/orchestrator/stores/decision-audit";
@@ -33,10 +33,7 @@ import type { PatchbayMcpServerId } from "../src/shared/ids";
 
 let dir: string;
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "patchbay-erase-"));
-});
-afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  dir = await tempDir("patchbay-erase-");
 });
 
 describe("eraseAllData", () => {

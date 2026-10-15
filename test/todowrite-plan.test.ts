@@ -3,10 +3,9 @@
 // write that doesn't — failed, rejected, unreadable, stranded — lands as
 // the agent sent it. The frames are OpenCode 1.18.35's, captured live
 // (the list's JSON text trimmed from `content`/`output`; nothing reads it).
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { tempDir } from "./support/teardown";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import type { ToolCallReading } from "../src/orchestrator/extensions";
 import { createTodoWritePlanRewriter } from "../src/orchestrator/extensions/todowrite-plan";
@@ -117,9 +116,8 @@ describe("todowrite plan rewriter", () => {
 const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
 let cwd: string;
 beforeEach(async () => {
-  cwd = await mkdtemp(join(tmpdir(), "patchbay-todowrite-"));
+  cwd = await tempDir("patchbay-todowrite-");
 });
-afterEach(() => rm(cwd, { recursive: true, force: true }));
 
 describe("todowrite plan, end to end", () => {
   it("the plan chip holds the stored list, the transcript only the write that failed — live, and replayed by a reload", async () => {

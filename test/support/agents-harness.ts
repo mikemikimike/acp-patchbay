@@ -27,6 +27,7 @@ import {
   type AgentViewState,
 } from "../../src/shared/protocol";
 import { stubFsTerminalHooks } from "./stub-hooks";
+import { stopsAtTestEnd } from "./teardown";
 import type { PatchbayAgentId } from "../../src/shared/ids";
 
 export interface AgentsHarness {
@@ -83,6 +84,7 @@ export function agentsHarness(
       agents.noteAuthWireFact(patchbayAgentId, method, settled, startedAt, reason),
     ...stubFsTerminalHooks(),
   }, undefined, { resolveLaunch: opts.resolveLaunch });
+  stopsAtTestEnd(pool);
   const queue = new Queue<AgentOperation, PatchbayAgentId>((patchbayAgentId) => agents.publish(patchbayAgentId));
   const usedCapabilities = new UsedCapabilityStore(kv);
   const tracker = new CapabilityTracker(pool, usedCapabilities, {

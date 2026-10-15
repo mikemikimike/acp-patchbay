@@ -5,11 +5,10 @@
 // evidence the wire actually delivers to it — and that a persisted lock is
 // never laundered by facts that don't contradict it.
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { methods } from "@agentclientprotocol/sdk";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { tempDir } from "./support/teardown";
 import { SETTLE, waitFor } from "./support/wait-for";
 import { LOGGED_OUT_REASON, type AuthLock } from "../src/orchestrator/auth-evidence";
 import type { LaunchSpec } from "../src/orchestrator/pool";
@@ -22,9 +21,8 @@ const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
 
 let cwd: string;
 beforeEach(async () => {
-  cwd = await mkdtemp(join(tmpdir(), "patchbay-authflow-"));
+  cwd = await tempDir("patchbay-authflow-");
 });
-afterEach(() => rm(cwd, { recursive: true, force: true }));
 
 function spec(script: FakeAgentScript, patchbayAgentId: PatchbayAgentId): LaunchSpec {
   return {

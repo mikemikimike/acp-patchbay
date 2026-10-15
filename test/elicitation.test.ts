@@ -4,10 +4,9 @@
 // here are the ones agents actually send: claude-agent-acp turns its
 // AskUserQuestion into a `oneOf` single-select (plus a free-text "Other"),
 // or an array of `anyOf` options when the question is multi-select.
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { stopsAtTestEnd, tempDir } from "./support/teardown";
 import { AsksStore } from "../src/orchestrator/asks-store";
 import { PermissionBroker } from "../src/orchestrator/broker";
 import {
@@ -276,9 +275,8 @@ const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
 
 let dir: string;
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "patchbay-elicit-"));
+  dir = await tempDir("patchbay-elicit-");
 });
-afterEach(() => rm(dir, { recursive: true, force: true }));
 
 function spec(script: FakeAgentScript, patchbayAgentId: PatchbayAgentId): LaunchSpec {
   return {
@@ -329,6 +327,7 @@ function wireHarness() {
     },
     onElicitationComplete: (patchbayAgentId, elicitationId) => asks.completeLink(patchbayAgentId, elicitationId),
   });
+  stopsAtTestEnd(pool);
   sessions = new SessionsStore(
     pool,
     { emit: (...evs) => events.push(...evs), capabilities: () => undefined },

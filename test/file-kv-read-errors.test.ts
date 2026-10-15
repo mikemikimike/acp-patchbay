@@ -6,10 +6,9 @@
 // read as an empty store, since the next write would replace the real file
 // with it. The read failure is simulated per path; every other read is real.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { tempDir } from "./support/teardown";
 import { FileKV } from "../src/orchestrator/stores/file-kv";
 
 const failing = vi.hoisted(() => new Map<string, string>());
@@ -29,13 +28,12 @@ describe("FileKV — a file it can't read", () => {
   let file: string;
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), "patchbay-filekv-read-"));
+    dir = await tempDir("patchbay-filekv-read-");
     file = join(dir, "state.json");
   });
 
   afterEach(async () => {
     failing.clear();
-    await rm(dir, { recursive: true, force: true });
   });
 
   it("refuses to open over it, rather than starting empty", () => {

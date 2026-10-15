@@ -2,10 +2,9 @@
 // Copyright 2026 Solutions Unity
 
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { tempDir } from "./support/teardown";
 import { z } from "zod";
 import { FileKV, type EnumerableKV } from "../src/orchestrator/stores/file-kv";
 import { GlobalRecordStore } from "../src/orchestrator/stores/global-record-store";
@@ -30,13 +29,10 @@ describe("FileKV", () => {
   let file: string;
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), "patchbay-filekv-"));
+    dir = await tempDir("patchbay-filekv-");
     file = join(dir, "state.json");
   });
 
-  afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
-  });
 
   it("starts empty with no file and no migration source — and writes no file", () => {
     const kv = new FileKV(file);

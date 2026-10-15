@@ -12,12 +12,11 @@
 // global editor state and need nothing more; request_user_input needs the
 // real session (to know which transcript to post the elicitation card
 // into), so that's where token → session is exercised and asserted.
-import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { McpServer } from "@agentclientprotocol/sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { stopsAtTestEnd, tempDir } from "./support/teardown";
 import {
   encodeLine,
   ipcAddress,
@@ -100,13 +99,12 @@ class FakeEditorStateHost {
 let dir: string;
 let host: FakeEditorStateHost;
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "patchbay-e2e-cwd-"));
+  dir = await tempDir("patchbay-e2e-cwd-");
   host = new FakeEditorStateHost(`${process.pid}-${Date.now()}`);
   await host.listen();
 });
 afterEach(async () => {
   host.close();
-  await rm(dir, { recursive: true, force: true });
 });
 
 function spec(script: FakeAgentScript, patchbayAgentId: PatchbayAgentId): LaunchSpec {
@@ -150,6 +148,7 @@ function harness() {
     onSessionUpdate: (patchbayAgentId, sessionId, update) => sessions.handleUpdate(patchbayAgentId, sessionId, update),
     ...stubFsTerminalHooks(),
   });
+  stopsAtTestEnd(pool);
   const sessions = new SessionsStore(
     pool,
     { emit: (...evs) => events.push(...evs), capabilities: () => undefined },

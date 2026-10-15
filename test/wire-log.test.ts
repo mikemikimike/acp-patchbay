@@ -1,10 +1,9 @@
 // Wire-log gate: redaction happens at the seam (an injected secret never
 // reaches the sink), the TTL turns it off by itself, and oversized frames
 // are truncated honestly — plus the pool tap end-to-end over the fake agent.
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { stopsAtTestEnd, tempDir } from "./support/teardown";
 import { nullLogger } from "../src/orchestrator/logger";
 import { AgentPool, type LaunchSpec } from "../src/orchestrator/pool";
 import { WireLog, WIRE_LOG_TTL_MS } from "../src/orchestrator/wire-log";
@@ -116,9 +115,8 @@ const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
 
 let cwd: string;
 beforeEach(async () => {
-  cwd = await mkdtemp(join(tmpdir(), "patchbay-wire-"));
+  cwd = await tempDir("patchbay-wire-");
 });
-afterEach(() => rm(cwd, { recursive: true, force: true }));
 
 function spec(script: FakeAgentScript, patchbayAgentId: PatchbayAgentId): LaunchSpec {
   return {
@@ -143,6 +141,7 @@ describe("AgentPool wire tap", () => {
       onWireFrame: (_patchbayAgentId, direction, line) => frames.push({ direction, line }),
       ...stubFsTerminalHooks(),
     });
+    stopsAtTestEnd(pool);
     await pool.connect(spec({}, "tap" as PatchbayAgentId)); // tap inactive during connect — nothing captured
     expect(frames).toEqual([]);
 
@@ -172,6 +171,7 @@ describe("AgentPool wire tap", () => {
       },
       log,
     );
+    stopsAtTestEnd(pool);
     await pool.connect(spec({ stdoutNoise: ["Starting agent v1 secret=abc", "42", "{not json"] }, "noisy" as PatchbayAgentId));
     const { sessionId } = await pool.newSession("noisy" as PatchbayAgentId, cwd);
     expect(sessionId).toBeTruthy(); // not interrupted

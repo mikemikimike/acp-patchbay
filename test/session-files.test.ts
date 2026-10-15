@@ -6,10 +6,10 @@
 // names it, or moved when the session is minted again. Names on disk encode
 // ids — no id an agent mints can steer a path.
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { tempDir } from "./support/teardown";
 import { MemoryKV } from "../src/orchestrator/stores/kv";
 import { SessionContinuityStore } from "../src/orchestrator/stores/session-continuity";
 import { adoptStashedChips, SessionFilesStore } from "../src/orchestrator/stores/session-files";
@@ -22,11 +22,8 @@ const PNG = Buffer.from("png-bytes").toString("base64");
 let dir: string;
 let files: SessionFilesStore;
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "patchbay-session-files-"));
+  dir = await tempDir("patchbay-session-files-");
   files = new SessionFilesStore(join(dir, "root"));
-});
-afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
 });
 
 describe("SessionFilesStore", () => {

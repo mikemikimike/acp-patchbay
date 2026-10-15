@@ -1,9 +1,9 @@
 // P5 gate: fake agent scripted to lie shows declared-but-not-used; branch
 // affordance lights only after the fork is used; reconnect drops used.
-import { mkdtemp, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { tempDir } from "./support/teardown";
 import { SETTLE, waitFor } from "./support/wait-for";
 import type { LaunchSpec } from "../src/orchestrator/pool";
 import { capabilityState } from "../src/shared/protocol";
@@ -15,9 +15,8 @@ const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
 
 let cwd: string;
 beforeEach(async () => {
-  cwd = await mkdtemp(join(tmpdir(), "patchbay-capver-"));
+  cwd = await tempDir("patchbay-capver-");
 });
-afterEach(() => rm(cwd, { recursive: true, force: true }));
 
 function spec(script: FakeAgentScript, patchbayAgentId: PatchbayAgentId): LaunchSpec {
   return {

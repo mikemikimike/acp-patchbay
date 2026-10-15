@@ -4,10 +4,10 @@
 // The fixture's dependentOptions models the shape that motivated it
 // (OpenCode's `effort` exists only for models with variants): a surface
 // read at agent defaults cannot show a knob the saved default would reveal.
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { stopsAtTestEnd, tempDir } from "./support/teardown";
 import { DefaultsEditor } from "../src/orchestrator/defaults-editor";
 import { AgentPool, type LaunchSpec } from "../src/orchestrator/pool";
 import type { KnobSeed, SettingsEvent } from "../src/shared/protocol";
@@ -19,9 +19,8 @@ const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
 
 let cwd: string;
 beforeEach(async () => {
-  cwd = await mkdtemp(join(tmpdir(), "patchbay-defaults-"));
+  cwd = await tempDir("patchbay-defaults-");
 });
-afterEach(() => rm(cwd, { recursive: true, force: true }));
 
 /** model → effort appears only for "pro"; its levels are pro's own. */
 const DEPENDENT_SCRIPT: FakeAgentScript = {
@@ -85,6 +84,7 @@ function harness(opts: { defaults?: Record<string, KnobSeed>; mayOpen?: boolean 
     onAuthWireFact: () => {},
     ...stubFsTerminalHooks(),
   });
+  stopsAtTestEnd(pool);
   editor = new DefaultsEditor(
     pool,
     {

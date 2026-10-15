@@ -1,9 +1,8 @@
 // P8 gate: one process per agent, one-click reload, and the session knob
 // surfaces — minus vscode, over the real fake agent.
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { stopsAtTestEnd, tempDir } from "./support/teardown";
 import { waitFor } from "./support/wait-for";
 import { CapabilityTracker } from "../src/orchestrator/capability-tracker";
 import { AgentPool, type LaunchSpec } from "../src/orchestrator/pool";
@@ -28,9 +27,8 @@ const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
 
 let cwd: string;
 beforeEach(async () => {
-  cwd = await mkdtemp(join(tmpdir(), "patchbay-sadv-"));
+  cwd = await tempDir("patchbay-sadv-");
 });
-afterEach(() => rm(cwd, { recursive: true, force: true }));
 
 function spec(script: FakeAgentScript, patchbayAgentId: PatchbayAgentId): LaunchSpec {
   return {
@@ -68,6 +66,7 @@ function harness(extraHooks: {
     onCapabilityEvidence: (patchbayAgentId, row, evidence) => capabilityTracker.noteEvidence(patchbayAgentId, row, evidence),
     ...stubFsTerminalHooks(),
   });
+  stopsAtTestEnd(pool);
   capabilityTracker = new CapabilityTracker(pool, new UsedCapabilityStore(new MemoryKV()), {
     registryIdOf: () => null,
     changed: () => {},
@@ -316,6 +315,7 @@ describe("Session model/mode/effort knobs (P8)", () => {
       onSessionUpdate: (patchbayAgentId, sessionId, update) => sessions.handleUpdate(patchbayAgentId, sessionId, update),
       ...stubFsTerminalHooks(),
     });
+    stopsAtTestEnd(pool);
     capabilityTracker = new CapabilityTracker(pool, new UsedCapabilityStore(new MemoryKV()), {
       registryIdOf: () => null,
     changed: () => {},

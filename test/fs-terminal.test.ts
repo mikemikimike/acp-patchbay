@@ -2,10 +2,10 @@
 // untouched and reaches the agent as an error; terminal commands are gated
 // the same way. Runs the extension's real fs/terminal handlers (ClientHost),
 // minus vscode (the live-buffer read/write is covered by the vscode suite).
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { stopsAtTestEnd, tempDir } from "./support/teardown";
 import { waitFor } from "./support/wait-for";
 import { assertKind } from "./support/assert-kind";
 import { formatCommandLine } from "../src/shared/command-line";
@@ -38,13 +38,12 @@ const NODE = formatCommandLine(process.execPath, []);
 let dir: string;
 let workspaceRoot: string;
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "patchbay-fsterm-"));
+  dir = await tempDir("patchbay-fsterm-");
   workspaceRoot = join(dir, "workspace");
   await mkdir(workspaceRoot, { recursive: true });
 });
 // Retried: on Windows a released terminal's process holds the folder
 // (EBUSY) until it has finished exiting.
-afterEach(() => rm(dir, { recursive: true, force: true, maxRetries: 10 }));
 
 function spec(script: FakeAgentScript, patchbayAgentId: PatchbayAgentId): LaunchSpec {
   return {
@@ -98,6 +97,7 @@ function harness(live: Partial<Pick<ClientHostDeps, "readLive" | "writeLive">> =
       );
     },
   });
+  stopsAtTestEnd(pool);
 
   sessions = new SessionsStore(
     pool,

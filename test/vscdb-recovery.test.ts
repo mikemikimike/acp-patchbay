@@ -6,11 +6,10 @@
 // never-written keys. Suite skips itself loudly where the running Node
 // lacks node:sqlite — the module defers there by design.
 import { writeFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { tempDir } from "./support/teardown";
 import { FileKV } from "../src/orchestrator/stores/file-kv";
 import {
   LEGACY_EXTENSION_ID,
@@ -53,14 +52,11 @@ describe.skipIf(sqlite === null)("recoverLegacyGlobalState", () => {
   };
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), "patchbay-recovery-"));
+    dir = await tempDir("patchbay-recovery-");
     vscdbPath = join(dir, "state.vscdb");
     kv = new FileKV(join(dir, "state.json"));
   });
 
-  afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
-  });
 
   it("recovers only acpPatchbay.* keys from the legacy row and stamps the marker", async () => {
     writeVscdb(vscdbPath, {

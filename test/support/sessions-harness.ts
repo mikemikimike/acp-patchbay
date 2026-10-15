@@ -14,6 +14,7 @@ import type { PatchbayAgentId, PatchbaySessionId } from "../../src/shared/ids";
 import { readSessionUpdate, type SessionUpdateFact } from "../../src/orchestrator/readers/session-update";
 import { gatesFor } from "./session-gates";
 import { stubFsTerminalHooks } from "./stub-hooks";
+import { stopsAtTestEnd } from "./teardown";
 
 /** A session/update as the pool hands it on — read, its notes dropped. */
 export function readUpdate(update: unknown): SessionUpdateFact {
@@ -99,6 +100,7 @@ export function sessionsHarness(cwd: string, opts?: {
     onCapabilityEvidence: (patchbayAgentId, row, evidence) => capabilityTracker.noteEvidence(patchbayAgentId, row, evidence),
     ...stubFsTerminalHooks(),
   });
+  stopsAtTestEnd(pool);
   capabilityTracker = new CapabilityTracker(pool, new UsedCapabilityStore(new MemoryKV()), {
     registryIdOf: () => null,
     changed: () => {},

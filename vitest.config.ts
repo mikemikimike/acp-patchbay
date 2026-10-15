@@ -24,6 +24,7 @@ export default defineConfig({
     exclude: ["test/vscode/**"],
     environment: "node",
     globalSetup: ["test/setup/build-fake-agent.ts"],
+    setupFiles: ["test/setup/teardown.ts"],
     // A Windows process starts slowly, and the suite starts many at once:
     // a test that spawns the fake agent, ~1.4 s alone there, ran past the
     // default 5 s under the full suite's load.

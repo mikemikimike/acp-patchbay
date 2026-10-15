@@ -1,11 +1,11 @@
 // P2 gate: pool against the fake agent — connect, capture declared,
 // crash → visible → one-action restart, two concurrent sessions on one connection.
 import { existsSync } from "node:fs";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { chmod, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { SessionUpdateFact } from "../src/orchestrator/readers/session-update";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import { fileTempDir, stopsAtTestEnd, tempDir } from "./support/teardown";
 import { SETTLE, waitFor } from "./support/wait-for";
 import { AgentPool, type LaunchSpec } from "../src/orchestrator/pool";
 import type { AgentStatus } from "../src/shared/protocol";
@@ -18,9 +18,8 @@ const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
 
 let cwd: string;
 beforeAll(async () => {
-  cwd = await mkdtemp(join(tmpdir(), "patchbay-pool-"));
+  cwd = await fileTempDir("patchbay-pool-");
 });
-afterAll(() => rm(cwd, { recursive: true, force: true }));
 
 interface Recorded {
   statuses: Array<{ status: AgentStatus; detail?: string }>;
@@ -41,6 +40,7 @@ function makePool(): { pool: AgentPool; rec: Recorded } {
     onSessionUpdate: (_id, sessionId, update) => rec.updates.push({ sessionId, update }),
     ...stubFsTerminalHooks(),
   });
+  stopsAtTestEnd(pool);
   return { pool, rec };
 }
 
@@ -226,6 +226,7 @@ describe("AgentPool", () => {
       onSessionUpdate: () => {},
       ...stubFsTerminalHooks(),
     });
+    stopsAtTestEnd(pool);
     await expect(
       pool.connect({
         patchbayAgentId: "doomed" as PatchbayAgentId,
@@ -278,6 +279,7 @@ describe("AgentPool", () => {
       undefined,
       { resolveLaunch: async (s) => spec({}, s.patchbayAgentId) },
     );
+    stopsAtTestEnd(pool);
     const declared = await pool.connect({
       patchbayAgentId: "resolved" as PatchbayAgentId,
       name: "Resolved",
@@ -309,6 +311,7 @@ describe("AgentPool", () => {
         },
       },
     );
+    stopsAtTestEnd(pool);
     await expect(pool.connect(spec({}, "no-runtime"))).rejects.toThrow(/launch prerequisite unavailable/);
     const crashed = statuses.find((s) => s.status === "crashed");
     expect(crashed?.detail).toContain("node did not answer --version");
@@ -356,6 +359,7 @@ describe("AgentPool — stopping", () => {
         },
       },
     );
+    stopsAtTestEnd(pool);
     const controller = new AbortController();
     const connecting = pool.connect(spec({}, "mid-download"), { signal: controller.signal });
     controller.abort(new Error("stopped by test"));
@@ -380,7 +384,7 @@ describe("AgentPool — stopping", () => {
   it.skipIf(process.platform === "win32")(
     "a signal during the launcher warmup kills the warmup, and nothing spawns",
     async () => {
-      const bin = await mkdtemp(join(tmpdir(), "patchbay-warm-"));
+      const bin = await tempDir("patchbay-warm-");
       const pidFile = join(bin, "pid");
       await writeFile(
         join(bin, "npx"),
@@ -414,7 +418,6 @@ describe("AgentPool — stopping", () => {
       await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), SETTLE);
       expect(pool.get("warm" as PatchbayAgentId)?.status).toBe("stopped");
       expect(rec.statuses.map((s) => s.status)).not.toContain("running");
-      await rm(bin, { recursive: true, force: true });
     },
   );
 
@@ -424,7 +427,7 @@ describe("AgentPool — stopping", () => {
   it.skipIf(process.platform === "win32")(
     "a launcher that can't install its package fails the connect in its own words",
     async () => {
-      const bin = await mkdtemp(join(tmpdir(), "patchbay-warm-"));
+      const bin = await tempDir("patchbay-warm-");
       const runs = join(bin, "runs");
       await writeFile(
         join(bin, "npx"),
@@ -443,7 +446,6 @@ describe("AgentPool — stopping", () => {
       // The warmup ran, its first try and three retries; the agent itself
       // never did.
       expect((await readFile(runs, "utf8")).trim().split("\n")).toHaveLength(4);
-      await rm(bin, { recursive: true, force: true });
     },
   );
 
@@ -456,6 +458,7 @@ describe("AgentPool — stopping", () => {
       onCapabilityEvidence: (_id, row, kind) => evidence.push(`${row}:${kind}`),
       ...stubFsTerminalHooks(),
     });
+    stopsAtTestEnd(pool);
     await pool.connect(
       spec(
         { declare: { promptCapabilities: { image: true } }, turn: [{ type: "chunk", text: "slow" }], stepDelayMs: 5000 },

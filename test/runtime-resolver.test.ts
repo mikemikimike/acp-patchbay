@@ -6,10 +6,10 @@
 // does, so the tests spawn. POSIX-only fakes are skipped on win32 (a fake
 // .cmd can't be spawned shell-less there — the same CVE guard production
 // hits); the pure Windows behavior is covered via injected platform/base.
-import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { chmod, mkdir, stat, writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
-import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { describe, expect, it, beforeAll } from "vitest";
+import { fileTempDir, tempDir } from "./support/teardown";
 import { waitFor } from "./support/wait-for";
 import { nullLogger } from "../src/orchestrator/logger";
 import type { LaunchSpec } from "../src/orchestrator/pool";
@@ -34,9 +34,8 @@ const onPosix = process.platform !== "win32";
 
 let tmp: string;
 beforeAll(async () => {
-  tmp = await mkdtemp(join(tmpdir(), "patchbay-runtime-"));
+  tmp = await fileTempDir("patchbay-runtime-");
 });
-afterAll(() => rm(tmp, { recursive: true, force: true }));
 
 /** A fake runtime: an executable that answers --version with `output`. */
 async function fakeExe(dir: string, name: string, output: string): Promise<string> {
@@ -159,7 +158,7 @@ describe("probeVersion", () => {
   // missing (which would download one over it) — only a stop ends the wait,
   // and it ends it as a stop, never as "no runtime".
   it.skipIf(process.platform === "win32")("waits for a slow answer; a stop kills the probe and rejects", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "patchbay-probe-"));
+    const dir = await tempDir("patchbay-probe-");
     const slow = join(dir, "slow-runtime");
     await writeFile(slow, `#!${process.execPath}\nsetTimeout(() => console.log("v22.1.0"), 400);\n`);
     await chmod(slow, 0o755);
@@ -171,7 +170,6 @@ describe("probeVersion", () => {
     const probing = probeVersion(hung, process.env, controller.signal);
     controller.abort(new Error("stopped by test"));
     await expect(probing).rejects.toThrow("stopped by test");
-    await rm(dir, { recursive: true, force: true });
   });
 });
 

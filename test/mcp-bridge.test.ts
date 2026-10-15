@@ -9,14 +9,13 @@
 // (no network access here) and the token source (needs real vscode
 // SecretStorage) — the wire protocol and the bridge process itself are real.
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type Server as HttpServer } from "node:http";
 import { createServer as createNetServer, type Server as NetServer, type Socket } from "node:net";
-import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { McpServer } from "@agentclientprotocol/sdk";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { stopsAtTestEnd, tempDir } from "./support/teardown";
 import { SETTLE } from "./support/wait-for";
 import { IpcClient } from "../src/mcp/ipc-client";
 import { encodeLine, ipcAddress, parseLines, type IpcRequest, type IpcResponse } from "../src/mcp/ipc-protocol";
@@ -270,10 +269,7 @@ class FakeRootsUsingRemote {
 
 let dir: string;
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "patchbay-bridge-cwd-"));
-});
-afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  dir = await tempDir("patchbay-bridge-cwd-");
 });
 
 function spec(script: FakeAgentScript, patchbayAgentId: PatchbayAgentId): LaunchSpec {
@@ -295,6 +291,7 @@ function harness(mcpServers: McpServer[]) {
     onSessionUpdate: (patchbayAgentId, sessionId, update) => sessions.handleUpdate(patchbayAgentId, sessionId, update),
     ...stubFsTerminalHooks(),
   });
+  stopsAtTestEnd(pool);
   const sessions = new SessionsStore(
     pool,
     { emit: (...evs) => events.push(...evs), capabilities: () => undefined },

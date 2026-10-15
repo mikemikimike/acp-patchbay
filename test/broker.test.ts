@@ -1,8 +1,9 @@
 // P6 gate: automated broker tests — rule precedence, audit trail.
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { tempDir } from "./support/teardown";
 import { SETTLE, waitFor } from "./support/wait-for";
 import { AsksStore } from "../src/orchestrator/asks-store";
 import { PermissionBroker } from "../src/orchestrator/broker";
@@ -23,13 +24,12 @@ let workspaceRoot: string;
 let granted: string[];
 let added: string[];
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "patchbay-broker-"));
+  dir = await tempDir("patchbay-broker-");
   workspaceRoot = join(dir, "workspace");
   await mkdir(workspaceRoot);
   granted = [workspaceRoot];
   added = [];
 });
-afterEach(() => rm(dir, { recursive: true, force: true }));
 
 /** A value patchbay handed an agent — masked wherever a card shows it. */
 const HANDED_OUT = "sk-handed-out-token";

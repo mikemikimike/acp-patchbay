@@ -7,6 +7,7 @@
 import { spawn } from "node:child_process";
 import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { describe, expect, it, vi } from "vitest";
+import { stopsAtTestEnd } from "./support/teardown";
 import { SETTLE } from "./support/wait-for";
 import { commandOf, isAlive, killTree, reapOrphans, treeSpawnOptions } from "../src/orchestrator/process-tree";
 import { AgentPool } from "../src/orchestrator/pool";
@@ -138,6 +139,7 @@ posix("pool.stop ladder", () => {
       onSessionUpdate: () => {},
       ...stubFsTerminalHooks(),
     });
+    stopsAtTestEnd(pool);
     await pool.connect({
       patchbayAgentId: "stubborn" as PatchbayAgentId,
       name: "Stubborn",

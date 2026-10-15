@@ -4,12 +4,12 @@
 // cache is safe only because the entry is the one npm itself names and its
 // state is read by the marker npm writes last.
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { fileTempDir, tempDir } from "./support/teardown";
 import { SETTLE } from "./support/wait-for";
 import {
   bundledVersionInNpxCache,
@@ -89,9 +89,8 @@ describe("the npx entry", () => {
   }
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), "npx-health-"));
+    root = await tempDir("npx-health-");
   });
-  afterEach(() => rm(root, { recursive: true, force: true }));
 
   it("is named as npm names it — the folder of the reported failure", () => {
     expect(npxEntryDir("/c", "@agentclientprotocol/claude-agent-acp@0.86.0")).toBe(join("/c", "7f7e76b082713b4a"));
@@ -191,7 +190,6 @@ describe("the npx entry", () => {
       root = join(cache, "_npx");
       await mkdir(root, { recursive: true });
     });
-    afterEach(() => rm(cache, { recursive: true, force: true }));
 
     it("removes an install that never finished, so npm installs it fresh", async () => {
       const dir = await entry({ finished: false, rootManifest: true });
@@ -270,9 +268,8 @@ describe.skipIf(process.platform === "win32")("prepareLauncher", () => {
   const launch = () => ({ command: join(bin, "npx"), args: ["-y", "fake-pkg@1.0.0"], cwd: bin });
 
   beforeEach(async () => {
-    bin = await mkdtemp(join(tmpdir(), "patchbay-launcher-"));
+    bin = await tempDir("patchbay-launcher-");
   });
-  afterEach(() => rm(bin, { recursive: true, force: true }));
 
   it("installs the package to its exit, labeled while nothing can say it's installed", async () => {
     await standIn(`setTimeout(() => process.stdout.write("v22.0.0\\n"), 300);`);
@@ -338,7 +335,7 @@ describe("an install npm finished short — the real npm, a registry that cuts t
   const entryDir = () => npxEntryDir(join(work, "cache", "_npx"), "short-agent@1.0.0");
 
   beforeAll(async () => {
-    work = await mkdtemp(join(tmpdir(), "patchbay-short-"));
+    work = await fileTempDir("patchbay-short-");
     for (const [name, fields] of Object.entries(manifests)) {
       const src = join(work, "src", name);
       await mkdir(src, { recursive: true });
@@ -372,7 +369,6 @@ describe("an install npm finished short — the real npm, a registry that cuts t
   }, 120_000);
   afterAll(async () => {
     await new Promise((r) => server.close(r));
-    await rm(work, { recursive: true, force: true });
   });
   beforeEach(async () => {
     binFetches = 0;
