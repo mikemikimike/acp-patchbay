@@ -3,10 +3,12 @@
 // session it holds.
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { LaunchSpec } from "../../src/orchestrator/pool";
 import type { PatchbayAgentId } from "../../src/shared/ids";
 import type { FakeAgentScript } from "../fake-agent/main";
 import { storeFile } from "../fake-agent/store";
+import type { PackageSource } from "./npm-registry";
 
 /** The bundle test/setup/build-fake-agent.ts builds before the suite. */
 export const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
@@ -32,4 +34,14 @@ export async function heldFakeSession(cwd: string, sessionId: string): Promise<v
   const file = storeFile(cwd, sessionId);
   await mkdir(dirname(file), { recursive: true });
   await writeFile(file, "", "utf8");
+}
+
+/** The fake agent as an npm package: its bin starts the bundle above — what
+ * a registry agent's `npx -y <package>` launch runs, served by a registry of
+ * the test's own (npm-registry.ts). */
+export function fakeAgentPackage(): PackageSource {
+  return {
+    manifest: { bin: { "patchbay-fake-agent": "cli.js" } },
+    files: { "cli.js": `#!/usr/bin/env node\nimport(${JSON.stringify(pathToFileURL(FAKE_AGENT).href)});\n` },
+  };
 }

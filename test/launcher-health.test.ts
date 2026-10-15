@@ -3,12 +3,10 @@
 // layouts and ask the real npm where its cache is — deleting inside npm's
 // cache is safe only because the entry is the one npm itself names and its
 // state is read by the marker npm writes last.
-import { createHash } from "node:crypto";
 import { chmod, mkdir, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
-import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { npmRegistry, type LocalNpmRegistry } from "./support/npm-registry";
 import { fileTempDir, tempDir } from "./support/teardown";
 import { SETTLE } from "./support/wait-for";
 import {
@@ -309,76 +307,33 @@ describe.skipIf(process.platform === "win32")("prepareLauncher", () => {
 // skips the cut package, exits 0, and writes its completion marker.
 describe("an install npm finished short — the real npm, a registry that cuts the download", () => {
   let work: string;
-  let server: Server;
-  let registry: string;
-  let cuts: number;
-  let binFetches: number;
-  let requests = 0;
-  const tarballs = new Map<string, Buffer>();
+  let registry: LocalNpmRegistry;
+  let binFetchesBefore: number;
   const here = { os: [process.platform], cpu: [process.arch] };
-  const manifests: Record<string, Record<string, unknown>> = {
-    "short-agent": { bin: { "short-agent": "cli.js" }, optionalDependencies: { "short-bin": "1.0.0", "short-elsewhere": "1.0.0" } },
-    "short-bin": here,
-    // Another platform's binary: skipped on purpose, never fetched.
-    "short-elsewhere": { os: [`!${process.platform}`] },
-  };
+  const cli = { "cli.js": "#!/usr/bin/env node\nconsole.log('ran')\n" };
   const spec = () => ({ command: "npx", args: ["-y", "short-agent@1.0.0"], cwd: work });
-  const env = (extra: Record<string, string> = {}) =>
-    mergeEnv(process.env, {
-      npm_config_cache: join(work, "cache"),
-      npm_config_registry: registry,
-      npm_config_audit: "false",
-      npm_config_fund: "false",
-      npm_config_update_notifier: "false",
-      ...extra,
-    });
-  const entryDir = () => npxEntryDir(join(work, "cache", "_npx"), "short-agent@1.0.0");
+  const env = (extra: Record<string, string> = {}) => mergeEnv(process.env, { ...registry.env, ...extra });
+  const entryDir = () => npxEntryDir(join(registry.env.npm_config_cache!, "_npx"), "short-agent@1.0.0");
+  const binFetches = () => registry.tarballFetches("short-bin") - binFetchesBefore;
 
   beforeAll(async () => {
     work = await fileTempDir("patchbay-short-");
-    for (const [name, fields] of Object.entries(manifests)) {
-      const src = join(work, "src", name);
-      await mkdir(src, { recursive: true });
-      await writeFile(join(src, "package.json"), JSON.stringify({ name, version: "1.0.0", ...fields }));
-      await writeFile(join(src, "cli.js"), "#!/usr/bin/env node\nconsole.log('ran')\n");
-      const packed = await runToExit("npm", ["pack", "--silent", "--pack-destination", work], { env: process.env, cwd: src });
-      tarballs.set(name, await readFile(join(work, `${name}-1.0.0.tgz`)));
-      expect(packed?.code).toBe(0);
-    }
-    server = createServer((req, res) => {
-      requests++;
-      const name = req.url?.slice(1).replace(/-1\.0\.0\.tgz$/, "") ?? "";
-      const tgz = tarballs.get(name);
-      if (tgz === undefined) return void res.writeHead(404).end("{}");
-      if (!req.url!.endsWith(".tgz")) {
-        const dist = { tarball: `${registry}${name}-1.0.0.tgz`, integrity: `sha512-${createHash("sha512").update(tgz).digest("base64")}` };
-        const version = { name, version: "1.0.0", ...manifests[name], dist };
-        return void res.end(JSON.stringify({ name, "dist-tags": { latest: "1.0.0" }, versions: { "1.0.0": version } }));
-      }
-      if (name === "short-bin") binFetches++;
-      if (name === "short-bin" && cuts > 0) {
-        cuts--;
-        res.writeHead(200, { "content-length": tgz.length });
-        res.write(tgz.subarray(0, 20));
-        return void setTimeout(() => req.socket.destroy(), 50);
-      }
-      res.end(tgz);
+    registry = await npmRegistry(work, {
+      "short-agent": { manifest: { bin: { "short-agent": "cli.js" }, optionalDependencies: { "short-bin": "1.0.0", "short-elsewhere": "1.0.0" } }, files: cli },
+      "short-bin": { manifest: here, files: cli },
+      // Another platform's binary: skipped on purpose, never fetched.
+      "short-elsewhere": { manifest: { os: [`!${process.platform}`] }, files: cli },
     });
-    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-    registry = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
   }, 120_000);
-  afterAll(async () => {
-    await new Promise((r) => server.close(r));
-  });
   beforeEach(async () => {
-    binFetches = 0;
-    await rm(join(work, "cache"), { recursive: true, force: true });
+    binFetchesBefore = registry.tarballFetches("short-bin");
+    await rm(registry.env.npm_config_cache!, { recursive: true, force: true });
   });
 
   const binLanded = () => readFile(join(entryDir(), "node_modules", "short-bin", "package.json")).then(() => true, () => false);
 
   it("tries again until the cut binary lands, saying so where it says downloading", async () => {
-    cuts = 2;
+    registry.cut("short-bin", 2);
     const phases: string[] = [];
     await prepareLauncher(spec(), env(), { log: nullLogger, who: "test", onPhase: (l) => phases.push(l) });
     expect(phases).toEqual([
@@ -387,29 +342,29 @@ describe("an install npm finished short — the real npm, a registry that cuts t
       "the download didn't complete — trying again (2 of 3)…",
     ]);
     expect(await binLanded()).toBe(true);
-    expect(binFetches).toBe(3);
+    expect(binFetches()).toBe(3);
   }, 120_000);
 
   it("a download cut every time fails naming what's missing, after its retries", async () => {
-    cuts = Infinity;
+    registry.cut("short-bin", Infinity);
     const failure = await prepareLauncher(spec(), env(), { log: nullLogger, who: "test" }).catch((e: unknown) => e);
     expect(failure).toBeInstanceOf(LauncherFailure);
     expect((failure as LauncherFailure).detail).toBe(
       "part of the package didn't finish downloading (short-bin) — probably an unstable internet connection; trying again downloads only what's missing",
     );
-    expect(binFetches).toBe(4);
+    expect(binFetches()).toBe(4);
     // The next connect heals it before it runs.
     expect((await healNpxEntry(spec(), env(), { log: nullLogger }))?.state).toBe("absent");
   }, 120_000);
 
   it("with no full lockfile written, npm's cache tells — offline, the registry never asked", async () => {
-    cuts = 1;
+    registry.cut("short-bin", 1);
     const noLock = env({ npm_config_package_lock: "false" });
     const ran = await runToExit("npx", ["-y", "short-agent@1.0.0"], { env: noLock, cwd: work });
     expect(ran?.code).toBe(0);
     expect(await readFile(join(entryDir(), "package-lock.json")).then(() => true, () => false)).toBe(false);
-    const asked = requests;
+    const asked = registry.requests();
     expect(await droppedOptionals(entryDir(), noLock)).toEqual(["short-bin"]);
-    expect(requests).toBe(asked);
+    expect(registry.requests()).toBe(asked);
   }, 120_000);
 });

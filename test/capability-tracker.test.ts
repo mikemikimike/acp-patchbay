@@ -9,7 +9,7 @@ import { SETTLE, waitFor } from "./support/wait-for";
 import type { LaunchSpec } from "../src/orchestrator/pool";
 import { capabilityState } from "../src/shared/protocol";
 import type { FakeAgentScript } from "./fake-agent/main";
-import { agentsHarness } from "./support/agents-harness";
+import { orchestratorHarness } from "./support/orchestrator-harness";
 import type { PatchbayAgentId } from "../src/shared/ids";
 
 
@@ -20,7 +20,12 @@ beforeEach(async () => {
 
 const spec = (script: FakeAgentScript, patchbayAgentId: string): LaunchSpec => fakeAgent(script, patchbayAgentId, cwd);
 
-const harness = () => agentsHarness(cwd);
+/** The window's orchestrator, its parts under the names these tests read. */
+const harness = () => {
+  const h = orchestratorHarness(cwd);
+  const { pool, capabilityTracker: tracker, agents } = h.orchestrator;
+  return { pool, tracker, agents, probes: h.probes, seedAgent: h.seedAgent, state: h.agentView.state, paths: h.paths };
+};
 
 
 describe("CapabilityTracker", () => {
@@ -95,11 +100,11 @@ describe("CapabilityTracker", () => {
     // session/new reply; the old mkdtemp/rm-in-finally deleted the root out
     // from under it (CLI-fatal agent-side). Lifetime = agent config, not
     // the probe call.
-    const { pool, tracker } = harness();
+    const { pool, tracker, paths } = harness();
     await pool.connect(spec({ declare: { sessionCapabilities: { close: {} } } }, "rooted" as PatchbayAgentId));
     // the probe's close is its last step: once it's marked used, the probe is over
     await waitFor(() => (tracker.matrix("rooted" as PatchbayAgentId)?.["session.close"]?.used ? true : undefined));
-    expect((await stat(join(cwd, "probe", "rooted"))).isDirectory()).toBe(true);
+    expect((await stat(join(paths.globalStorage, "probe", "rooted"))).isDirectory()).toBe(true);
     await pool.stop("rooted" as PatchbayAgentId);
   });
 
@@ -171,7 +176,7 @@ describe("CapabilityTracker", () => {
     const { pool, tracker, agents, probes, seedAgent } = harness();
     // The latch's curated entry names the registry entry "auggie"; the agent
     // added from it has an id of its own.
-    seedAgent("latched" as PatchbayAgentId, "auggie");
+    await seedAgent("latched" as PatchbayAgentId, "auggie");
     // A probe's first step asks for its root, in the same call that decides
     // to run it — so a probe that started is counted where it was decided.
     const started = vi.spyOn(agents, "probeRoot");
@@ -222,7 +227,7 @@ describe("CapabilityTracker", () => {
 
   it("auth_required surfaces as needsAuth on the row, not a check failure", async () => {
     const { pool, tracker, state, seedAgent } = harness();
-    seedAgent("needsauth" as PatchbayAgentId);
+    await seedAgent("needsauth" as PatchbayAgentId);
     await pool.connect(
       spec(
         {
@@ -241,7 +246,7 @@ describe("CapabilityTracker", () => {
 
   it("authenticate() clears needsAuth and marks auth used once the retry succeeds", async () => {
     const { pool, tracker, state, seedAgent } = harness();
-    seedAgent("login" as PatchbayAgentId);
+    await seedAgent("login" as PatchbayAgentId);
     await pool.connect(
       spec(
         {

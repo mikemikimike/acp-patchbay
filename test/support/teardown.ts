@@ -21,7 +21,7 @@ export function atTestEnd(end: End): void {
 
 /** Runs `end` when the current file's tests are done — for what a whole
  * file shares, made in a `beforeAll`. */
-function atFileEnd(end: End): void {
+export function atFileEnd(end: End): void {
   fileEnds.push(end);
 }
 

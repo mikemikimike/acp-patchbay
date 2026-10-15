@@ -8,17 +8,18 @@
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FAKE_AGENT } from "./support/fake-agent";
-import { tempDir } from "./support/teardown";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { FAKE_AGENT, fakeAgentPackage } from "./support/fake-agent";
+import { npmRegistry, type LocalNpmRegistry } from "./support/npm-registry";
+import { orchestratorHarness, type OrchestratorHarnessOptions } from "./support/orchestrator-harness";
+import { fileTempDir, tempDir } from "./support/teardown";
 import { SETTLE } from "./support/wait-for";
 import { Cancelled } from "../src/orchestrator/queue";
 import { AgentConfigStore } from "../src/orchestrator/stores/agent-configs";
 import { MemoryKV } from "../src/orchestrator/stores/kv";
 import type { AgentConfigView } from "../src/shared/protocol";
 import type { FakeAgentScript } from "./fake-agent/main";
-import { agentsHarness, type AgentsHarness } from "./support/agents-harness";
-import type { PatchbayAgentId } from "../src/shared/ids";
+import type { PatchbayAgentId, PatchbaySessionId } from "../src/shared/ids";
 
 
 let dir: string;
@@ -28,6 +29,41 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.unstubAllGlobals();
 });
+
+/** The window's orchestrator, its agents side under the names these tests
+ * read; `ports` answers what VS Code would (its questions, its terminal). */
+function harness(opts: { kv?: MemoryKV; ports?: OrchestratorHarnessOptions["ports"] } = {}) {
+  const h = orchestratorHarness(dir, { machineKV: opts.kv, ports: opts.ports });
+  const o = h.orchestrator;
+  const state = h.agentView.state;
+  return {
+    orchestrator: o,
+    pool: o.pool,
+    agents: o.agents,
+    gates: o.gates,
+    tracker: o.capabilityTracker,
+    deps: {
+      configs: o.agentConfigs,
+      env: o.agentEnv,
+      registry: o.acpRegistry,
+      usedCapabilities: o.usedCapabilities,
+      composerKnobs: o.composerKnobs,
+      authLocks: o.authLocks,
+    },
+    events: h.agentView.events,
+    state,
+    row: (patchbayAgentId: PatchbayAgentId) => state().agents.find((a) => a.id === patchbayAgentId),
+    paths: h.paths,
+  };
+}
+type Harness = ReturnType<typeof harness>;
+
+/** One conversation open on the agent, as a user opens one: a chat started
+ * and spoken in. */
+async function openConversation(h: Harness, patchbayAgentId: PatchbayAgentId): Promise<void> {
+  await h.orchestrator.startChat(patchbayAgentId);
+  await h.orchestrator.sessionGates.prompt(h.state().activePatchbaySessionId! as PatchbaySessionId, { text: "hello" });
+}
 
 function fakeConfig(id: string, script: FakeAgentScript, over: Partial<AgentConfigView> = {}): AgentConfigView {
   return {
@@ -46,7 +82,7 @@ function fakeConfig(id: string, script: FakeAgentScript, over: Partial<AgentConf
 
 /** An agent saved under a fixed id, as one stored before patchbay minted
  * ids keeps its own — so a test can name it. */
-async function stored(h: AgentsHarness, config: AgentConfigView): Promise<void> {
+async function stored(h: Harness, config: AgentConfigView): Promise<void> {
   await h.deps.env.set(config.id, { ...config.env });
   await h.deps.configs.upsert({
     id: config.id,
@@ -60,6 +96,10 @@ async function stored(h: AgentsHarness, config: AgentConfigView): Promise<void> 
   });
   await h.agents.publishAll();
 }
+
+/** An agent env with npm offline — what a registry launch meets on a
+ * machine with no network: npx fails at once, as it would there. */
+const OFFLINE = { npm_config_offline: "true" };
 
 /** The shape of an id patchbay mints. */
 const MINTED = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -78,33 +118,33 @@ function serveRegistry(...agents: { id: string; version: string }[]): void {
 }
 
 /** The registry's copy on disk, loaded into the store. */
-async function cacheRegistry(h: AgentsHarness, ...agents: { id: string; version: string }[]): Promise<void> {
-  await mkdir(join(dir, "registry"), { recursive: true });
+async function cacheRegistry(h: Harness, ...agents: { id: string; version: string }[]): Promise<void> {
+  await mkdir(join(h.paths.globalStorage, "registry"), { recursive: true });
   await writeFile(
-    join(dir, "registry", "acp-registry-cache.json"),
+    join(h.paths.globalStorage, "registry", "acp-registry-cache.json"),
     JSON.stringify({ fetchedAt: new Date().toISOString(), etag: null, raw: registryFile(agents), icons: {} }),
   );
   await h.deps.registry.load();
 }
 
 /** The registry as both its copy and the CDN hold it. */
-async function seedRegistry(h: AgentsHarness, ...agents: { id: string; version: string }[]): Promise<void> {
+async function seedRegistry(h: Harness, ...agents: { id: string; version: string }[]): Promise<void> {
   serveRegistry(...agents);
   await cacheRegistry(h, ...agents);
 }
 
 /** A running registry agent pinned at 1.0.0 — by default with 2.0.0 on
  * offer; `listed` is what the registry lists instead. */
-async function upgradable(h: AgentsHarness, listed = [{ id: "reg", version: "2.0.0" }]): Promise<void> {
+async function upgradable(h: Harness, listed = [{ id: "reg", version: "2.0.0" }]): Promise<void> {
   await seedRegistry(h, ...listed);
   await stored(h, 
-    fakeConfig("reg", {}, { registrySource: { registryId: "reg", distributionKind: "npx", pinnedVersion: "1.0.0" } }),
+    fakeConfig("reg", {}, { env: { ...OFFLINE, FAKE_AGENT_SCRIPT: "{}" }, registrySource: { registryId: "reg", distributionKind: "npx", pinnedVersion: "1.0.0" } }),
   );
-  await h.agents.connect("reg" as PatchbayAgentId);
+  await h.gates.connect("reg" as PatchbayAgentId);
 }
 
-/** The gates' asks with open work on the connection, and questions the
- * test answers — each by how it starts. */
+/** The questions VS Code would put, answered by the test — each by how it
+ * starts. */
 function asking() {
   const asked: string[] = [];
   const open = new Map<string, (yes: boolean) => void>();
@@ -116,12 +156,9 @@ function asking() {
       open.get(message)!(yes);
       open.delete(message);
     },
-    asks: {
-      openWork: () => ({ conversations: 1, turns: 0 }),
-      confirm: (message: string) => {
-        asked.push(message);
-        return new Promise<boolean>((resolve) => open.set(message, resolve));
-      },
+    confirm: (message: string) => {
+      asked.push(message);
+      return new Promise<boolean>((resolve) => open.set(message, resolve));
     },
   };
 }
@@ -129,7 +166,7 @@ function asking() {
 describe("agents store", () => {
   it("reads saved facts from the file when asked — another window's save shows at once", async () => {
     const kv = new MemoryKV();
-    const h = agentsHarness(dir, { kv });
+    const h = harness({ kv });
     await stored(h, fakeConfig("a", {}));
     expect(h.agents.name("a" as PatchbayAgentId)).toBe("Fake a");
     // Another window, its own store over the same file, renames the agent.
@@ -142,36 +179,36 @@ describe("agents store", () => {
   });
 
   it("connects a saved agent with its env from SecretStorage, and records the version that answered", async () => {
-    const h = agentsHarness(dir);
+    const h = harness();
     await stored(h, fakeConfig("v", { version: "9.9.9" }));
-    await h.agents.connect("v" as PatchbayAgentId);
+    await h.gates.connect("v" as PatchbayAgentId);
 
     expect(h.pool.get("v" as PatchbayAgentId)?.status).toBe("running");
     expect(h.state().agents.find((a) => a.id === "v")?.status).toBe("running");
     // the script — and so the version — only reaches the process through the env
     await expect.poll(() => h.agents.config("v" as PatchbayAgentId)?.lastSeenVersion).toBe("9.9.9");
 
-    await h.agents.stop("v" as PatchbayAgentId);
+    await h.gates.stop("v" as PatchbayAgentId);
   });
 
   it("a crashed row carries the process's last words; a running one carries none", async () => {
-    const h = agentsHarness(dir);
+    const h = harness();
     // write-callback → exit: the last words are flushed before death
     const dying = ["-e", 'process.stderr.write("boom: config missing\\n", () => process.exit(1));'];
     await stored(h, fakeConfig("doomed", {}, { args: dying }));
-    await expect(h.agents.connect("doomed" as PatchbayAgentId)).rejects.toThrow();
+    await expect(h.gates.connect("doomed" as PatchbayAgentId)).rejects.toThrow();
     expect(h.row("doomed" as PatchbayAgentId)?.status).toBe("crashed");
     expect(h.row("doomed" as PatchbayAgentId)?.stderr?.join("\n")).toContain("boom: config missing");
 
     await h.agents.save(fakeConfig("doomed", {}));
-    await h.agents.connect("doomed" as PatchbayAgentId);
+    await h.gates.connect("doomed" as PatchbayAgentId);
     expect(h.row("doomed" as PatchbayAgentId)?.status).toBe("running");
     expect(h.row("doomed" as PatchbayAgentId)?.stderr).toBeUndefined();
-    await h.agents.stop("doomed" as PatchbayAgentId);
+    await h.gates.stop("doomed" as PatchbayAgentId);
   });
 
   it("an edit that takes another agent's name is refused — the record stays as it was", async () => {
-    const h = agentsHarness(dir);
+    const h = harness();
     await stored(h, fakeConfig("one", {}));
     await stored(h, fakeConfig("two", {}));
     await h.agents.save(fakeConfig("two", {}, { name: "Fake one", autoConnect: true }));
@@ -179,37 +216,39 @@ describe("agents store", () => {
   });
 
   it("the row's command is what runs while a process runs, and what Connect would run otherwise", async () => {
-    const h = agentsHarness(dir);
+    const h = harness();
     await stored(h, fakeConfig("cmd", {}));
-    await h.agents.connect("cmd" as PatchbayAgentId);
+    await h.gates.connect("cmd" as PatchbayAgentId);
     const spawned = h.row("cmd" as PatchbayAgentId)!.command;
     await h.agents.save(fakeConfig("cmd", {}, { args: [FAKE_AGENT, "--edited"] }));
     expect(h.row("cmd" as PatchbayAgentId)!.command).toBe(spawned);
-    await h.agents.stop("cmd" as PatchbayAgentId);
+    await h.gates.stop("cmd" as PatchbayAgentId);
     expect(h.row("cmd" as PatchbayAgentId)!.command).toContain("--edited");
   });
 
   it("publishing sends every row before the config list waits on any env read — the first frame has every agent", async () => {
-    const h = agentsHarness(dir);
+    const h = harness();
     await stored(h, fakeConfig("first", {}));
     await stored(h, fakeConfig("second", {}));
-    h.events.length = 0;
+    const before = h.events().length;
     const settled = h.agents.publishAll();
     // synchronously, before the env reads behind the config list resolve
-    expect(h.state().agents.map((a) => a.id)).toEqual(["first", "second"]);
-    expect(h.row("second" as PatchbayAgentId)?.status).toBe("untested");
+    const sent = h.events().slice(before).flatMap((e) => (e.kind === "agentUpserted" ? [e.agent] : []));
+    expect(sent.map((a) => a.id)).toEqual(["first", "second"]);
+    expect(sent.find((a) => a.id === "second")?.status).toBe("untested");
     await settled;
   });
 
   it("refuses to connect an agent with no saved config", async () => {
-    const h = agentsHarness(dir);
-    await expect(h.agents.connect("ghost" as PatchbayAgentId)).rejects.toThrow("no saved launch configuration");
+    const h = harness();
+    await expect(h.gates.connect("ghost" as PatchbayAgentId)).rejects.toThrow("no saved launch configuration");
   });
 
   it("Remove stops the process, tells the sessions side, purges every saved fact, lets go of its live state and leaves the views", async () => {
-    const h = agentsHarness(dir);
+    const h = harness();
     await stored(h, fakeConfig("gone", {}));
-    await h.agents.connect("gone" as PatchbayAgentId);
+    await h.gates.connect("gone" as PatchbayAgentId);
+    await openConversation(h, "gone" as PatchbayAgentId);
     await h.deps.authLocks.upsert({
       id: "gone" as PatchbayAgentId,
       lock: { kind: "authRequired", method: "session/new", reason: null, at: new Date().toISOString() },
@@ -217,12 +256,13 @@ describe("agents store", () => {
     h.agents.recordKnobs("gone" as PatchbayAgentId, { mode: "code" });
     const probe = await h.agents.probeRoot("gone" as PatchbayAgentId);
 
-    await h.agents.remove("gone" as PatchbayAgentId);
+    await h.gates.remove("gone" as PatchbayAgentId);
 
     // The pool lets go only of a process that is down.
     expect(h.pool.get("gone" as PatchbayAgentId)).toBeUndefined();
     expect(h.tracker.matrix("gone" as PatchbayAgentId)).toBeUndefined();
-    expect(h.removed).toEqual(["gone"]);
+    // the sessions side was told: the agent's conversation left with it
+    expect(h.state().sessions.some((s) => s.patchbayAgentId === "gone")).toBe(false);
     expect(h.agents.config("gone" as PatchbayAgentId)).toBeUndefined();
     expect(await h.deps.env.get("gone")).toEqual({});
     expect(h.agents.authLocked("gone" as PatchbayAgentId)).toBe(false);
@@ -233,32 +273,32 @@ describe("agents store", () => {
   });
 
   it("once the stores move under the views, an agent they no longer hold leaves them and one they hold reads as stored", async () => {
-    const h = agentsHarness(dir);
+    const h = harness();
     await stored(h, fakeConfig("kept", {}));
     await stored(h, fakeConfig("gone", {}));
     await h.deps.configs.remove("gone" as PatchbayAgentId);
     await h.deps.configs.upsert({ ...h.agents.config("kept" as PatchbayAgentId)!, name: "Renamed" });
 
-    const before = h.events.length;
+    const before = h.events().length;
     await h.agents.republish(h.state().agents.map((a) => a.id));
 
     expect(h.state().agents.map((a) => [a.id, a.name])).toEqual([["kept", "Renamed"]]);
     // Only the gone one is removed: a removal takes the agent's open
     // questions and knob rows with it, so a kept agent is never removed and
     // re-added.
-    const removed = h.events.slice(before).flatMap((e) => (e.kind === "agentRemoved" ? [e.patchbayAgentId] : []));
+    const removed = h.events().slice(before).flatMap((e) => (e.kind === "agentRemoved" ? [e.patchbayAgentId] : []));
     expect(removed).toEqual(["gone"]);
   });
 
   it("auth evidence for an agent with no saved config writes nothing", () => {
-    const h = agentsHarness(dir);
+    const h = harness();
     h.agents.noteAuthWireFact("ghost" as PatchbayAgentId, "session/new", "auth_required", new Date().toISOString(), "log in");
     expect(h.agents.authLocked("ghost" as PatchbayAgentId)).toBe(false);
-    expect(h.events.some((e) => e.kind === "agentUpserted" && e.agent.id === "ghost")).toBe(false);
+    expect(h.events().some((e) => e.kind === "agentUpserted" && e.agent.id === "ghost")).toBe(false);
   });
 
   it("startup opens the agents flagged auto-connect, and nothing else", async () => {
-    const h = agentsHarness(dir);
+    const h = harness();
     await stored(h, fakeConfig("auto", {}, { autoConnect: true }));
     await stored(h, fakeConfig("manual", {}));
 
@@ -266,7 +306,7 @@ describe("agents store", () => {
   });
 
   it("the old default-agent setting folds into the flag once — or names a registry agent not yet saved", async () => {
-    const h = agentsHarness(dir);
+    const h = harness();
     await stored(h, fakeConfig("legacy", {}));
 
     expect(await h.agents.startupSources("legacy")).toEqual([{ patchbayAgentId: "legacy" }]);
@@ -278,7 +318,7 @@ describe("agents store", () => {
   });
 
   it("a saved config for an agent the store doesn't hold is added under an id the store mints — a view never chooses one", async () => {
-    const h = agentsHarness(dir);
+    const h = harness();
     await h.agents.save(fakeConfig("chosen", {}));
     expect(h.agents.config("chosen" as PatchbayAgentId)).toBeUndefined();
     const [added] = h.deps.configs.list();
@@ -288,7 +328,7 @@ describe("agents store", () => {
   });
 
   it("one executable added twice is two agents — ids patchbay minted, numbered names, neither overwrites the other (#51)", async () => {
-    const h = agentsHarness(dir);
+    const h = harness();
     const first = await h.agents.saveFrom({ command: "npx foo acp" });
     const second = await h.agents.saveFrom({ command: "npx bar acp" });
     expect(first).toMatch(MINTED);
@@ -299,7 +339,7 @@ describe("agents store", () => {
   });
 
   it("one registry entry added twice is two agents, each linked to the entry by its registry id", async () => {
-    const h = agentsHarness(dir);
+    const h = harness();
     await seedRegistry(h, { id: "reg", version: "1.0.0" });
     const added = [await h.agents.saveFrom({ registryId: "reg" }), await h.agents.saveFrom({ registryId: "reg" })];
     expect(added[1]).not.toBe(added[0]);
@@ -308,7 +348,7 @@ describe("agents store", () => {
   });
 
   it("a value folded once is never folded again — the flag switched off afterwards stays off", async () => {
-    const h = agentsHarness(dir);
+    const h = harness();
     await stored(h, fakeConfig("legacy", {}));
     await h.agents.startupSources("legacy");
     expect(h.agents.config("legacy" as PatchbayAgentId)?.autoConnect).toBe(true);
@@ -318,7 +358,7 @@ describe("agents store", () => {
   });
 
   it("the old default-agent setting naming a registry entry adds its agent once — the next start finds it by its registry id", async () => {
-    const h = agentsHarness(dir);
+    const h = harness();
     await seedRegistry(h, { id: "reg", version: "1.0.0" });
     expect(await h.agents.startupSources("reg")).toEqual([{ registryId: "reg" }]);
     const added = await h.agents.saveFrom({ registryId: "reg" }); // the startup connect's save
@@ -330,7 +370,7 @@ describe("agents store", () => {
   // The copy a list or an update chip was shown from may be days old in a
   // window left open: Add and Upgrade act on the registry's word now.
   it("Add and Upgrade act on a fresh read of the registry, not on the copy they were shown from", async () => {
-    const h = agentsHarness(dir, { resolveLaunch: () => Promise.reject(new Error("offline")) });
+    const h = harness();
     await cacheRegistry(h, { id: "reg", version: "2.0.0" }); // the copy
     serveRegistry({ id: "reg", version: "3.0.0" }); // the registry moved on since
     const added = await h.agents.saveFrom({ registryId: "reg" });
@@ -338,15 +378,15 @@ describe("agents store", () => {
 
     // the store now holds 3.0.0 — what an update chip would show
     await stored(h,
-      fakeConfig("old", {}, { registrySource: { registryId: "reg", distributionKind: "npx", pinnedVersion: "1.0.0" } }),
+      fakeConfig("old", {}, { env: OFFLINE, registrySource: { registryId: "reg", distributionKind: "npx", pinnedVersion: "1.0.0" } }),
     );
     serveRegistry({ id: "reg", version: "4.0.0" });
-    await h.agents.upgrade("old" as PatchbayAgentId);
+    await h.gates.upgrade("old" as PatchbayAgentId);
     expect(h.agents.config("old" as PatchbayAgentId)?.registrySource?.pinnedVersion).toBe("4.0.0");
-  });
+  }, 120_000);
 
   it("an imported agent is resolved for this machine from a fresh registry read — or, unlisted, stays as the file had it", async () => {
-    const h = agentsHarness(dir);
+    const h = harness();
     serveRegistry({ id: "reg", version: "2.0.0" });
     await stored(h, fakeConfig("reg", {}, { registrySource: { registryId: "reg", distributionKind: "npx", pinnedVersion: "1.0.0" } }));
     await stored(h, fakeConfig("gone", {}, { registrySource: { registryId: "unlisted", distributionKind: "npx", pinnedVersion: "1.0.0" } }));
@@ -364,30 +404,31 @@ describe("agents store", () => {
 
   it("an Upgrade the registry can't serve asks nothing and leaves the agent as it is", async () => {
     const user = asking();
-    const h = agentsHarness(dir, { asks: user.asks });
+    const h = harness({ ports: { confirm: user.confirm } });
     await upgradable(h, [{ id: "other", version: "2.0.0" }]); // the registry no longer lists it
+    await openConversation(h, "reg" as PatchbayAgentId);
 
-    await h.agents.upgrade("reg" as PatchbayAgentId);
+    await h.gates.upgrade("reg" as PatchbayAgentId);
     expect(user.asked).toEqual([]);
     expect(h.row("reg" as PatchbayAgentId)?.status).toBe("running");
-    await h.agents.stop("reg" as PatchbayAgentId);
   });
 
   it("an Upgrade moves the pin in place and keeps the agent's own facts — its id, name, auto-connect and defaults", async () => {
-    // The launch can't run in a unit test — the pin moves all the same, and
-    // the failed connect shows on the row as a crash would.
-    const h = agentsHarness(dir, { resolveLaunch: () => Promise.reject(new Error("offline")) });
+    // Offline, the launch fails — the pin moves all the same, and the
+    // failed connect shows on the row as a crash would.
+    const h = harness();
     await seedRegistry(h, { id: "reg", version: "2.0.0" });
     await stored(h, 
       fakeConfig("mine", {}, {
         name: "Work profile",
+        env: OFFLINE,
         autoConnect: true,
         defaults: { model: "fast" },
         registrySource: { registryId: "reg", distributionKind: "npx", pinnedVersion: "1.0.0" },
       }),
     );
 
-    await h.agents.upgrade("mine" as PatchbayAgentId);
+    await h.gates.upgrade("mine" as PatchbayAgentId);
     expect(h.agents.config("mine" as PatchbayAgentId)).toMatchObject({
       name: "Work profile",
       autoConnect: true,
@@ -396,21 +437,42 @@ describe("agents store", () => {
     });
     expect(h.deps.configs.list()).toHaveLength(1);
     expect(h.row("mine" as PatchbayAgentId)?.status).toBe("crashed");
-  });
+  }, 120_000);
 });
 
 describe("the gates", () => {
+  // A launch that downloads: the fake agent as a package from a registry
+  // served here, its tarball held where a test plays a slow download.
+  let packages: LocalNpmRegistry;
+  beforeAll(async () => {
+    packages = await npmRegistry(await fileTempDir("patchbay-agents-npm-"), { "patchbay-fake-agent": fakeAgentPackage() });
+  }, 120_000);
+  /** Settles once npm has asked for the package's tarball — the launch is
+   * downloading now (the request the hold keeps waiting). */
+  const downloading = async (before: number) =>
+    vi.waitFor(() => expect(packages.tarballFetches("patchbay-fake-agent")).toBe(before + 1), { ...SETTLE, timeout: 60_000 });
+  /** An agent launched from that registry — with an npm cache of the test's
+   * own, so every launch downloads. */
+  const downloaded = (id: string, over: Partial<AgentConfigView> = {}) =>
+    fakeConfig(id, {}, {
+      command: "npx",
+      args: ["-y", "patchbay-fake-agent@1.0.0"],
+      env: { ...packages.env, npm_config_cache: join(dir, "npm-cache"), FAKE_AGENT_SCRIPT: "{}" },
+      ...over,
+    });
+
   // #53: a chat started while its agent was still auto-connecting issued a
   // second connect, which the pool refused as "already connected".
   it("a connect asked for mid-launch joins the one under way — one spawn, no false failure (#53)", async () => {
-    let release!: () => void;
-    const download = new Promise<void>((resolve) => (release = resolve));
-    const h = agentsHarness(dir, { resolveLaunch: async (spec) => (await download, spec) });
-    await stored(h, fakeConfig("auto", {}, { autoConnect: true }));
+    const h = harness();
+    await stored(h, downloaded("auto", { autoConnect: true }));
+    const release = packages.hold("patchbay-fake-agent");
+    const fetched = packages.tarballFetches("patchbay-fake-agent");
     const spawns = vi.spyOn(h.pool, "connect");
 
     const startup = h.gates.connect("auto" as PatchbayAgentId);
-    await vi.waitFor(() => expect(h.pool.get("auto" as PatchbayAgentId)?.status).toBe("reconnecting"), SETTLE);
+    await downloading(fetched);
+    expect(h.pool.get("auto" as PatchbayAgentId)?.status).toBe("reconnecting");
     const chat = h.gates.connect("auto" as PatchbayAgentId);
     expect(h.row("auto" as PatchbayAgentId)?.busy).toEqual([{ kind: "connect" }]);
     release();
@@ -419,15 +481,16 @@ describe("the gates", () => {
     await startup;
     expect(spawns).toHaveBeenCalledTimes(1);
     expect(h.row("auto" as PatchbayAgentId)).toMatchObject({ status: "running", busy: [] });
-    await h.agents.stopAll();
-  });
+    await h.gates.stopAll();
+  }, 120_000);
 
   // #68: nothing tracked an upgrade while it ran — a second one asked again
   // and restarted the agent a second time.
   it("a second Upgrade while one is held joins it — one question, one outcome (#68)", async () => {
     const user = asking();
-    const h = agentsHarness(dir, { asks: user.asks });
+    const h = harness({ ports: { confirm: user.confirm } });
     await upgradable(h);
+    await openConversation(h, "reg" as PatchbayAgentId);
 
     const first = h.gates.upgrade("reg" as PatchbayAgentId);
     const second = h.gates.upgrade("reg" as PatchbayAgentId);
@@ -443,13 +506,13 @@ describe("the gates", () => {
     expect(user.asked).toHaveLength(1);
     // Declined: the agent runs as it was, and the chat's connect found it up.
     expect(h.row("reg" as PatchbayAgentId)).toMatchObject({ status: "running", busy: [], update: { from: "1.0.0", to: "2.0.0" } });
-    await h.agents.stop("reg" as PatchbayAgentId);
   });
 
   it("Stop never waits its turn, and an upgrade it stopped goes no further — the agent keeps its version", async () => {
     const user = asking();
-    const h = agentsHarness(dir, { asks: user.asks });
+    const h = harness({ ports: { confirm: user.confirm } });
     await upgradable(h);
+    await openConversation(h, "reg" as PatchbayAgentId);
 
     const upgrade = h.gates.upgrade("reg" as PatchbayAgentId);
     await vi.waitFor(() => expect(user.asked).toHaveLength(1), SETTLE);
@@ -474,49 +537,49 @@ describe("the gates", () => {
   // Before Stop and Remove could reach a launch still downloading, Remove
   // finished launching an agent that no longer existed.
   it("Remove during a launch ends it: the removed agent never starts", async () => {
-    let release!: () => void;
-    const download = new Promise<void>((resolve) => (release = resolve));
-    const h = agentsHarness(dir, { resolveLaunch: async (spec) => (await download, spec) });
-    await stored(h, fakeConfig("doomed", {}));
+    const h = harness();
+    await stored(h, downloaded("doomed"));
+    const release = packages.hold("patchbay-fake-agent");
+    const fetched = packages.tarballFetches("patchbay-fake-agent");
     const connect = h.gates.connect("doomed" as PatchbayAgentId);
-    await vi.waitFor(() => expect(h.pool.get("doomed" as PatchbayAgentId)?.status).toBe("reconnecting"), SETTLE);
+    await downloading(fetched);
+    expect(h.pool.get("doomed" as PatchbayAgentId)?.status).toBe("reconnecting");
     const cut = expect(connect).rejects.toBeInstanceOf(Cancelled);
 
     await h.gates.remove("doomed" as PatchbayAgentId);
     await cut;
-    // The download lands after all — and launches nothing.
+    // The download lands after all — and launches nothing: the cut connect
+    // ended its download (npm with it), and nothing holds what it fetched.
     release();
-    // The cut connect let go of the download when it was cut: its late spec
-    // resolves into a race already settled. One turn of the event loop lets
-    // anything still holding it act — nothing may.
     await new Promise((r) => setImmediate(r));
     expect(h.pool.get("doomed" as PatchbayAgentId)).toBeUndefined();
     expect(h.agents.config("doomed" as PatchbayAgentId)).toBeUndefined();
     expect(h.row("doomed" as PatchbayAgentId)).toBeUndefined();
-    expect(h.removed).toEqual(["doomed"]);
-  });
+    expect(h.events().some((e) => e.kind === "agentRemoved" && e.patchbayAgentId === "doomed")).toBe(true);
+  }, 120_000);
 
   it("Stop during a launch ends it, and the next Connect starts afresh", async () => {
-    let hold: Promise<void> | null = new Promise<void>(() => {});
-    const h = agentsHarness(dir, { resolveLaunch: async (spec) => (await hold, spec) });
-    await stored(h, fakeConfig("slow", {}));
+    const h = harness();
+    await stored(h, downloaded("slow"));
+    packages.hold("patchbay-fake-agent"); // the first download never lands
+    const fetched = packages.tarballFetches("patchbay-fake-agent");
     const connect = h.gates.connect("slow" as PatchbayAgentId);
-    await vi.waitFor(() => expect(h.pool.get("slow" as PatchbayAgentId)?.status).toBe("reconnecting"), SETTLE);
+    await downloading(fetched);
+    expect(h.pool.get("slow" as PatchbayAgentId)?.status).toBe("reconnecting");
     const cut = expect(connect).rejects.toBeInstanceOf(Cancelled);
 
     await h.gates.stop("slow" as PatchbayAgentId);
     await cut;
     expect(h.row("slow" as PatchbayAgentId)).toMatchObject({ status: "stopped", busy: [] });
-    hold = null;
     await h.gates.connect("slow" as PatchbayAgentId);
     expect(h.row("slow" as PatchbayAgentId)?.status).toBe("running");
-    await h.agents.stopAll();
-  });
+    await h.gates.stopAll();
+  }, 120_000);
 
   it("a terminal login holds the agent until its terminal reports an exit or is closed — the exit is evidence", async () => {
     let close: ((exitCode: number | undefined) => void) | undefined;
-    const h = agentsHarness(dir, {
-      hooks: { runLoginTask: () => new Promise<number | undefined>((resolve) => (close = resolve)) },
+    const h = harness({
+      ports: { runLoginTask: () => new Promise<number | undefined>((resolve) => (close = resolve)) },
     });
     await stored(h, 
       fakeConfig("tl", { authMethods: [{ id: "tl", name: "Terminal login", _meta: { "terminal-auth": { command: "fake-login" } } }] }),
@@ -529,7 +592,7 @@ describe("the gates", () => {
     close?.(1);
     await login;
     expect(h.agents.authLocked("tl" as PatchbayAgentId)).toBe(true);
-    await h.agents.stopAll();
+    await h.gates.stopAll();
   });
 
   // What the login task is handed (#93). A typed terminal method is the
@@ -538,7 +601,7 @@ describe("the gates", () => {
   // user's keys reach the login that writes the credentials they pair with.
   it("a typed terminal login runs the agent's own launch plus its args, never the recipe beside it", async () => {
     const handed: { command: string; args: string[]; env?: Record<string, string> }[] = [];
-    const h = agentsHarness(dir, { hooks: { runLoginTask: async (_name, recipe) => (handed.push(recipe), 0) } });
+    const h = harness({ ports: { runLoginTask: async (_name, recipe) => (handed.push(recipe), 0) } });
     const config = fakeConfig("oc2", {
       authMethods: [
         { id: "login", name: "Login", type: "terminal", args: ["--login"], _meta: { "terminal-auth": { command: "opencode", args: ["auth", "login"] } } },
@@ -549,12 +612,12 @@ describe("the gates", () => {
     await h.gates.login("oc2" as PatchbayAgentId, "login");
     expect(handed).toHaveLength(1);
     expect(handed[0]).toMatchObject({ command: config.command, args: [...config.args, "--login"] });
-    await h.agents.stopAll();
+    await h.gates.stopAll();
   });
 
   it("a recipe login runs as written, over the agent's launch env — the recipe's own env wins a clash", async () => {
     const handed: { command: string; args: string[]; env?: Record<string, string> }[] = [];
-    const h = agentsHarness(dir, { hooks: { runLoginTask: async (_name, recipe) => (handed.push(recipe), 0) } });
+    const h = harness({ ports: { runLoginTask: async (_name, recipe) => (handed.push(recipe), 0) } });
     const config = fakeConfig(
       "oc1",
       { authMethods: [{ id: "login", name: "Login", _meta: { "terminal-auth": { command: "opencode", args: ["auth", "login"], env: { SHARED: "recipe" } } } }] },
@@ -565,7 +628,7 @@ describe("the gates", () => {
     expect(handed).toHaveLength(1);
     expect(handed[0]).toMatchObject({ command: "opencode", args: ["auth", "login"] });
     expect(handed[0]!.env).toMatchObject({ USER_KEY: "k-1", SHARED: "recipe" });
-    await h.agents.stopAll();
+    await h.gates.stopAll();
   });
 
   // The login's terminal is the user's: a Stop stops waiting on it, never
@@ -573,9 +636,9 @@ describe("the gates", () => {
   // return code is the login's only word, so it still counts when it comes.
   it("Stop stops waiting on a terminal login and leaves the terminal be — its return code still counts", async () => {
     let close: ((exitCode: number | undefined) => void) | undefined;
-    const h = agentsHarness(dir, {
+    const h = harness({
       // The login's terminal: open until the user is done with it.
-      hooks: { runLoginTask: () => new Promise<number | undefined>((resolve) => (close = resolve)) },
+      ports: { runLoginTask: () => new Promise<number | undefined>((resolve) => (close = resolve)) },
     });
     await stored(h, 
       fakeConfig("tl", { authMethods: [{ id: "tl", name: "Terminal login", _meta: { "terminal-auth": { command: "fake-login" } } }] }),

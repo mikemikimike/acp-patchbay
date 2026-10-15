@@ -1,0 +1,167 @@
+// The window's orchestrator, as production builds it, on storage held in
+// memory and a folder of the test's own. Only its ports — what VS Code does
+// for it — are stood in for here, each recorded or answered as a test asks;
+// everything the orchestrator composes is the real thing. A test observes
+// it the way a webview does: attached to its views, reading what they are
+// sent.
+import { readFile } from "node:fs/promises";
+import { join, sep } from "node:path";
+import { vi } from "vitest";
+import { applyFileWrite } from "../../src/orchestrator/client-host";
+import { nullLogger } from "../../src/orchestrator/logger";
+import { Orchestrator, type OrchestratorPorts } from "../../src/orchestrator/orchestrator";
+import { MemoryKV } from "../../src/orchestrator/stores/kv";
+import { MemorySecrets } from "../../src/orchestrator/stores/mcp-server-tokens";
+import type { PatchbayAgentId } from "../../src/shared/ids";
+import type { AgentViewEvent, AgentViewState, HostToView, SettingsEvent, SettingsState } from "../../src/shared/protocol";
+import { atTestEnd, stopsAtTestEnd } from "./teardown";
+
+/** One view as a webview sees it: every patch it was sent, in order. */
+export interface WatchedView<S, E> {
+  /** Every event the view was sent so far — pending patches flushed first. */
+  events(): E[];
+  /** The view's canonical state, as its next snapshot would carry it. */
+  state(): S;
+}
+
+export interface OrchestratorHarness {
+  orchestrator: Orchestrator;
+  agentView: WatchedView<AgentViewState, AgentViewEvent>;
+  settings: WatchedView<SettingsState, SettingsEvent>;
+  /** What the orchestrator asked of its ports, in order. */
+  asked: { port: keyof OrchestratorPorts; args: unknown[] }[];
+  /** The open workspace's folders — mutable, to play a folder change. */
+  workspaceRoots: string[];
+  /** Sessions shown in their own panels — mutable. */
+  pinned: Set<string>;
+  /** Where the orchestrator keeps what it stores on disk. */
+  paths: { globalStorage: string; workspaceStorage: string };
+  /** Every free-check probe the orchestrator opened, in order: the
+   * session/new each agent was sent in its probe root. */
+  probes: { patchbayAgentId: PatchbayAgentId; sessionId: string }[];
+  /** A saved agent — and so a row in the views — for one a test connects
+   * through the pool directly: the orchestrator acts only on agents that
+   * exist. `registryId` saves it as added from that registry entry. */
+  seedAgent(patchbayAgentId: PatchbayAgentId, registryId?: string): Promise<void>;
+}
+
+export interface OrchestratorHarnessOptions {
+  /** This machine's storage — pass one to share it with a second harness
+   * (a window reload, or another window). */
+  machineKV?: MemoryKV;
+  /** This workspace's storage — likewise. */
+  workspaceKV?: MemoryKV;
+  workspaceRoots?: readonly string[];
+  /** Replaces a port's stand-in. */
+  ports?: Partial<OrchestratorPorts>;
+  /** The network, as the registry and every download see it — absent, any
+   * fetch fails: no test reaches the real network. */
+  fetch?: typeof fetch;
+}
+
+function watch<S, E>(channel: Orchestrator["agentView"] | Orchestrator["settings"]): WatchedView<S, E> {
+  const sent: E[] = [];
+  channel.attach({
+    postMessage: (message: unknown) => {
+      const msg = message as HostToView<S, E>;
+      if (msg.kind === "patch") sent.push(...msg.events);
+      return Promise.resolve(true);
+    },
+  });
+  return {
+    events: () => {
+      channel.flushNow();
+      return [...sent];
+    },
+    state: () => channel.current as S,
+  };
+}
+
+/** `cwd` is the test's own folder: the workspace the orchestrator works in,
+ * and the home of its global and workspace storage. */
+export function orchestratorHarness(cwd: string, opts: OrchestratorHarnessOptions = {}): OrchestratorHarness {
+  vi.stubGlobal("fetch", opts.fetch ?? (() => Promise.reject(new Error("no network in tests"))));
+  atTestEnd(() => vi.unstubAllGlobals());
+  const asked: OrchestratorHarness["asked"] = [];
+  const paths = { globalStorage: join(cwd, ".patchbay-global"), workspaceStorage: join(cwd, ".patchbay-workspace") };
+  const workspaceRoots = [...(opts.workspaceRoots ?? [cwd])];
+  const pinned = new Set<string>();
+  const note = <K extends keyof OrchestratorPorts>(port: K, ...args: unknown[]) => asked.push({ port, args });
+  const ports: OrchestratorPorts = {
+    handleAction: (action) => note("handleAction", action),
+    workspaceRoots: () => workspaceRoots,
+    socketPath: () => "",
+    notifyRootsChanged: (token) => note("notifyRootsChanged", token),
+    redirectUri: async () => "http://127.0.0.1/oauth-callback",
+    openLink: async (href) => (note("openLink", href), true),
+    confirm: async (message, choice) => (note("confirm", message, choice), true),
+    warn: (message) => note("warn", message),
+    runLoginTask: async (name, recipe) => (note("runLoginTask", name, recipe), 0),
+    announceUpdates: async () => {},
+    wireSink: () => ({ appendLine: () => {} }),
+    onWireLogStateChanged: () => {},
+    pinnedSessions: () => [...pinned],
+    // No editor holds a file here: what VS Code would fall back to, disk.
+    readTextFileLive: (path) => readFile(path, "utf8"),
+    writeTextFileLive: (path, content) => applyFileWrite(path, content),
+    closeAskDiffs: async () => {},
+    connectStartupAgents: async () => {},
+    focusComposer: async () => void note("focusComposer"),
+    notifyAsk: (patchbaySessionId, title, ask) => note("notifyAsk", patchbaySessionId, title, ask),
+    syncDetachContext: () => {},
+    warnCatch: (context, what) => (err) => note("warnCatch", context, what, err),
+    ...opts.ports,
+  };
+  const orchestrator = new Orchestrator(
+    {
+      machineKV: opts.machineKV ?? new MemoryKV(),
+      workspaceKV: opts.workspaceKV ?? new MemoryKV(),
+      secrets: new MemorySecrets(),
+      globalStoragePath: paths.globalStorage,
+      storagePath: paths.workspaceStorage,
+      workspaceCwd: cwd,
+      scripts: {
+        editorServer: join(process.cwd(), "out", "mcp-server.js"),
+        bridge: join(process.cwd(), "out", "mcp-bridge.js"),
+      },
+    },
+    ports,
+    nullLogger,
+  );
+  atTestEnd(() => orchestrator.dispose());
+  stopsAtTestEnd(orchestrator.pool);
+  // A probe is the session/new an agent is sent in its probe root — read
+  // off the pool as it answers, nothing added to the orchestrator for it.
+  const probes: OrchestratorHarness["probes"] = [];
+  const probeRoot = join(paths.globalStorage, "probe") + sep;
+  const newSession = orchestrator.pool.newSession.bind(orchestrator.pool);
+  vi.spyOn(orchestrator.pool, "newSession").mockImplementation(async (patchbayAgentId, sessionCwd, ...rest) => {
+    const opened = await newSession(patchbayAgentId, sessionCwd, ...rest);
+    if (sessionCwd.startsWith(probeRoot)) probes.push({ patchbayAgentId, sessionId: opened.sessionId });
+    return opened;
+  });
+  const seedAgent = async (patchbayAgentId: PatchbayAgentId, registryId?: string) => {
+    await orchestrator.agentConfigs.upsert({
+      id: patchbayAgentId,
+      name: patchbayAgentId,
+      command: process.execPath,
+      args: [],
+      autoConnect: false,
+      defaults: {},
+      registrySource: registryId === undefined ? null : { registryId, distributionKind: "npx", pinnedVersion: "1.0.0" },
+      lastSeenVersion: null,
+    });
+    orchestrator.agents.publish(patchbayAgentId);
+  };
+  return {
+    orchestrator,
+    agentView: watch<AgentViewState, AgentViewEvent>(orchestrator.agentView),
+    settings: watch<SettingsState, SettingsEvent>(orchestrator.settings),
+    asked,
+    workspaceRoots,
+    pinned,
+    paths,
+    probes,
+    seedAgent,
+  };
+}
