@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Your messages read in every theme.** The bubble around your message
+  took the theme's badge color but kept the page's text color: in Light
+  2026 and High Contrast Light that was dark text on blue. The text now
+  takes the badge's own text color, the pair the theme defines together.
+  Thanks to @maple367. (#106)
 - **Permissions is now two pages: Edits and Commands.** Where file writes
   are approved and which commands are allowed are different things that
   grow apart, so each has its own page under Trust. A long command-rules
