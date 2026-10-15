@@ -23,7 +23,9 @@ Thanks for your interest in acp-patchbay. Contributions are welcome.
 
 `npm run check` is the source of truth for "green." The electron suite needs a
 VS Code test host and skips loudly where one isn't available — run it where a
-host can be downloaded before you rely on it.
+host can be downloaded before you rely on it. Every pull request runs the same
+gate in CI on Linux, and the unit tests on Windows, so a suite you can't run
+locally still runs before merge.
 
 ## Pull requests
 

@@ -1,0 +1,60 @@
+name: CI
+
+# The gate on every push to main and every pull request: the full
+# `npm run check` on Linux — the same command run before every commit, the
+# Electron suite and the UI gate included — and the unit suite on Windows,
+# where paths, IPC endpoints and env-name casing differ. A fork's pull
+# request runs with a read-only token and no secrets; GitHub holds a
+# first-time contributor's run until it is approved.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # The Electron suite needs a display; the UI gate drives the runner's
+      # own Chrome.
+      - name: Check
+        env:
+          CHROMIUM: /usr/bin/google-chrome
+        run: xvfb-run -a npm run check
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # The integration tests spawn the real bundled subprocesses and the
+      # fake agent — built first, as on Linux.
+      - name: Build test prerequisites
+        run: npm run build && node scripts/build-fake-agent.mjs
+
+      - name: Unit tests
+        run: npm test
