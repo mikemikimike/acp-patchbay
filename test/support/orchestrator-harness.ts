@@ -82,6 +82,10 @@ function watch<S, E>(channel: Orchestrator["agentView"] | Orchestrator["settings
   };
 }
 
+/** Each orchestrator's IPC socket has a name of its own — a test process
+ * builds many, a window one. */
+let orchestrators = 0;
+
 /** `cwd` is the test's own folder: the home of the orchestrator's global
  * and workspace storage, and — unless `workspace` names another — the
  * folder it works in. */
@@ -97,8 +101,8 @@ export function orchestratorHarness(cwd: string, opts: OrchestratorHarnessOption
   const ports: OrchestratorPorts = {
     handleAction: (action) => note("handleAction", action),
     workspaceRoots: () => workspaceRoots,
-    socketPath: () => "",
-    notifyRootsChanged: (token) => note("notifyRootsChanged", token),
+    // an editor with nothing open: no selection, no file, no diagnostics
+    editor: { getSelection: () => null, getCurrentFile: () => null, getDiagnostics: () => [], getOpenEditors: () => [] },
     redirectUri: async () => "http://127.0.0.1/oauth-callback",
     openLink: async (href) => (note("openLink", href), true),
     confirm: async (message, choice) => (note("confirm", message, choice), true),
@@ -127,6 +131,7 @@ export function orchestratorHarness(cwd: string, opts: OrchestratorHarnessOption
       globalStoragePath: paths.globalStorage,
       storagePath: paths.workspaceStorage,
       workspaceCwd: workspace,
+      ipcName: `patchbay-test-${process.pid}-${++orchestrators}`,
       scripts: {
         editorServer: join(process.cwd(), "out", "mcp-server.js"),
         bridge: join(process.cwd(), "out", "mcp-bridge.js"),

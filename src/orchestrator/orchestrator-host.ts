@@ -97,8 +97,13 @@ export class OrchestratorHost {
     const extensionId = context.extension.id; // "solutionsunity.acp-patchbay"
     const workspaceRootsView = () =>
       (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+    // The editor's own state, read where only VS Code can; the
+    // orchestrator's IPC host answers spawned subprocesses with it.
+    this.editorStateHost = new EditorStateHost();
+    this.editorStateHost.start();
     this.orchestrator = new Orchestrator(
       {
+        ipcName: `acp-patchbay-${process.pid}`,
         machineKV,
         workspaceKV: context.workspaceState,
         secrets: context.secrets,
@@ -113,8 +118,7 @@ export class OrchestratorHost {
       {
         handleAction: (action) => this.handleAction(action),
         workspaceRoots: workspaceRootsView,
-        socketPath: () => this.editorStateHost.socketPath,
-        notifyRootsChanged: (token) => this.editorStateHost.notifyRootsChanged(token),
+        editor: this.editorStateHost,
         redirectUri: async () => {
           const callback = await vscode.env.asExternalUri(
             vscode.Uri.parse(`${vscode.env.uriScheme}://${extensionId}/oauth-callback`),
@@ -144,23 +148,6 @@ export class OrchestratorHost {
       log,
     );
 
-    // The socket answers only through what each attach was given: its
-    // token, the session it served, and the servers it got.
-    this.editorStateHost = new EditorStateHost(String(process.pid), {
-      admits: (contextToken) => this.orchestrator.sessions.admits(contextToken),
-      requestUserInput: (contextToken, params) => this.orchestrator.requestUserInput(contextToken, params),
-      // Same token discipline as requestUserInput: a token whose session is
-      // gone has no roots.
-      sessionRoots: (contextToken) => {
-        const patchbaySessionId = this.orchestrator.sessions.sessionOfToken(contextToken);
-        return patchbaySessionId === undefined ? [] : this.orchestrator.sessions.rootsOf(patchbaySessionId);
-      },
-      getMcpServerToken: (contextToken, patchbayMcpServerId) => {
-        const patchbayAgentId = this.orchestrator.sessions.bridgedTo(contextToken, patchbayMcpServerId);
-        return patchbayAgentId === undefined ? Promise.resolve(null) : this.orchestrator.mcpServers.credentialFor(patchbayMcpServerId, patchbayAgentId);
-      },
-    });
-    this.editorStateHost.start();
 
     // Live editor context for the composer (the selection
     // ghost chip appears only while the IDE has a selection; the @ mention

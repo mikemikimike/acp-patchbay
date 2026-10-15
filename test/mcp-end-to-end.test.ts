@@ -12,151 +12,45 @@
 // global editor state and need nothing more; request_user_input needs the
 // real session (to know which transcript to post the elicitation card
 // into), so that's where token → session is exercised and asserted.
-import { createServer, type Server } from "node:net";
-import { join } from "node:path";
-import type { McpServer } from "@agentclientprotocol/sdk";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { orchestratorHarness } from "./support/orchestrator-harness";
+import { waitFor } from "./support/wait-for";
+import type { EditorReads } from "../src/orchestrator/ipc-host";
 import { echoed } from "./support/transcript";
 import { fakeAgent } from "./support/fake-agent";
-import { stopsAtTestEnd, tempDir } from "./support/teardown";
-import {
-  encodeLine,
-  ipcAddress,
-  parseLines,
-  type IpcRequest,
-  type IpcResponse,
-} from "../src/mcp/ipc-protocol";
-import { AgentPool, type LaunchSpec } from "../src/orchestrator/pool";
-import { SessionsStore } from "../src/orchestrator/sessions-store";
-import { MemoryKV } from "../src/orchestrator/stores/kv";
-import { SessionContinuityStore } from "../src/orchestrator/stores/session-continuity";
-import { SessionFilesStore } from "../src/orchestrator/stores/session-files";
-import { initialAgentViewState, reduceAgentView, type AgentViewEvent } from "../src/shared/protocol";
+import { tempDir } from "./support/teardown";
+import { type LaunchSpec } from "../src/orchestrator/pool";
 import type { FakeAgentScript } from "./fake-agent/main";
-import { stubFsTerminalHooks } from "./support/stub-hooks";
-import { gatesFor } from "./support/session-gates";
-import type { PatchbayAgentId } from "../src/shared/ids";
+import type { PatchbayAgentId, PatchbaySessionId } from "../src/shared/ids";
 
-const MCP_SERVER = join(process.cwd(), "out", "mcp-server.js");
 
-/** Stands in for EditorStateHost — same wire protocol, canned data (real
- * vscode-backed data is test-electron/manual-smoke territory). Mirrors
- * Orchestrator's own split: every request is admitted by its token, and
- * requestUserInput translates the token to its session (it needs the real
- * one); the rest don't. */
-class FakeEditorStateHost {
-  server: Server;
-  socketPath: string;
-  requests: IpcRequest[] = [];
-  /** The store whose attaches minted the tokens — set by the harness. */
-  sessions: Pick<SessionsStore, "admits" | "sessionOfToken"> | null = null;
-
-  constructor(id: string) {
-    this.socketPath = ipcAddress(`patchbay-e2e-${id}`);
-    this.server = createServer((socket) => {
-      let buffer = "";
-      socket.setEncoding("utf8");
-      socket.on("data", (chunk: string) => {
-        buffer += chunk;
-        const { messages, rest } = parseLines(buffer);
-        buffer = rest;
-        for (const message of messages) {
-          const req = message as IpcRequest;
-          this.requests.push(req);
-          const response: IpcResponse =
-            this.sessions?.admits(req.contextToken) === true
-              ? { id: req.id, result: this.answer(req) }
-              : { id: req.id, error: "unknown session token" };
-          socket.write(encodeLine(response));
-        }
-      });
-    });
-  }
-
-  private answer(req: IpcRequest): unknown {
-    switch (req.method) {
-      case "getSelection":
-        return { file: "/ws/pool.ts", startLine: 42, endLine: 87, text: "class AgentPool { ... }" };
-      case "getDiagnostics":
-        return [{ file: "/ws/pool.ts", line: 10, severity: "error", message: "unused import" }];
-      case "requestUserInput": {
-        const realPatchbaySessionId = this.sessions?.sessionOfToken(req.contextToken);
-        return { action: "accept", content: { resolvedFor: realPatchbaySessionId } };
-      }
-      default:
-        return null;
-    }
-  }
-
-  listen(): Promise<void> {
-    return new Promise((resolve) => this.server.listen(this.socketPath, resolve));
-  }
-
-  close(): void {
-    this.server.close();
-  }
-}
+/** An editor with one selection and one problem in it — what the host would
+ * read from VS Code for the IPC host to answer with. */
+const EDITOR: EditorReads = {
+  getSelection: () => ({ file: "/ws/pool.ts", startLine: 42, endLine: 87, text: "class AgentPool { ... }" }),
+  getCurrentFile: () => null,
+  getDiagnostics: () => [{ file: "/ws/pool.ts", line: 10, severity: "error", message: "unused import" }],
+  getOpenEditors: () => [],
+};
 
 let dir: string;
-let host: FakeEditorStateHost;
 beforeEach(async () => {
   dir = await tempDir("patchbay-e2e-cwd-");
-  host = new FakeEditorStateHost(`${process.pid}-${Date.now()}`);
-  await host.listen();
-});
-afterEach(async () => {
-  host.close();
 });
 
 const spec = (script: FakeAgentScript, patchbayAgentId: string): LaunchSpec => fakeAgent(script, patchbayAgentId, dir);
 
-/** Builds the exact mcpServers entry Orchestrator builds — same shape,
- * pointed at the fake IPC host instead of a real EditorStateHost. */
-async function mcpServersFor(contextToken: string): Promise<{ servers: McpServer[]; given: [] }> {
-  return {
-    servers: [
-      {
-        name: "patchbay",
-        command: process.execPath,
-        args: [MCP_SERVER],
-        env: [
-          { name: "ACP_PATCHBAY_IPC", value: host.socketPath },
-          { name: "ACP_PATCHBAY_CONTEXT_TOKEN", value: contextToken },
-        ],
-      },
-    ],
-    given: [],
-  };
+/** The window's orchestrator: the editor server entry it builds for every
+ * attach, and the IPC host that answers it, are the ones that ship. */
+function harness() {
+  const h = orchestratorHarness(dir, { ports: { editor: EDITOR } });
+  const o = h.orchestrator;
+  return { pool: o.pool, sessions: o.sessions, gates: o.sessionGates, asks: o.asks, state: h.agentView.state };
 }
 
-function harness() {
-  const events: AgentViewEvent[] = [];
-  // Real production wiring: SessionsStore mints a context token per attach
-  // and answers for it — the host (here the test's fake) admits a request
-  // by it and finds its session through the store.
-  const pool = new AgentPool({
-    onStatusChanged: () => {},
-    onDeclaredCaptured: () => {},
-    onSessionUpdate: (patchbayAgentId, sessionId, update) => sessions.handleUpdate(patchbayAgentId, sessionId, update),
-    ...stubFsTerminalHooks(),
-  });
-  stopsAtTestEnd(pool);
-  const sessions = new SessionsStore(
-    pool,
-    { emit: (...evs) => events.push(...evs), capabilities: () => undefined },
-    new SessionContinuityStore(new MemoryKV()),
-    new SessionFilesStore(join(dir, "session-files")),
-    () => dir,
-    mcpServersFor,
-  );
-  host.sessions = sessions;
-  return {
-    pool,
-    sessions,
-    gates: gatesFor(sessions, (event) => events.push(event)),
-    state: () => events.reduce(reduceAgentView, initialAgentViewState),
-  };
-}
+/** The question card a session shows, once it shows it. */
+const questionIn = (h: ReturnType<typeof harness>, patchbaySessionId: PatchbaySessionId) =>
+  waitFor(() => h.state().transcripts[patchbaySessionId]?.find((b) => b.kind === "elicitation"));
 
 describe("local MCP server, end to end through a real agent process", () => {
   it("the agent reads the live selection via the local MCP server", async () => {
@@ -192,14 +86,14 @@ describe("local MCP server, end to end through a real agent process", () => {
       spec({ turn: [{ type: "callMcpTool", tool: "request_user_input", args: { message: "ok?" } }] }, "e3" as PatchbayAgentId),
     );
     const patchbaySessionId = await h.sessions.createSession("e3" as PatchbayAgentId, "Fake Agent", dir);
-    await h.gates.prompt(patchbaySessionId, { text: "go" });
+    const turn = h.gates.prompt(patchbaySessionId, { text: "go" });
 
-    expect(echoed(h.state(), patchbaySessionId)).toEqual({ resolvedFor: patchbaySessionId });
-    // and the IPC request itself carried the raw token, confirming the
-    // fake host's translation (mirroring Orchestrator's) is what did the work
-    expect(host.requests.some((r) => r.method === "requestUserInput" && r.contextToken !== patchbaySessionId)).toBe(
-      true,
-    );
+    // the subprocess asked with its correlation token; the question shows in
+    // the session the token was minted for, and the user's answer goes back
+    const card = await questionIn(h, patchbaySessionId);
+    h.asks.answerQuestion(card.id, { action: "accept", content: { answeredIn: patchbaySessionId } });
+    await turn;
+    expect(echoed(h.state(), patchbaySessionId)).toEqual({ answeredIn: patchbaySessionId });
     await h.pool.stop("e3" as PatchbayAgentId);
   });
 
@@ -212,15 +106,16 @@ describe("local MCP server, end to end through a real agent process", () => {
     const s2 = await h.sessions.createSession("e4" as PatchbayAgentId, "Fake Agent", dir);
     expect(s1).not.toBe(s2);
 
-    await h.gates.prompt(s1, { text: "go" });
-    await h.gates.prompt(s2, { text: "go" });
-
-    const resolvedFor = (sid: string) => {
-      return (echoed(h.state(), sid) as { resolvedFor?: string }).resolvedFor;
-    };
-    // each session's tool call resolved against its own sessionId, never the other's
-    expect(resolvedFor(s1)).toBe(s1);
-    expect(resolvedFor(s2)).toBe(s2);
+    // each session's tool call asks in its own session, never the other's —
+    // and each gets its own session's answer
+    for (const sid of [s1, s2]) {
+      const turn = h.gates.prompt(sid, { text: "go" });
+      const card = await questionIn(h, sid);
+      h.asks.answerQuestion(card.id, { action: "accept", content: { answeredIn: sid } });
+      await turn;
+    }
+    expect(echoed(h.state(), s1)).toEqual({ answeredIn: s1 });
+    expect(echoed(h.state(), s2)).toEqual({ answeredIn: s2 });
     await h.pool.stop("e4" as PatchbayAgentId);
   });
 });

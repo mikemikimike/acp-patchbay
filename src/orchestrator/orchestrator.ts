@@ -94,6 +94,7 @@ import { sessionsActiveToday } from "./session-stats";
 import type { PatchbayAgentId, PatchbayAskId, PatchbayMcpServerId, PatchbaySessionId } from "../shared/ids";
 import type { AgentsStoreHooks } from "./agents-store";
 import type { KV } from "./stores/kv";
+import { IpcHost, type EditorReads } from "./ipc-host";
 import type { Logger } from "./logger";
 import type { OAuthUserAgent } from "./mcp-oauth";
 import type { SecretsLike } from "./stores/mcp-server-tokens";
@@ -125,6 +126,8 @@ export interface OrchestratorPlace {
   workspaceCwd: string;
   /** The bundled scripts an agent spawns as MCP servers. */
   scripts: { editorServer: string; bridge: string };
+  /** The name of the IPC host's socket — one per window. */
+  ipcName: string;
 }
 
 /** What the orchestrator asks of the editor it runs in — every step that
@@ -133,8 +136,9 @@ export interface OrchestratorPlace {
 export interface OrchestratorPorts {
   handleAction(action: Action): void;
   workspaceRoots(): string[];
-  socketPath(): string;
-  notifyRootsChanged(contextToken: string): void;
+  /** The editor's own state — what the IPC host answers a subprocess
+   * asking for it. */
+  editor: EditorReads;
   redirectUri: OAuthUserAgent["redirectUri"];
   openLink(href: string): PromiseLike<boolean>;
   confirm(message: string, choice: string): Promise<boolean>;
@@ -215,6 +219,9 @@ export class Orchestrator {
   readonly workspaceCwd: string;
   private readonly binaryCacheDir: string;
   readonly clientHost: ClientHost;
+  /** The socket the subprocesses an agent spawns from a session's
+   * mcpServers entries ask through. */
+  readonly ipcHost: IpcHost;
   /** The session the last-open pointer names, by this window's id for it —
    * null until one is activated here. */
   private pointerRow: string | null = null;
@@ -288,7 +295,7 @@ export class Orchestrator {
       {
         editorServerScript: place.scripts.editorServer,
         bridgeScript: place.scripts.bridge,
-        socketPath: () => this.ports.socketPath(),
+        socketPath: () => this.ipcHost.socketPath,
         crossing: (value) => this.wireLog.registerSecret(value),
       },
       this.workspaceCwd,
@@ -541,7 +548,7 @@ export class Orchestrator {
         rootsChanged: (patchbaySessionId) => {
           // Every subprocess of the session was spawned with one of its
           // tokens (one per attach; a re-attach mints a fresh one).
-          for (const token of this.sessions.tokensOf(patchbaySessionId)) this.ports.notifyRootsChanged(token);
+          for (const token of this.sessions.tokensOf(patchbaySessionId)) this.ipcHost.notifyRootsChanged(token);
         },
         workspaceRoots: workspaceRootsView,
         savedRoots: () => {
@@ -583,6 +590,28 @@ export class Orchestrator {
         ),
       log,
     );
+    // The socket answers only through what each attach was given: its
+    // token, the session it served, and the servers it got.
+    this.ipcHost = new IpcHost(
+      place.ipcName,
+      {
+        admits: (contextToken) => this.sessions.admits(contextToken),
+        requestUserInput: (contextToken, params) => this.requestUserInput(contextToken, params),
+        // Same token discipline as requestUserInput: a token whose session is
+        // gone has no roots.
+        sessionRoots: (contextToken) => {
+          const patchbaySessionId = this.sessions.sessionOfToken(contextToken);
+          return patchbaySessionId === undefined ? [] : this.sessions.rootsOf(patchbaySessionId);
+        },
+        getMcpServerToken: (contextToken, patchbayMcpServerId) => {
+          const patchbayAgentId = this.sessions.bridgedTo(contextToken, patchbayMcpServerId);
+          return patchbayAgentId === undefined ? Promise.resolve(null) : this.mcpServers.credentialFor(patchbayMcpServerId, patchbayAgentId);
+        },
+      },
+      ports.editor,
+    );
+    this.ipcHost.start();
+
     // The management side's tools for sessions: two lines per session —
     // its attachment work and its turn — and the gates, the one way any
     // door reaches an operation on a session's connection. What the lines
@@ -1469,6 +1498,7 @@ export class Orchestrator {
     this.agentView.flushNow();
     this.settings.flushNow();
     this.wireLog.dispose();
+    this.ipcHost.stop();
   }
 }
 

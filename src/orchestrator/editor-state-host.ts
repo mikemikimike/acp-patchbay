@@ -1,61 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Solutions Unity
 
-// The vscode-touching side of the IPC bridge: listens on a local socket,
-// answers the tool calls of the subprocesses an agent spawns from a
-// session's mcpServers entries with real editor state and session facts.
-// This is the only place that needs vscode.window/workspace/languages for
-// MCP purposes — the subprocesses themselves (src/mcp/server-main.ts,
-// src/mcp/bridge-main.ts) are plain Node, spawned by the agent,
-// and never touch vscode directly.
-import { createServer, type Server, type Socket } from "node:net";
+// The editor's own state, read where only VS Code can read it: the
+// selection, the current file, the diagnostics, the open documents — what
+// the orchestrator's IPC host (ipc-host.ts) answers the subprocesses an
+// agent spawns with, and what the composer's adders show.
 import * as vscode from "vscode";
+import type { EditorReads } from "./ipc-host";
 import {
-  encodeLine,
-  ipcAddress,
-  parseLines,
   type CurrentFileInfo,
   type DiagnosticInfo,
-  type McpServerTokenParams,
-  type McpServerTokenResult,
-  type IpcNotification,
-  type IpcRequest,
-  type IpcResponse,
   type OpenEditorInfo,
-  type RequestUserInputParams,
-  type RootsResult,
   type SelectionInfo,
-  type WorkspaceStateSnapshot,
 } from "../mcp/ipc-protocol";
-import type { ElicitationAnswer } from "../shared/protocol";
-import type { PatchbayMcpServerId } from "../shared/ids";
 
-/** Every hook takes the context token the calling subprocess was spawned
- * with — the one thing that says which attach it serves. */
-export interface EditorStateHostHooks {
-  /** Whether the token was minted for one of this window's attaches, on a
-   * connection still up. A request with any other token gets nothing: the
-   * socket is reachable by every process of the user, and only the
-   * subprocesses an agent spawned from a session's mcpServers hold one. */
-  admits(contextToken: string): boolean;
-  /** Renders an elicitation form card in the token's session's transcript
-   * and resolves with what the user did: answered, declined, or
-   * cancelled. */
-  requestUserInput(
-    contextToken: string,
-    params: RequestUserInputParams,
-  ): Promise<ElicitationAnswer>;
-  /** The token's session's complete root list, cwd first — what the
-   * sessions store composes for the wire, read fresh per call so a
-   * subprocess never holds a copy the user has since changed. Empty for a
-   * session that is gone. */
-  sessionRoots(contextToken: string): readonly string[];
-  /** The one other thing spawned subprocesses need from the extension host
-   * that isn't editor state: a currently-valid credential for an MCP
-   * server — only for a bridge the server was given to under this token,
-   * refreshed transparently if needed. */
-  getMcpServerToken(contextToken: string, patchbayMcpServerId: PatchbayMcpServerId): Promise<McpServerTokenResult | null>;
-}
 
 function severityName(sev: vscode.DiagnosticSeverity): DiagnosticInfo["severity"] {
   switch (sev) {
@@ -70,9 +28,7 @@ function severityName(sev: vscode.DiagnosticSeverity): DiagnosticInfo["severity"
   }
 }
 
-export class EditorStateHost {
-  private server: Server | null = null;
-  readonly socketPath: string;
+export class EditorStateHost implements EditorReads {
   /** The text editor the user was last in. `window.activeTextEditor` goes
    * undefined the moment a webview becomes the active editor — a detached
    * Patchbay panel, Settings, a preview — which is exactly when the
@@ -80,30 +36,15 @@ export class EditorStateHost {
    * the change event, validated on every read (see currentEditor). */
   private lastTextEditor: vscode.TextEditor | undefined = vscode.window.activeTextEditor;
   private subscription: vscode.Disposable | null = null;
-  /** Sockets that asked to hear about their session's root changes, by
-   * the token they were spawned with. A socket leaves when it closes — the
-   * agent that spawned the subprocess ended it. */
-  private readonly rootWatchers = new Map<Socket, string>();
-
-  constructor(
-    pid: string,
-    private readonly hooks: EditorStateHostHooks,
-  ) {
-    this.socketPath = ipcAddress(`acp-patchbay-${pid}`);
-  }
 
   start(): void {
-    if (this.server !== null) return;
-    this.server = createServer((socket) => this.handleConnection(socket));
-    this.server.listen(this.socketPath);
+    if (this.subscription !== null) return;
     this.subscription = vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor !== undefined) this.lastTextEditor = editor;
     });
   }
 
   stop(): void {
-    this.server?.close();
-    this.server = null;
     this.subscription?.dispose();
     this.subscription = null;
   }
@@ -118,71 +59,6 @@ export class EditorStateHost {
     return last !== undefined && !last.document.isClosed ? last : undefined;
   }
 
-  private handleConnection(socket: Socket): void {
-    let buffer = "";
-    socket.setEncoding("utf8");
-    socket.on("data", (chunk: string) => {
-      buffer += chunk;
-      const { messages, rest } = parseLines(buffer);
-      buffer = rest;
-      for (const message of messages) void this.handleRequest(socket, message as IpcRequest);
-    });
-    socket.on("error", () => {});
-    socket.on("close", () => this.rootWatchers.delete(socket));
-  }
-
-  /** A token's session's root list changed: every subprocess spawned with
-   * it that asked to hear it is told, and re-reads the list itself. */
-  notifyRootsChanged(contextToken: string): void {
-    const notification: IpcNotification = { method: "rootsChanged" };
-    for (const [socket, watched] of this.rootWatchers) {
-      if (watched === contextToken) socket.write(encodeLine(notification));
-    }
-  }
-
-  private async handleRequest(socket: Socket, request: IpcRequest): Promise<void> {
-    try {
-      const result = await this.dispatch(socket, request);
-      const response: IpcResponse = { id: request.id, result };
-      socket.write(encodeLine(response));
-    } catch (err) {
-      const response: IpcResponse = { id: request.id, error: (err as Error).message };
-      socket.write(encodeLine(response));
-    }
-  }
-
-  private async dispatch(socket: Socket, request: IpcRequest): Promise<unknown> {
-    if (!this.hooks.admits(request.contextToken)) throw new Error("unknown session token");
-    switch (request.method) {
-      case "getSelection":
-        return this.getSelection();
-      case "getCurrentFile":
-        return this.getCurrentFile();
-      case "getDiagnostics":
-        return this.getDiagnostics();
-      case "getOpenEditors":
-        return this.getOpenEditors();
-      case "getWorkspaceState":
-        return this.getWorkspaceState();
-      case "getRoots": {
-        const result: RootsResult = { roots: [...this.hooks.sessionRoots(request.contextToken)] };
-        return result;
-      }
-      case "watchRoots":
-        this.rootWatchers.set(socket, request.contextToken);
-        return {};
-      case "requestUserInput":
-        return this.hooks.requestUserInput(
-          request.contextToken,
-          request.params as RequestUserInputParams,
-        );
-      case "getMcpServerToken":
-        return this.hooks.getMcpServerToken(
-          request.contextToken,
-          (request.params as McpServerTokenParams).patchbayMcpServerId,
-        );
-    }
-  }
 
   getSelection(): SelectionInfo | null {
     // A selection is read only from an editor still on screen: an editor
@@ -224,13 +100,5 @@ export class EditorStateHost {
     return vscode.workspace.textDocuments
       .filter((d) => d.uri.scheme === "file")
       .map((d) => ({ file: d.uri.fsPath, dirty: d.isDirty }));
-  }
-
-  private getWorkspaceState(): WorkspaceStateSnapshot {
-    return {
-      openEditors: this.getOpenEditors(),
-      diagnostics: this.getDiagnostics(),
-      selection: this.getSelection(),
-    };
   }
 }
