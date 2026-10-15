@@ -9,6 +9,7 @@ import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { FAKE_AGENT } from "./support/fake-agent";
 import { tempDir } from "./support/teardown";
 import { SETTLE } from "./support/wait-for";
 import { Cancelled } from "../src/orchestrator/queue";
@@ -19,7 +20,6 @@ import type { FakeAgentScript } from "./fake-agent/main";
 import { agentsHarness, type AgentsHarness } from "./support/agents-harness";
 import type { PatchbayAgentId } from "../src/shared/ids";
 
-const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
 
 let dir: string;
 beforeEach(async () => {

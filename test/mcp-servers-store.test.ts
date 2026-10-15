@@ -7,6 +7,7 @@
 // calling tools through the real bridge subprocess) is
 // test/mcp-bridge.test.ts.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { lastEvent } from "./support/transcript";
 import { SETTLE } from "./support/wait-for";
 import { McpServerGates } from "../src/orchestrator/mcp-server-gates";
 import { McpServersStore } from "../src/orchestrator/mcp-servers-store";
@@ -112,7 +113,7 @@ function harness(catalog: CatalogEntry[], opts: { userAgent?: OAuthUserAgent } =
 /** The connects the store last published — running ones and held
  * failures. */
 function connects(events: readonly SettingsEvent[]): readonly McpServerConnectView[] {
-  const last = [...events].reverse().find((e) => e.kind === "mcpServersChanged");
+  const last = lastEvent(events, "mcpServersChanged");
   return last?.kind === "mcpServersChanged" ? last.connects : [];
 }
 
@@ -120,7 +121,7 @@ function connects(events: readonly SettingsEvent[]): readonly McpServerConnectVi
  * again — null when none is. */
 async function review(h: { manager: McpServersStore; events: SettingsEvent[] }): Promise<McpImportReviewView | null> {
   await h.manager.refresh();
-  const last = [...h.events].reverse().find((e) => e.kind === "mcpServersChanged");
+  const last = lastEvent(h.events, "mcpServersChanged");
   return last?.kind === "mcpServersChanged" ? last.importReview : null;
 }
 
@@ -200,7 +201,7 @@ describe("McpServersStore — key connect (the v1 floor)", () => {
     // the connect probed the server before it settled; published once
     // more, the last view is the post-probe one
     await h.manager.refresh();
-    const changed = h.events.filter((e) => e.kind === "mcpServersChanged").at(-1);
+    const changed = lastEvent(h.events, "mcpServersChanged");
     expect(changed?.kind === "mcpServersChanged" && changed.servers).toEqual([
       {
         id,
@@ -293,7 +294,7 @@ describe("McpServersStore — custom escape hatch", () => {
       "auto",
     );
     await h.manager.refresh();
-    const changed = h.events.filter((e) => e.kind === "mcpServersChanged").at(-1);
+    const changed = lastEvent(h.events, "mcpServersChanged");
     expect(changed?.kind === "mcpServersChanged" && changed.servers[0]).toMatchObject({
       id,
       sourceKind: "custom-stdio",
@@ -657,7 +658,7 @@ describe("McpServersStore — connect-time tool probe", () => {
     await h.gates.addCustom("Local Tool", { kind: "custom-stdio", command: "srv", args: [], env: {} }, "auto");
     await h.manager.refresh();
 
-    const failed = h.events.filter((e) => e.kind === "mcpServersChanged").at(-1);
+    const failed = lastEvent(h.events, "mcpServersChanged");
     expect(failed?.kind === "mcpServersChanged" && failed.servers[0]?.probe).toMatchObject({
       status: "failed",
       reason: `Connection closed (ran in ${WORKSPACE_CWD})`,
@@ -675,7 +676,7 @@ describe("McpServersStore — connect-time tool probe", () => {
     const id = await h.gates.connectWithKey("svc", "Service", "key-7");
     await h.manager.refresh();
 
-    const failed = h.events.filter((e) => e.kind === "mcpServersChanged").at(-1);
+    const failed = lastEvent(h.events, "mcpServersChanged");
     expect(failed?.kind === "mcpServersChanged" && failed.servers[0]?.probe).toMatchObject({
       status: "failed",
       reason: "boom",
@@ -684,7 +685,7 @@ describe("McpServersStore — connect-time tool probe", () => {
     fail = false;
     await h.gates.probe(id);
     await h.manager.refresh();
-    const ok = h.events.filter((e) => e.kind === "mcpServersChanged").at(-1);
+    const ok = lastEvent(h.events, "mcpServersChanged");
     expect(ok?.kind === "mcpServersChanged" && ok.servers[0]?.probe).toMatchObject({
       status: "ok",
       tools: [],
@@ -696,7 +697,7 @@ describe("McpServersStore — connect-time tool probe", () => {
 // the way a user server's is — a handshake with the spawn agents are handed.
 describe("McpServersStore — the built-in editor server", () => {
   const builtinOf = (h: ReturnType<typeof harness>) => {
-    const last = h.events.filter((e) => e.kind === "mcpServersChanged").at(-1);
+    const last = lastEvent(h.events, "mcpServersChanged");
     return last?.kind === "mcpServersChanged" ? last.builtin : [];
   };
 
@@ -918,7 +919,7 @@ describe("McpServersStore — JSON import and edit (the well-known mcpServers sh
       "auto",
     );
     await h.manager.refresh();
-    const views = h.events.filter((e) => e.kind === "mcpServersChanged").at(-1);
+    const views = lastEvent(h.events, "mcpServersChanged");
     const editJsonOf = (id: string) =>
       JSON.parse(
         (views?.kind === "mcpServersChanged" && views.servers.find((i) => i.id === id)?.editJson) || "null",
@@ -1031,7 +1032,7 @@ describe("McpServersStore — the lines: a connect, a probe, a remove", () => {
     const two = h.gates.probe(slow);
     await vi.waitFor(() => expect(probes).toBeGreaterThan(0), SETTLE);
     await h.manager.refresh();
-    const busy = h.events.filter((e) => e.kind === "mcpServersChanged").at(-1);
+    const busy = lastEvent(h.events, "mcpServersChanged");
     expect(busy?.kind === "mcpServersChanged" && busy.servers[0]?.busy).toEqual(["probe"]);
     release();
     await Promise.all([one, two]);
@@ -1055,7 +1056,7 @@ describe("McpServersStore — the lines: a connect, a probe, a remove", () => {
     expect(await probing).toMatchObject({ by: "remove" });
     expect(h.configs.get(hung)).toBeUndefined();
     await h.manager.refresh();
-    const after = h.events.filter((e) => e.kind === "mcpServersChanged").at(-1);
+    const after = lastEvent(h.events, "mcpServersChanged");
     expect(after?.kind === "mcpServersChanged" && after.servers).toEqual([]);
   });
 });

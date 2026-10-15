@@ -6,6 +6,7 @@
 // or an array of `anyOf` options when the question is multi-select.
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
+import { fakeAgent } from "./support/fake-agent";
 import { stopsAtTestEnd, tempDir } from "./support/teardown";
 import { AsksStore } from "../src/orchestrator/asks-store";
 import { PermissionBroker } from "../src/orchestrator/broker";
@@ -271,23 +272,13 @@ describe("elicitationResponseOf — the card's answer as the agent's response", 
 // The wire path, end to end over the fake agent: patchbay declares form
 // mode, the agent asks, the card carries the question, and the answer the
 // user gives is what the agent receives.
-const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
 
 let dir: string;
 beforeEach(async () => {
   dir = await tempDir("patchbay-elicit-");
 });
 
-function spec(script: FakeAgentScript, patchbayAgentId: PatchbayAgentId): LaunchSpec {
-  return {
-    patchbayAgentId,
-    name: "Fake Agent",
-    command: process.execPath,
-    args: [FAKE_AGENT],
-    env: { FAKE_AGENT_SCRIPT: JSON.stringify(script) },
-    cwd: dir,
-  };
-}
+const spec = (script: FakeAgentScript, patchbayAgentId: string): LaunchSpec => fakeAgent(script, patchbayAgentId, dir);
 
 /** The orchestrator's elicitation wiring, minus its vscode-bound parts
  * (throwaway-session checks, the real browser): the same reading, broker

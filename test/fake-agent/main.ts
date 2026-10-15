@@ -17,6 +17,7 @@ import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readF
 import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
+import { storeDir, storeFile } from "./store";
 
 export type TurnStep =
   | { type: "chunk"; text: string }
@@ -205,14 +206,6 @@ const sessions = new Map<string, FakeSession>();
 let sessionCounter = 0;
 
 // ── durable per-session record, so session/load survives this process dying ─
-
-function storeDir(cwd: string): string {
-  return process.env.FAKE_AGENT_STORE ?? join(cwd, ".fake-agent-sessions");
-}
-
-function storeFile(cwd: string, sessionId: string): string {
-  return join(storeDir(cwd), `${sessionId}.jsonl`);
-}
 
 function recordUpdate(cwd: string, sessionId: string, update: acp.SessionUpdate): void {
   const file = storeFile(cwd, sessionId);

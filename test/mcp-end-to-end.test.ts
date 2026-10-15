@@ -16,6 +16,8 @@ import { createServer, type Server } from "node:net";
 import { join } from "node:path";
 import type { McpServer } from "@agentclientprotocol/sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { echoed } from "./support/transcript";
+import { fakeAgent } from "./support/fake-agent";
 import { stopsAtTestEnd, tempDir } from "./support/teardown";
 import {
   encodeLine,
@@ -35,7 +37,6 @@ import { stubFsTerminalHooks } from "./support/stub-hooks";
 import { gatesFor } from "./support/session-gates";
 import type { PatchbayAgentId } from "../src/shared/ids";
 
-const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
 const MCP_SERVER = join(process.cwd(), "out", "mcp-server.js");
 
 /** Stands in for EditorStateHost — same wire protocol, canned data (real
@@ -107,16 +108,7 @@ afterEach(async () => {
   host.close();
 });
 
-function spec(script: FakeAgentScript, patchbayAgentId: PatchbayAgentId): LaunchSpec {
-  return {
-    patchbayAgentId,
-    name: "Fake Agent",
-    command: process.execPath,
-    args: [FAKE_AGENT],
-    env: { FAKE_AGENT_SCRIPT: JSON.stringify(script) },
-    cwd: dir,
-  };
-}
+const spec = (script: FakeAgentScript, patchbayAgentId: string): LaunchSpec => fakeAgent(script, patchbayAgentId, dir);
 
 /** Builds the exact mcpServers entry Orchestrator builds — same shape,
  * pointed at the fake IPC host instead of a real EditorStateHost. */
@@ -173,8 +165,7 @@ describe("local MCP server, end to end through a real agent process", () => {
     const patchbaySessionId = await h.sessions.createSession("e1" as PatchbayAgentId, "Fake Agent", dir);
     await h.gates.prompt(patchbaySessionId, { text: "what's selected?" });
 
-    const text = h.state().transcripts[patchbaySessionId]!.find((b) => b.kind === "text");
-    expect(text?.kind === "text" && JSON.parse(text.text)).toEqual({
+    expect(echoed(h.state(), patchbaySessionId)).toEqual({
       file: "/ws/pool.ts",
       startLine: 42,
       endLine: 87,
@@ -189,8 +180,7 @@ describe("local MCP server, end to end through a real agent process", () => {
     const patchbaySessionId = await h.sessions.createSession("e2" as PatchbayAgentId, "Fake Agent", dir);
     await h.gates.prompt(patchbaySessionId, { text: "any problems?" });
 
-    const text = h.state().transcripts[patchbaySessionId]!.find((b) => b.kind === "text");
-    expect(text?.kind === "text" && JSON.parse(text.text)).toEqual([
+    expect(echoed(h.state(), patchbaySessionId)).toEqual([
       { file: "/ws/pool.ts", line: 10, severity: "error", message: "unused import" },
     ]);
     await h.pool.stop("e2" as PatchbayAgentId);
@@ -204,8 +194,7 @@ describe("local MCP server, end to end through a real agent process", () => {
     const patchbaySessionId = await h.sessions.createSession("e3" as PatchbayAgentId, "Fake Agent", dir);
     await h.gates.prompt(patchbaySessionId, { text: "go" });
 
-    const text = h.state().transcripts[patchbaySessionId]!.find((b) => b.kind === "text");
-    expect(text?.kind === "text" && JSON.parse(text.text)).toEqual({ resolvedFor: patchbaySessionId });
+    expect(echoed(h.state(), patchbaySessionId)).toEqual({ resolvedFor: patchbaySessionId });
     // and the IPC request itself carried the raw token, confirming the
     // fake host's translation (mirroring Orchestrator's) is what did the work
     expect(host.requests.some((r) => r.method === "requestUserInput" && r.contextToken !== patchbaySessionId)).toBe(
@@ -227,8 +216,7 @@ describe("local MCP server, end to end through a real agent process", () => {
     await h.gates.prompt(s2, { text: "go" });
 
     const resolvedFor = (sid: string) => {
-      const text = h.state().transcripts[sid]!.find((b) => b.kind === "text");
-      return text?.kind === "text" ? JSON.parse(text.text).resolvedFor : undefined;
+      return (echoed(h.state(), sid) as { resolvedFor?: string }).resolvedFor;
     };
     // each session's tool call resolved against its own sessionId, never the other's
     expect(resolvedFor(s1)).toBe(s1);

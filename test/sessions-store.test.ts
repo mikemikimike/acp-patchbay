@@ -7,6 +7,8 @@ import { readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { echoed } from "./support/transcript";
+import { fakeAgent, fakeSessionRecord, heldFakeSession } from "./support/fake-agent";
 import { tempDir } from "./support/teardown";
 import { SETTLE } from "./support/wait-for";
 import { assertKind } from "./support/assert-kind";
@@ -28,7 +30,6 @@ import { readUpdate, sessionsHarness } from "./support/sessions-harness";
 import type { PatchbayAgentId, PatchbayMcpServerId, PatchbaySessionId } from "../src/shared/ids";
 import { deriveTranscript } from "../src/webview/agent-view/chat/view-model";
 
-const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
 
 // A fresh cwd per test: the fake agent's session ids restart at "fake-1" on
 // every spawn, so a shared cwd would let unrelated tests' persisted replay
@@ -38,16 +39,7 @@ beforeEach(async () => {
   cwd = await tempDir("patchbay-sm-");
 });
 
-function spec(script: FakeAgentScript, patchbayAgentId = "fake"): LaunchSpec {
-  return {
-    patchbayAgentId: patchbayAgentId as PatchbayAgentId,
-    name: "Fake Agent",
-    command: process.execPath,
-    args: [FAKE_AGENT],
-    env: { FAKE_AGENT_SCRIPT: JSON.stringify(script) },
-    cwd,
-  };
-}
+const spec = (script: FakeAgentScript, patchbayAgentId = "fake"): LaunchSpec => fakeAgent(script, patchbayAgentId, cwd);
 
 /** The shared harness (support/sessions-harness.ts) over this file's cwd. */
 function harness(opts?: Parameters<typeof sessionsHarness>[1]): ReturnType<typeof sessionsHarness> {
@@ -71,6 +63,8 @@ function textOf(block: ChatBlock | undefined): string {
  * `additionalDirectories` (the spec forbids sending the field otherwise)
  * and `session/resume` (the one re-apply rung after a turn). */
 const ROOTS_CAPS = { sessionCapabilities: { additionalDirectories: {}, resume: {} } } as const;
+const LIST_CAPS = { sessionCapabilities: { list: {}, delete: {} } } as const;
+const LOAD_LIST_ROOTS_CAPS = { loadSession: true, sessionCapabilities: { list: {}, additionalDirectories: {}, resume: {} } } as const;
 
 describe("SessionsStore", () => {
   it("streams a full turn into the transcript and clears live on completion", async () => {
@@ -1298,10 +1292,10 @@ describe("SessionsStore", () => {
     // chip cleared from state after being consumed by the prompt
     expect(h.state().contextChips[patchbaySessionId]).toEqual([]);
 
-    const echoed = h
+    const reply = h
       .state()
       .transcripts[patchbaySessionId]!.find((b) => b.kind === "text");
-    expect(echoed?.kind === "text" && echoed.text.split("\n---BLOCK---\n")).toEqual([
+    expect(reply?.kind === "text" && reply.text.split("\n---BLOCK---\n")).toEqual([
       "[Selection: a.ts:1-2]\nconst x = 1;",
       "what does this do?",
     ]);
@@ -1327,8 +1321,7 @@ describe("SessionsStore", () => {
     });
     await h.gates.prompt(patchbaySessionId, { text: "what is this?" });
 
-    const echoed = h.state().transcripts[patchbaySessionId]!.find((b) => b.kind === "text");
-    const kinds = JSON.parse(echoed?.kind === "text" ? echoed.text : "[]") as Array<Record<string, string>>;
+    const kinds = echoed(h.state(), patchbaySessionId) as Array<Record<string, string>>;
     expect(kinds).toEqual([{ type: "image", mimeType: "image/png" }, { type: "text" }]);
     await h.pool.stop("img1" as PatchbayAgentId);
   });
@@ -1358,8 +1351,7 @@ describe("SessionsStore", () => {
     });
     await h.gates.prompt(patchbaySessionId, { text: "context please" });
 
-    const echoed = h.state().transcripts[patchbaySessionId]!.find((b) => b.kind === "text");
-    const kinds = JSON.parse(echoed?.kind === "text" ? echoed.text : "[]") as Array<Record<string, string>>;
+    const kinds = echoed(h.state(), patchbaySessionId) as Array<Record<string, string>>;
     expect(kinds).toEqual([
       { type: "resource", uri: "file:///ws/a.ts#L1-2" },
       { type: "resource", uri: "patchbay://context/diagnostics/chip-diag" },
@@ -1382,8 +1374,7 @@ describe("SessionsStore", () => {
     });
     await h.gates.prompt(patchbaySessionId, { text: "and this?" });
 
-    const echoed = h.state().transcripts[patchbaySessionId]!.find((b) => b.kind === "text");
-    const kinds = JSON.parse(echoed?.kind === "text" ? echoed.text : "[]") as Array<Record<string, string>>;
+    const kinds = echoed(h.state(), patchbaySessionId) as Array<Record<string, string>>;
     expect(kinds).toHaveLength(2);
     expect(kinds[0]).toMatchObject({ type: "resource_link", mimeType: "image/jpeg" });
     expect(kinds[0]!.uri).toMatch(/^file:\/\/.*chip-img-fb\.jpg$/);
@@ -1416,8 +1407,7 @@ describe("SessionsStore", () => {
     });
     await h.gates.prompt(patchbaySessionId, { text: "what are these?" });
 
-    const echoed = h.state().transcripts[patchbaySessionId]!.find((b) => b.kind === "text");
-    const kinds = JSON.parse(echoed?.kind === "text" ? echoed.text : "[]") as Array<Record<string, string>>;
+    const kinds = echoed(h.state(), patchbaySessionId) as Array<Record<string, string>>;
     expect(kinds).toEqual([
       { type: "resource_link", uri: pathToFileURL("/ws/docs/report.pdf").toString(), name: "report.pdf", mimeType: "application/pdf" },
       { type: "resource_link", uri: pathToFileURL("/ws/blob.bin").toString(), name: "blob.bin" },
@@ -1442,8 +1432,8 @@ describe("SessionsStore", () => {
 
     await h.pool.connect(spec(script, "sm-late-chip"));
     await h.gates.prompt(patchbaySessionId, { text: "with the chip" });
-    const echoed = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text").at(-1);
-    expect(textOf(echoed)).toContain("const late = 1;");
+    const reply = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text").at(-1);
+    expect(textOf(reply)).toContain("const late = 1;");
     expect(h.state().contextChips[patchbaySessionId]).toEqual([]);
     await h.pool.stop("sm-late-chip" as PatchbayAgentId);
   });
@@ -1463,8 +1453,8 @@ describe("SessionsStore", () => {
     expect(h.state().contextChips[patchbaySessionId]).toEqual([]);
 
     await h.gates.prompt(patchbaySessionId, { text: "hello" });
-    const echoed = h.state().transcripts[patchbaySessionId]!.find((b) => b.kind === "text");
-    expect(echoed?.kind === "text" && echoed.text).toBe("hello"); // the removed chip never appears
+    const reply = h.state().transcripts[patchbaySessionId]!.find((b) => b.kind === "text");
+    expect(reply?.kind === "text" && reply.text).toBe("hello"); // the removed chip never appears
     await h.pool.stop("sm10" as PatchbayAgentId);
   });
 
@@ -1486,8 +1476,7 @@ describe("SessionsStore", () => {
     expect(h.rootsChanged).toEqual([patchbaySessionId, patchbaySessionId, patchbaySessionId]);
 
     await h.gates.prompt(patchbaySessionId, { text: "roots?" });
-    const echoed = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text").at(-1);
-    expect(echoed?.kind === "text" && JSON.parse(echoed.text)).toEqual(["/repo/backend"]);
+    expect(echoed(h.state(), patchbaySessionId)).toEqual(["/repo/backend"]);
 
     await h.pool.stop("sm11" as PatchbayAgentId);
   });
@@ -1516,14 +1505,12 @@ describe("SessionsStore", () => {
     expect(h.sessions.rootsOf(patchbaySessionId)).toEqual([cwd, "/repo/backend"]);
     expect(h.state().activePatchbaySessionId).toBe(patchbaySessionId);
     await h.gates.prompt(patchbaySessionId, { text: "roots?" });
-    const before = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text").at(-1);
-    expect(before?.kind === "text" && JSON.parse(before.text)).toEqual([]);
+    expect(echoed(h.state(), patchbaySessionId)).toEqual([]);
 
     // the next open — the reload the chip's note offers — carries the whole list
     await h.gates.reload(patchbaySessionId);
     await h.gates.prompt(patchbaySessionId, { text: "roots?" });
-    const after = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text").at(-1);
-    expect(after?.kind === "text" && JSON.parse(after.text)).toEqual(["/repo/backend"]);
+    expect(echoed(h.state(), patchbaySessionId)).toEqual(["/repo/backend"]);
 
     await h.pool.stop("sm11l" as PatchbayAgentId);
   });
@@ -1536,8 +1523,7 @@ describe("SessionsStore", () => {
     const patchbaySessionId = await h.sessions.createSession("sm28" as PatchbayAgentId, "Fake Agent", cwd);
     const wireRoots = async () => {
       await h.gates.prompt(patchbaySessionId, { text: "roots?" });
-      const echoed = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text").at(-1);
-      return echoed?.kind === "text" ? (JSON.parse(echoed.text) as string[]) : null;
+      return (echoed(h.state(), patchbaySessionId) as string[]);
     };
     // session/new: the folders the chip already counts — minus the cwd,
     // which travels as cwd — reached the agent
@@ -1563,8 +1549,7 @@ describe("SessionsStore", () => {
     );
     const patchbaySessionId = await h.sessions.createSession("sm28n" as PatchbayAgentId, "Fake Agent", cwd);
     await h.gates.prompt(patchbaySessionId, { text: "roots?" });
-    const echoed = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text").at(-1);
-    expect(echoed?.kind === "text" && JSON.parse(echoed.text)).toEqual([]);
+    expect(echoed(h.state(), patchbaySessionId)).toEqual([]);
     // an add is recorded for the servers (issue #34) and never re-applied
     // on the agent: no field to send, so no re-attach is made for it
     await h.gates.addRoot(patchbaySessionId, "/repo/backend");
@@ -1572,8 +1557,7 @@ describe("SessionsStore", () => {
     expect(h.rootsChanged).toEqual([patchbaySessionId, patchbaySessionId]); // birth, then the add
     expect(h.sessions.rootsOf(patchbaySessionId)).toEqual([cwd, "/repo/second", "/repo/backend"]);
     await h.gates.prompt(patchbaySessionId, { text: "roots?" });
-    const again = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text").at(-1);
-    expect(again?.kind === "text" && JSON.parse(again.text)).toEqual([]);
+    expect(echoed(h.state(), patchbaySessionId)).toEqual([]);
     // one session/new, one prompt, one prompt: nothing re-attached
     expect(h.state().sessions.map((s) => s.id)).toEqual([patchbaySessionId]);
     await h.pool.stop("sm28n" as PatchbayAgentId);
@@ -1627,8 +1611,7 @@ describe("SessionsStore", () => {
     expect(h.rootsChanged).toEqual([patchbaySessionId]);
     expect(h.sessions.rootsOf(patchbaySessionId)).toEqual([cwd, "/repo/second", "/src/odoo", "/src/lib"]);
     await h.gates.prompt(patchbaySessionId, { text: "roots?" });
-    const echoed = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text").at(-1);
-    expect(echoed?.kind === "text" && JSON.parse(echoed.text)).toEqual(["/repo/second", "/src/odoo", "/src/lib"]);
+    expect(echoed(h.state(), patchbaySessionId)).toEqual(["/repo/second", "/src/odoo", "/src/lib"]);
     expect(h.state().sessions.map((s) => s.id)).toEqual([patchbaySessionId]); // no re-attach
 
     // the session's own act from here: removing one leaves the others
@@ -1646,8 +1629,7 @@ describe("SessionsStore", () => {
     expect(h.state().contextRoots[patchbaySessionId]).toEqual(["/src/odoo"]);
     expect(h.sessions.rootsOf(patchbaySessionId)).toEqual([cwd, "/src/odoo"]);
     await h.gates.prompt(patchbaySessionId, { text: "roots?" });
-    const echoed = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text").at(-1);
-    expect(echoed?.kind === "text" && JSON.parse(echoed.text)).toEqual([]);
+    expect(echoed(h.state(), patchbaySessionId)).toEqual([]);
     await h.pool.stop("sm32n" as PatchbayAgentId);
   });
 
@@ -1664,8 +1646,7 @@ describe("SessionsStore", () => {
     const notice = h.state().transcripts[patchbaySessionId]!.find((b) => b.kind === "patchbayNotice");
     expect(notice?.kind === "patchbayNotice" && notice.text).toContain("/src/gone");
     await h.gates.prompt(patchbaySessionId, { text: "roots?" });
-    const echoed = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text").at(-1);
-    expect(echoed?.kind === "text" && JSON.parse(echoed.text)).toEqual(["/src/odoo"]);
+    expect(echoed(h.state(), patchbaySessionId)).toEqual(["/src/odoo"]);
     await h.pool.stop("sm32m" as PatchbayAgentId);
   });
 
@@ -1674,7 +1655,7 @@ describe("SessionsStore", () => {
     await h.pool.connect(
       spec(
         {
-          declare: { loadSession: true, sessionCapabilities: { list: {}, additionalDirectories: {}, resume: {} } },
+          declare: LOAD_LIST_ROOTS_CAPS,
           turn: [{ type: "echoRoots" }],
         },
         "sm32g",
@@ -1693,8 +1674,7 @@ describe("SessionsStore", () => {
     const notice = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "patchbayNotice").at(-1);
     expect(notice?.kind === "patchbayNotice" && notice.text).toContain("/repo/backend");
     await h.gates.prompt(patchbaySessionId, { text: "roots?" });
-    const echoed = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text").at(-1);
-    expect(echoed?.kind === "text" && JSON.parse(echoed.text)).toEqual([]);
+    expect(echoed(h.state(), patchbaySessionId)).toEqual([]);
     await h.pool.stop("sm32g" as PatchbayAgentId);
   });
 
@@ -1708,17 +1688,13 @@ describe("SessionsStore", () => {
   // below ("held words, roots, chips, and draft survive") pins that the
   // row stands then.
   describe("a session/list row reporting the session's roots (issue #33)", () => {
-    const REPORT_CAPS = {
-      loadSession: true,
-      sessionCapabilities: { list: {}, additionalDirectories: {}, resume: {} },
-    } as const;
     const reportFile = () => join(cwd, "reported-roots.json");
     const report = (roots: string[]) => writeFile(reportFile(), JSON.stringify(roots));
 
     it("a listed session enters with the reported list, the row following it; a later report replaces again, and an empty one clears", async () => {
       const store = new SessionContinuityStore(new MemoryKV());
       const script: FakeAgentScript = {
-        declare: REPORT_CAPS,
+        declare: LOAD_LIST_ROOTS_CAPS,
         listRootsFrom: reportFile(),
         turn: [{ type: "chunk", text: "x" }],
       };
@@ -1755,7 +1731,7 @@ describe("SessionsStore", () => {
 
     it("a session open here is not adopted — patchbay is its last writer", async () => {
       const script: FakeAgentScript = {
-        declare: REPORT_CAPS,
+        declare: LOAD_LIST_ROOTS_CAPS,
         listRootsFrom: reportFile(),
         turn: [{ type: "chunk", text: "x" }],
       };
@@ -1773,7 +1749,7 @@ describe("SessionsStore", () => {
     it("the agent reports the composed list — workspace folders are subtracted, the row keeps only the user's roots, and the wire gets the same composition back", async () => {
       const store = new SessionContinuityStore(new MemoryKV());
       const script: FakeAgentScript = {
-        declare: REPORT_CAPS,
+        declare: LOAD_LIST_ROOTS_CAPS,
         listRootsFrom: reportFile(),
         turn: [{ type: "echoRoots" }],
       };
@@ -1792,8 +1768,7 @@ describe("SessionsStore", () => {
       expect(h2.state().contextRoots[listed]).toEqual(["/repo/extra"]);
       expect(store.read("c33w" as PatchbayAgentId, sessionId)?.roots).toEqual(["/repo/extra"]);
       await h2.gates.prompt(listed, { text: "roots?" });
-      const echoed = h2.state().transcripts[listed]!.filter((b) => b.kind === "text").at(-1);
-      expect(echoed?.kind === "text" && JSON.parse(echoed.text)).toEqual(["/repo/second", "/repo/extra"]);
+      expect(echoed(h2.state(), listed)).toEqual(["/repo/second", "/repo/extra"]);
       await h2.pool.stop("c33w" as PatchbayAgentId);
     });
   });
@@ -1812,8 +1787,7 @@ describe("SessionsStore", () => {
     await Promise.all([slow, held]);
     // the held prompt's own echo: the third, after warm-up's and the slow turn's
     await vi.waitFor(() => expect(h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text").length).toBeGreaterThanOrEqual(3), SETTLE);
-    const echoed = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text").at(-1);
-    expect(echoed?.kind === "text" && JSON.parse(echoed.text)).toEqual(["/repo/backend"]);
+    expect(echoed(h.state(), patchbaySessionId)).toEqual(["/repo/backend"]);
     await h.pool.stop("sm28t" as PatchbayAgentId);
   });
 
@@ -1834,15 +1808,8 @@ describe("SessionsStore", () => {
     expect(await slow).toMatchObject({ by: "stop" });
     await Promise.all([stopped, after]);
     // the words sent after the Stop echo second, after warm-up's
-    let echoed: ChatBlock | undefined;
-    await vi.waitFor(
-      () => {
-        echoed = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text")[1];
-        expect(echoed).toBeDefined();
-      },
-      SETTLE,
-    );
-    expect(echoed?.kind === "text" && JSON.parse(echoed.text)).toEqual(["/repo/backend"]);
+    await vi.waitFor(() => expect(h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text")).toHaveLength(2), SETTLE);
+    expect(echoed(h.state(), patchbaySessionId)).toEqual(["/repo/backend"]);
     await h.pool.stop("sm28s" as PatchbayAgentId);
   });
 
@@ -1863,8 +1830,7 @@ describe("SessionsStore", () => {
     fail();
     await expect(failing).rejects.toThrow("the agent failed the turn");
     await h.gates.prompt(patchbaySessionId, { text: "roots?" });
-    const echoed = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text").at(-1);
-    expect(echoed?.kind === "text" && JSON.parse(echoed.text)).toEqual(["/repo/backend"]);
+    expect(echoed(h.state(), patchbaySessionId)).toEqual(["/repo/backend"]);
     await h.pool.stop("sm28f" as PatchbayAgentId);
   });
 
@@ -1970,7 +1936,7 @@ describe("SessionsStore", () => {
     let locked = false;
     const store = new SessionContinuityStore(new MemoryKV());
     const script: FakeAgentScript = {
-      declare: { loadSession: true, sessionCapabilities: { list: {}, additionalDirectories: {}, resume: {} } },
+      declare: LOAD_LIST_ROOTS_CAPS,
       turn: [{ type: "chunk", text: "x" }],
     };
     const h1 = harness({ continuityStore: store, authLocked: () => locked });
@@ -2217,8 +2183,7 @@ describe("SessionsStore", () => {
     // Resume rung: no replay, so the render cache must not have been reset.
     expect(h.state().transcripts[patchbaySessionId]!.length).toBeGreaterThanOrEqual(before);
     await h.gates.prompt(patchbaySessionId, { text: "roots?" });
-    const echoed = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text").at(-1);
-    expect(echoed?.kind === "text" && JSON.parse(echoed.text)).toEqual(["/repo/backend"]);
+    expect(echoed(h.state(), patchbaySessionId)).toEqual(["/repo/backend"]);
 
     await h.pool.stop("sm11r" as PatchbayAgentId);
   });
@@ -2234,8 +2199,7 @@ describe("SessionsStore", () => {
       { kind: "text", text: " please" },
     ] });
 
-    const echoed = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text").at(-1);
-    expect(echoed?.kind === "text" && JSON.parse(echoed.text)).toEqual([
+    expect(echoed(h.state(), patchbaySessionId)).toEqual([
       { type: "text" },
       { type: "resource_link", uri: pathToFileURL("/repo/src/app.ts").toString(), name: "app.ts" },
       { type: "text" },
@@ -2406,14 +2370,11 @@ describe("held prompts and their chips", () => {
 });
 
 describe("session history (list / resume / delete)", () => {
-  const LIST_CAPS = { sessionCapabilities: { list: {}, delete: {} } };
 
   it("surfaces externally-created sessions from session/list, without stealing focus", async () => {
     // A session that exists only in the agent's own durable store — made by
     // "another client" (here: a previous fake-agent process would have).
-    const { mkdir, writeFile } = await import("node:fs/promises");
-    await mkdir(join(cwd, ".fake-agent-sessions"), { recursive: true });
-    await writeFile(join(cwd, ".fake-agent-sessions", "ext-1.jsonl"), "", "utf8");
+    await heldFakeSession(cwd, "ext-1");
 
     const h = harness();
     await h.pool.connect(spec({ declare: LIST_CAPS }, "sh1"));
@@ -2437,9 +2398,7 @@ describe("session history (list / resume / delete)", () => {
   it("malformed list rows degrade at the boundary: metadata to absent, identity-less rows dropped", async () => {
     // acp-matrix fixture finding: rows with epoch-seconds updatedAt used to
     // reach the drawer typed as ISO strings and blank the webview on sort.
-    const { mkdir, writeFile } = await import("node:fs/promises");
-    await mkdir(join(cwd, ".fake-agent-sessions"), { recursive: true });
-    await writeFile(join(cwd, ".fake-agent-sessions", "ext-bad.jsonl"), "", "utf8");
+    await heldFakeSession(cwd, "ext-bad");
 
     const h = harness();
     await h.pool.connect(spec({ declare: LIST_CAPS, lies: { malformedListRows: true } }, "shm"));
@@ -2458,9 +2417,8 @@ describe("session history (list / resume / delete)", () => {
   });
 
   it("prunes rows the agent no longer reports — wire truth wins", async () => {
-    const { mkdir, writeFile, rm: rmFile } = await import("node:fs/promises");
-    await mkdir(join(cwd, ".fake-agent-sessions"), { recursive: true });
-    await writeFile(join(cwd, ".fake-agent-sessions", "gone-1.jsonl"), "", "utf8");
+    const { rm: rmFile } = await import("node:fs/promises");
+    await heldFakeSession(cwd, "gone-1");
 
     const h = harness();
     await h.pool.connect(spec({ declare: LIST_CAPS }, "sh2"));
@@ -2469,7 +2427,7 @@ describe("session history (list / resume / delete)", () => {
     expect(gone).toBeDefined();
 
     // deleted externally (CLI, another editor) — the next sync drops it
-    await rmFile(join(cwd, ".fake-agent-sessions", "gone-1.jsonl"));
+    await rmFile(fakeSessionRecord(cwd, "gone-1"));
     await h.sessions.syncAgentSessions("sh2" as PatchbayAgentId);
 
     expect(h.sessions.rowFor("sh2" as PatchbayAgentId, "gone-1")).toBeUndefined();
@@ -2479,9 +2437,7 @@ describe("session history (list / resume / delete)", () => {
   });
 
   it("a load-declared agent that lost the session: the prompt fails honestly, nothing is minted", async () => {
-    const { mkdir, writeFile } = await import("node:fs/promises");
-    await mkdir(join(cwd, ".fake-agent-sessions"), { recursive: true });
-    await writeFile(join(cwd, ".fake-agent-sessions", "lost-1.jsonl"), "", "utf8");
+    await heldFakeSession(cwd, "lost-1");
 
     // failLoad: load 404s and drops the session — the corpse-leaving agent
     const h = harness();
@@ -2506,9 +2462,7 @@ describe("session history (list / resume / delete)", () => {
   // The composer lets its words go the moment it sends them — a turn that
   // never starts must not take them along: only the user discards words.
   it("a prompt whose turn never started keeps its words — held, with the editor state to take back", async () => {
-    const { mkdir, writeFile } = await import("node:fs/promises");
-    await mkdir(join(cwd, ".fake-agent-sessions"), { recursive: true });
-    await writeFile(join(cwd, ".fake-agent-sessions", "lost-2.jsonl"), "", "utf8");
+    await heldFakeSession(cwd, "lost-2");
     const continuityStore = new SessionContinuityStore(new MemoryKV());
     const h = harness({ continuityStore });
     await h.pool.connect(
@@ -2528,9 +2482,7 @@ describe("session history (list / resume / delete)", () => {
   });
 
   it("held words drained into a turn that never started go back to the front — the order is the firing order", async () => {
-    const { mkdir, writeFile } = await import("node:fs/promises");
-    await mkdir(join(cwd, ".fake-agent-sessions"), { recursive: true });
-    await writeFile(join(cwd, ".fake-agent-sessions", "lost-3.jsonl"), "", "utf8");
+    await heldFakeSession(cwd, "lost-3");
     // words held in an earlier window, waiting on the session's row
     const continuityStore = new SessionContinuityStore(new MemoryKV());
     await continuityStore.patch("sh2e" as PatchbayAgentId, "lost-3", cwd, { queue: [{ id: "q-earlier", text: "first" }] });
@@ -2665,9 +2617,7 @@ describe("session history (list / resume / delete)", () => {
   });
 
   it("opening a session neither load nor resume can reach says so — a notice, never faked content", async () => {
-    const { mkdir, writeFile } = await import("node:fs/promises");
-    await mkdir(join(cwd, ".fake-agent-sessions"), { recursive: true });
-    await writeFile(join(cwd, ".fake-agent-sessions", "dead-1.jsonl"), "", "utf8");
+    await heldFakeSession(cwd, "dead-1");
 
     const h = harness();
     await h.pool.connect(spec({ declare: LIST_CAPS }, "sh8")); // list only — no load, no resume
@@ -3056,13 +3006,10 @@ describe("session history (list / resume / delete)", () => {
 // sessions-store reports evidence (prompt send, turn end, a wire stamp);
 // the reducer judges (newest wins); the Settings tile projects it.
 describe("session activity stamp — one home", () => {
-  const LIST_CAPS = { sessionCapabilities: { list: {}, delete: {} } };
   const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
   it("a wire row stamped yesterday, prompted today: active today — and a re-read cannot move it back", async () => {
-    const { mkdir, writeFile } = await import("node:fs/promises");
-    await mkdir(join(cwd, ".fake-agent-sessions"), { recursive: true });
-    await writeFile(join(cwd, ".fake-agent-sessions", "old-1.jsonl"), "", "utf8");
+    await heldFakeSession(cwd, "old-1");
 
     const h = harness();
     await h.pool.connect(
@@ -3178,7 +3125,6 @@ describe("session activity stamp — one home", () => {
   });
 
   it("syncRunningAgents re-reads every running list-capable agent — another window's session appears", async () => {
-    const { mkdir, writeFile } = await import("node:fs/promises");
     const h = harness();
     await h.pool.connect(spec({ declare: LIST_CAPS }, "st3"));
     await h.pool.connect(spec({}, "st3-nolist")); // no session/list: skipped, not an error
@@ -3186,8 +3132,7 @@ describe("session activity stamp — one home", () => {
     expect(h.sessions.rowFor("st3" as PatchbayAgentId, "other-window-1")).toBeUndefined();
 
     // "another window" writes into the agent's own store after our connect
-    await mkdir(join(cwd, ".fake-agent-sessions"), { recursive: true });
-    await writeFile(join(cwd, ".fake-agent-sessions", "other-window-1.jsonl"), "", "utf8");
+    await heldFakeSession(cwd, "other-window-1");
     await h.sessions.syncRunningAgents();
     const other = h.sessions.rowFor("st3" as PatchbayAgentId, "other-window-1");
     expect(other).toBeDefined();
@@ -3223,9 +3168,7 @@ describe("session activity stamp — one home", () => {
   });
 
   it("two agents naming their sessions by one id are two rows — an id is only unique per agent", async () => {
-    const { mkdir, writeFile } = await import("node:fs/promises");
-    await mkdir(join(cwd, ".fake-agent-sessions"), { recursive: true });
-    await writeFile(join(cwd, ".fake-agent-sessions", "same-1.jsonl"), "", "utf8");
+    await heldFakeSession(cwd, "same-1");
     const h = harness();
     await h.pool.connect(spec({ declare: LIST_CAPS }, "twin-a"));
     await h.pool.connect(spec({ declare: LIST_CAPS }, "twin-b"));
@@ -3883,8 +3826,7 @@ describe("a session's files live with the session", () => {
     return !existsSync(path);
   };
   const echoedKinds = (h: ReturnType<typeof harness>, patchbaySessionId: PatchbaySessionId) => {
-    const echoed = h.state().transcripts[patchbaySessionId]!.find((b) => b.kind === "text");
-    return JSON.parse(echoed?.kind === "text" ? echoed.text : "[]") as Array<Record<string, string>>;
+    return echoed(h.state(), patchbaySessionId) as Array<Record<string, string>>;
   };
 
   it("a staged image is sent from the session's folder — a temp cleanup meanwhile costs only its preview", async () => {

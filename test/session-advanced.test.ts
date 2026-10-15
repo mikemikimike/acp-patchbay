@@ -2,6 +2,7 @@
 // surfaces — minus vscode, over the real fake agent.
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
+import { fakeAgent } from "./support/fake-agent";
 import { stopsAtTestEnd, tempDir } from "./support/teardown";
 import { waitFor } from "./support/wait-for";
 import { CapabilityTracker } from "../src/orchestrator/capability-tracker";
@@ -23,23 +24,13 @@ import { stubFsTerminalHooks } from "./support/stub-hooks";
 import { gatesFor } from "./support/session-gates";
 import type { PatchbayAgentId } from "../src/shared/ids";
 
-const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
 
 let cwd: string;
 beforeEach(async () => {
   cwd = await tempDir("patchbay-sadv-");
 });
 
-function spec(script: FakeAgentScript, patchbayAgentId: PatchbayAgentId): LaunchSpec {
-  return {
-    patchbayAgentId,
-    name: "Fake Agent",
-    command: process.execPath,
-    args: [FAKE_AGENT],
-    env: { FAKE_AGENT_SCRIPT: JSON.stringify(script) },
-    cwd,
-  };
-}
+const spec = (script: FakeAgentScript, patchbayAgentId: string): LaunchSpec => fakeAgent(script, patchbayAgentId, cwd);
 
 
 /** Wires pool + verifier + sessions store the way Orchestrator does, minus

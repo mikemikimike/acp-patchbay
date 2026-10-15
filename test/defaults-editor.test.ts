@@ -7,6 +7,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
+import { fakeAgent } from "./support/fake-agent";
 import { stopsAtTestEnd, tempDir } from "./support/teardown";
 import { DefaultsEditor } from "../src/orchestrator/defaults-editor";
 import { AgentPool, type LaunchSpec } from "../src/orchestrator/pool";
@@ -15,7 +16,6 @@ import type { FakeAgentScript } from "./fake-agent/main";
 import { stubFsTerminalHooks } from "./support/stub-hooks";
 import type { PatchbayAgentId } from "../src/shared/ids";
 
-const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
 
 let cwd: string;
 beforeEach(async () => {
@@ -57,16 +57,7 @@ const DEPENDENT_SCRIPT: FakeAgentScript = {
   ],
 };
 
-function spec(script: FakeAgentScript, patchbayAgentId: PatchbayAgentId): LaunchSpec {
-  return {
-    patchbayAgentId,
-    name: "Fake Agent",
-    command: process.execPath,
-    args: [FAKE_AGENT],
-    env: { FAKE_AGENT_SCRIPT: JSON.stringify(script) },
-    cwd,
-  };
-}
+const spec = (script: FakeAgentScript, patchbayAgentId: string): LaunchSpec => fakeAgent(script, patchbayAgentId, cwd);
 
 function harness(opts: { defaults?: Record<string, KnobSeed>; mayOpen?: boolean } = {}) {
   const events: SettingsEvent[] = [];

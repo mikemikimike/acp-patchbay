@@ -6,8 +6,8 @@
 // of that file, reviewed like code — never as a silent difference.
 //
 // Regenerate after a deliberate change: `npx vitest run test/wire-corpus -u`.
-import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
+import { fakeAgent } from "./support/fake-agent";
 import { tempDir } from "./support/teardown";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import type { LaunchSpec } from "../src/orchestrator/pool";
@@ -16,23 +16,13 @@ import type { PatchbayAgentId, PatchbaySessionId } from "../src/shared/ids";
 import type { FakeAgentScript } from "./fake-agent/main";
 import { sessionsHarness } from "./support/sessions-harness";
 
-const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
 
 let cwd: string;
 beforeEach(async () => {
   cwd = await tempDir("patchbay-corpus-");
 });
 
-function spec(script: FakeAgentScript, patchbayAgentId: string): LaunchSpec {
-  return {
-    patchbayAgentId: patchbayAgentId as PatchbayAgentId,
-    name: "Fake Agent",
-    command: process.execPath,
-    args: [FAKE_AGENT],
-    env: { FAKE_AGENT_SCRIPT: JSON.stringify(script) },
-    cwd,
-  };
-}
+const spec = (script: FakeAgentScript, patchbayAgentId: string): LaunchSpec => fakeAgent(script, patchbayAgentId, cwd);
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 

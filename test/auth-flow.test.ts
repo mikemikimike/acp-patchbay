@@ -5,9 +5,9 @@
 // evidence the wire actually delivers to it — and that a persisted lock is
 // never laundered by facts that don't contradict it.
 import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { methods } from "@agentclientprotocol/sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fakeAgent, fakeSessionRecord } from "./support/fake-agent";
 import { tempDir } from "./support/teardown";
 import { SETTLE, waitFor } from "./support/wait-for";
 import { LOGGED_OUT_REASON, type AuthLock } from "../src/orchestrator/auth-evidence";
@@ -17,23 +17,13 @@ import type { FakeAgentScript } from "./fake-agent/main";
 import { agentsHarness } from "./support/agents-harness";
 import type { PatchbayAgentId } from "../src/shared/ids";
 
-const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
 
 let cwd: string;
 beforeEach(async () => {
   cwd = await tempDir("patchbay-authflow-");
 });
 
-function spec(script: FakeAgentScript, patchbayAgentId: PatchbayAgentId): LaunchSpec {
-  return {
-    patchbayAgentId,
-    name: "Fake Agent",
-    command: process.execPath,
-    args: [FAKE_AGENT],
-    env: { FAKE_AGENT_SCRIPT: JSON.stringify(script) },
-    cwd,
-  };
-}
+const spec = (script: FakeAgentScript, patchbayAgentId: string): LaunchSpec => fakeAgent(script, patchbayAgentId, cwd);
 
 /** A strict agent: session/new rejects -32000 until authenticate. */
 const STRICT: FakeAgentScript = {
@@ -176,7 +166,7 @@ describe("auth flows on the wire", () => {
 
     const inFlight = h.pool.prompt("lazy" as PatchbayAgentId, sessionId, [{ type: "text", text: "left before the lock" }]);
     // the fake agent records a prompt as it arrives: the prompt is on the wire
-    await vi.waitFor(() => expect(existsSync(join(cwd, ".fake-agent-sessions", `${sessionId}.jsonl`))).toBe(true), SETTLE);
+    await vi.waitFor(() => expect(existsSync(fakeSessionRecord(cwd, sessionId))).toBe(true), SETTLE);
     h.locks.set("lazy" as PatchbayAgentId, { kind: "loggedOut", reason: LOGGED_OUT_REASON, at: new Date().toISOString() });
     await inFlight;
     expect(h.locks.get("lazy" as PatchbayAgentId)).toMatchObject({ kind: "loggedOut" });

@@ -5,6 +5,7 @@ import { chmod, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { SessionUpdateFact } from "../src/orchestrator/readers/session-update";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { fakeAgent, fakeSessionRecord } from "./support/fake-agent";
 import { fileTempDir, stopsAtTestEnd, tempDir } from "./support/teardown";
 import { SETTLE, waitFor } from "./support/wait-for";
 import { AgentPool, type LaunchSpec } from "../src/orchestrator/pool";
@@ -14,7 +15,6 @@ import { stubFsTerminalHooks } from "./support/stub-hooks";
 import type { PatchbayAgentId } from "../src/shared/ids";
 import { name as packageName, version as packageVersion } from "../package.json";
 
-const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
 
 let cwd: string;
 beforeAll(async () => {
@@ -44,16 +44,7 @@ function makePool(): { pool: AgentPool; rec: Recorded } {
   return { pool, rec };
 }
 
-function spec(script: FakeAgentScript, patchbayAgentId = "fake"): LaunchSpec {
-  return {
-    patchbayAgentId: patchbayAgentId as PatchbayAgentId,
-    name: "Fake Agent",
-    command: process.execPath,
-    args: [FAKE_AGENT],
-    env: { FAKE_AGENT_SCRIPT: JSON.stringify(script) },
-    cwd,
-  };
-}
+const spec = (script: FakeAgentScript, patchbayAgentId = "fake"): LaunchSpec => fakeAgent(script, patchbayAgentId, cwd);
 
 
 describe("AgentPool", () => {
@@ -469,7 +460,7 @@ describe("AgentPool — stopping", () => {
     const turn = pool.prompt("cut-off" as PatchbayAgentId, sessionId, [{ type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" }]);
     const cut = expect(turn).rejects.toThrow();
     // the fake agent records a prompt as it arrives: the call is on the wire
-    await vi.waitFor(() => expect(existsSync(join(cwd, ".fake-agent-sessions", `${sessionId}.jsonl`))).toBe(true), SETTLE);
+    await vi.waitFor(() => expect(existsSync(fakeSessionRecord(cwd, sessionId))).toBe(true), SETTLE);
     await pool.stop("cut-off" as PatchbayAgentId);
     await cut;
     expect(evidence.filter((e) => e.startsWith("prompt.image"))).toEqual([]);

@@ -15,6 +15,8 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { McpServer } from "@agentclientprotocol/sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { echoed } from "./support/transcript";
+import { fakeAgent } from "./support/fake-agent";
 import { stopsAtTestEnd, tempDir } from "./support/teardown";
 import { SETTLE } from "./support/wait-for";
 import { IpcClient } from "../src/mcp/ipc-client";
@@ -36,7 +38,6 @@ import type { PatchbayAgentId } from "../src/shared/ids";
 const FRONTEND = resolve("/repo/frontend");
 const BACKEND = resolve("/repo/backend");
 
-const FAKE_AGENT = join(process.cwd(), "out-test", "fake-agent.mjs");
 const BRIDGE = join(process.cwd(), "out", "mcp-bridge.js");
 
 /** Stands in for the orchestrator's IPC host, serving only
@@ -272,16 +273,7 @@ beforeEach(async () => {
   dir = await tempDir("patchbay-bridge-cwd-");
 });
 
-function spec(script: FakeAgentScript, patchbayAgentId: PatchbayAgentId): LaunchSpec {
-  return {
-    patchbayAgentId,
-    name: "Fake Agent",
-    command: process.execPath,
-    args: [FAKE_AGENT],
-    env: { FAKE_AGENT_SCRIPT: JSON.stringify(script) },
-    cwd: dir,
-  };
-}
+const spec = (script: FakeAgentScript, patchbayAgentId: string): LaunchSpec => fakeAgent(script, patchbayAgentId, dir);
 
 function harness(mcpServers: McpServer[]) {
   const events: AgentViewEvent[] = [];
@@ -405,8 +397,7 @@ describe("MCP bridge — real agent, real bridge subprocess, fake remote MCP ser
     const patchbaySessionId = await h.sessions.createSession("e3" as PatchbayAgentId, "Fake Agent", dir);
     await h.gates.prompt(patchbaySessionId, { text: "what can you see?" });
 
-    const text = h.state().transcripts[patchbaySessionId]!.find((b) => b.kind === "text");
-    expect(text?.kind === "text" && JSON.parse(text.text)).toEqual({
+    expect(echoed(h.state(), patchbaySessionId)).toEqual({
       roots: [
         { uri: pathToFileURL(FRONTEND).toString(), name: "frontend" },
         { uri: pathToFileURL(BACKEND).toString(), name: "backend" },
