@@ -214,7 +214,7 @@ export class Orchestrator {
    * constant; every consumer reads this field, none re-derives it. */
   readonly workspaceCwd: string;
   private readonly binaryCacheDir: string;
-  private readonly clientHost: ClientHost;
+  readonly clientHost: ClientHost;
   /** The session the last-open pointer names, by this window's id for it —
    * null until one is activated here. */
   private pointerRow: string | null = null;

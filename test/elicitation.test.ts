@@ -4,38 +4,22 @@
 // here are the ones agents actually send: claude-agent-acp turns its
 // AskUserQuestion into a `oneOf` single-select (plus a free-text "Other"),
 // or an array of `anyOf` options when the question is multi-select.
-import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
+import { orchestratorHarness } from "./support/orchestrator-harness";
 import { fakeAgent } from "./support/fake-agent";
-import { stopsAtTestEnd, tempDir } from "./support/teardown";
-import { AsksStore } from "../src/orchestrator/asks-store";
-import { PermissionBroker } from "../src/orchestrator/broker";
+import { tempDir } from "./support/teardown";
 import {
   elicitationResponseOf,
   formFieldsOf,
   linkOf,
   readElicitationRequest,
 } from "../src/orchestrator/readers/elicitation";
-import { AgentPool, type LaunchSpec } from "../src/orchestrator/pool";
-import { SessionsStore } from "../src/orchestrator/sessions-store";
-import { DecisionAuditStore } from "../src/orchestrator/stores/decision-audit";
-import { MemoryKV } from "../src/orchestrator/stores/kv";
-import { SessionContinuityStore } from "../src/orchestrator/stores/session-continuity";
-import { SessionFilesStore } from "../src/orchestrator/stores/session-files";
-import { PermissionRulesStore } from "../src/orchestrator/stores/permission-rules";
+import { type LaunchSpec } from "../src/orchestrator/pool";
 import {
-  initialAgentViewState,
-  initialSettingsState,
-  reduceAgentView,
-  reduceSettings,
-  type AgentViewEvent,
   type ChatBlock,
-  type SettingsEvent,
 } from "../src/shared/protocol";
 import type { FakeAgentScript } from "./fake-agent/main";
-import { stubFsTerminalHooks } from "./support/stub-hooks";
 import { waitFor } from "./support/wait-for";
-import { gatesFor } from "./support/session-gates";
 import type { PatchbayAgentId } from "../src/shared/ids";
 
 describe("formFieldsOf", () => {
@@ -280,62 +264,21 @@ beforeEach(async () => {
 
 const spec = (script: FakeAgentScript, patchbayAgentId: string): LaunchSpec => fakeAgent(script, patchbayAgentId, dir);
 
-/** The orchestrator's elicitation wiring, minus its vscode-bound parts
- * (throwaway-session checks, the real browser): the same reading, broker
- * and response mapping, with opened links recorded instead of opened. */
+/** The window's orchestrator: its elicitation path as production wires it,
+ * the links it would open in the browser recorded instead. */
 function wireHarness() {
-  const events: AgentViewEvent[] = [];
-  const settingsEvents: SettingsEvent[] = [];
   const opened: string[] = [];
-  const asks = new AsksStore(new DecisionAuditStore(dir), {
-    emit: (...evs) => events.push(...evs),
-    emitAgent: (patchbayAgentId, event) => settingsEvents.push({ kind: "agentQuestion", patchbayAgentId, event }),
-    turnOf: (patchbaySessionId) => sessions.turnOf(patchbaySessionId),
-    onAuditWritten: () => {},
-    pairOf: (patchbaySessionId) => sessions.pairOf(patchbaySessionId),
-    openLink: (href) => opened.push(href),
-  });
-  const broker = new PermissionBroker(new PermissionRulesStore(new MemoryKV()), asks, () => ({ workspace: [dir], added: [] }), (text) => text);
-  let sessions!: SessionsStore;
-  const pool = new AgentPool({
-    onStatusChanged: () => {},
-    onDeclaredCaptured: () => {},
-    onSessionUpdate: (patchbayAgentId, sessionId, update) => sessions.handleUpdate(patchbayAgentId, sessionId, update),
-    ...stubFsTerminalHooks(),
-    onElicitation: async (patchbayAgentId, reading, signal) => {
-      if (reading.kind !== "ask") return { action: "cancel" };
-      const { message, ask, elicitationId } = reading;
-      // the session the agent names its own way, as patchbay holds it — or,
-      // riding a request outside any session, the agent itself
-      const patchbaySessionId = "sessionId" in reading ? sessions.rowFor(patchbayAgentId, reading.sessionId) : undefined;
-      if ("sessionId" in reading && patchbaySessionId === undefined) return { action: "cancel" };
-      const answer = await broker.askElicitation(
-        patchbaySessionId !== undefined ? { patchbaySessionId } : { patchbayAgentId },
-        { message, ask, ...(elicitationId !== undefined ? { completion: { patchbayAgentId, elicitationId } } : {}) },
-        signal,
-      );
-      return elicitationResponseOf(ask, answer, signal);
-    },
-    onElicitationComplete: (patchbayAgentId, elicitationId) => asks.completeLink(patchbayAgentId, elicitationId),
-  });
-  stopsAtTestEnd(pool);
-  sessions = new SessionsStore(
-    pool,
-    { emit: (...evs) => events.push(...evs), capabilities: () => undefined },
-    new SessionContinuityStore(new MemoryKV()),
-    new SessionFilesStore(join(dir, "session-files")),
-    () => dir,
-  );
+  const h = orchestratorHarness(dir, { ports: { openLink: async (href) => (opened.push(href), true) } });
+  const o = h.orchestrator;
   return {
-    pool,
-    broker,
-    asks,
-    sessions,
-    gates: gatesFor(sessions, (event) => events.push(event)),
-    events,
+    pool: o.pool,
+    broker: o.broker,
+    asks: o.asks,
+    sessions: o.sessions,
+    gates: o.sessionGates,
     opened,
-    state: () => events.reduce(reduceAgentView, initialAgentViewState),
-    settings: () => settingsEvents.reduce(reduceSettings, initialSettingsState),
+    state: h.agentView.state,
+    settings: h.settings.state,
   };
 }
 

@@ -28,6 +28,9 @@ export interface OrchestratorHarness {
   orchestrator: Orchestrator;
   agentView: WatchedView<AgentViewState, AgentViewEvent>;
   settings: WatchedView<SettingsState, SettingsEvent>;
+  /** Settles once the orchestrator's startup has run (it says so to its
+   * view: startupSettled) — where a real window is before a user acts. */
+  started: Promise<void>;
   /** What the orchestrator asked of its ports, in order. */
   asked: { port: keyof OrchestratorPorts; args: unknown[] }[];
   /** The open workspace's folders — mutable, to play a folder change. */
@@ -51,6 +54,8 @@ export interface OrchestratorHarnessOptions {
   machineKV?: MemoryKV;
   /** This workspace's storage — likewise. */
   workspaceKV?: MemoryKV;
+  /** The folder the window works in — absent, `cwd`. */
+  workspace?: string;
   workspaceRoots?: readonly string[];
   /** Replaces a port's stand-in. */
   ports?: Partial<OrchestratorPorts>;
@@ -77,14 +82,16 @@ function watch<S, E>(channel: Orchestrator["agentView"] | Orchestrator["settings
   };
 }
 
-/** `cwd` is the test's own folder: the workspace the orchestrator works in,
- * and the home of its global and workspace storage. */
+/** `cwd` is the test's own folder: the home of the orchestrator's global
+ * and workspace storage, and — unless `workspace` names another — the
+ * folder it works in. */
 export function orchestratorHarness(cwd: string, opts: OrchestratorHarnessOptions = {}): OrchestratorHarness {
   vi.stubGlobal("fetch", opts.fetch ?? (() => Promise.reject(new Error("no network in tests"))));
   atTestEnd(() => vi.unstubAllGlobals());
   const asked: OrchestratorHarness["asked"] = [];
   const paths = { globalStorage: join(cwd, ".patchbay-global"), workspaceStorage: join(cwd, ".patchbay-workspace") };
-  const workspaceRoots = [...(opts.workspaceRoots ?? [cwd])];
+  const workspace = opts.workspace ?? cwd;
+  const workspaceRoots = [...(opts.workspaceRoots ?? [workspace])];
   const pinned = new Set<string>();
   const note = <K extends keyof OrchestratorPorts>(port: K, ...args: unknown[]) => asked.push({ port, args });
   const ports: OrchestratorPorts = {
@@ -119,7 +126,7 @@ export function orchestratorHarness(cwd: string, opts: OrchestratorHarnessOption
       secrets: new MemorySecrets(),
       globalStoragePath: paths.globalStorage,
       storagePath: paths.workspaceStorage,
-      workspaceCwd: cwd,
+      workspaceCwd: workspace,
       scripts: {
         editorServer: join(process.cwd(), "out", "mcp-server.js"),
         bridge: join(process.cwd(), "out", "mcp-bridge.js"),
@@ -128,6 +135,14 @@ export function orchestratorHarness(cwd: string, opts: OrchestratorHarnessOption
     ports,
     nullLogger,
   );
+  // Its startup runs on from the constructor; the view is told when it ends.
+  const started = new Promise<void>((resolve) => {
+    const emit = orchestrator.agentView.emit.bind(orchestrator.agentView);
+    vi.spyOn(orchestrator.agentView, "emit").mockImplementation((...events) => {
+      emit(...events);
+      if (events.some((e) => e.kind === "startupSettled")) resolve();
+    });
+  });
   atTestEnd(() => orchestrator.dispose());
   stopsAtTestEnd(orchestrator.pool);
   // A probe is the session/new an agent is sent in its probe root — read
@@ -157,6 +172,7 @@ export function orchestratorHarness(cwd: string, opts: OrchestratorHarnessOption
     orchestrator,
     agentView: watch<AgentViewState, AgentViewEvent>(orchestrator.agentView),
     settings: watch<SettingsState, SettingsEvent>(orchestrator.settings),
+    started,
     asked,
     workspaceRoots,
     pinned,
