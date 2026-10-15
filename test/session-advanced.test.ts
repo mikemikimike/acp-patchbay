@@ -1,27 +1,12 @@
 // P8 gate: one process per agent, one-click reload, and the session knob
 // surfaces — minus vscode, over the real fake agent.
-import { join } from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { orchestratorHarness } from "./support/orchestrator-harness";
 import { fakeAgent } from "./support/fake-agent";
-import { stopsAtTestEnd, tempDir } from "./support/teardown";
+import { tempDir } from "./support/teardown";
 import { waitFor } from "./support/wait-for";
-import { CapabilityTracker } from "../src/orchestrator/capability-tracker";
-import { AgentPool, type LaunchSpec } from "../src/orchestrator/pool";
-import type { SessionGates } from "../src/orchestrator/session-gates";
-import { SessionsStore } from "../src/orchestrator/sessions-store";
-import { MemoryKV } from "../src/orchestrator/stores/kv";
-import { SessionContinuityStore } from "../src/orchestrator/stores/session-continuity";
-import { SessionFilesStore } from "../src/orchestrator/stores/session-files";
-import { UsedCapabilityStore } from "../src/orchestrator/stores/used-capabilities";
-import {
-  initialAgentViewState,
-  reduceAgentView,
-  type AgentViewEvent,
-  type AgentViewState,
-} from "../src/shared/protocol";
+import { type LaunchSpec } from "../src/orchestrator/pool";
 import type { FakeAgentScript } from "./fake-agent/main";
-import { stubFsTerminalHooks } from "./support/stub-hooks";
-import { gatesFor } from "./support/session-gates";
 import type { PatchbayAgentId } from "../src/shared/ids";
 
 
@@ -33,48 +18,26 @@ beforeEach(async () => {
 const spec = (script: FakeAgentScript, patchbayAgentId: string): LaunchSpec => fakeAgent(script, patchbayAgentId, cwd);
 
 
-/** Wires pool + verifier + sessions store the way Orchestrator does, minus
- * vscode. */
-function harness(extraHooks: {
-  seedFor?(patchbayAgentId: PatchbayAgentId): Record<string, string | boolean> | undefined;
-  onKnobsConfirmed?(patchbayAgentId: PatchbayAgentId, seed: Record<string, string | boolean>): void;
-} = {}): {
-  pool: AgentPool;
-  sessions: SessionsStore;
-  gates: SessionGates;
-  capabilityTracker: CapabilityTracker;
-  state(): AgentViewState;
-} {
-  const events: AgentViewEvent[] = [];
-  let sessions!: SessionsStore;
-  let capabilityTracker!: CapabilityTracker;
-  const state = () => events.reduce(reduceAgentView, initialAgentViewState);
-
-  const pool = new AgentPool({
-    onStatusChanged: (patchbayAgentId, status) => sessions.agentStatusChanged(patchbayAgentId, status),
-    onDeclaredCaptured: (patchbayAgentId) => capabilityTracker.onDeclared(patchbayAgentId),
-    onSessionUpdate: (patchbayAgentId, sessionId, update) => sessions.handleUpdate(patchbayAgentId, sessionId, update),
-    onCapabilityEvidence: (patchbayAgentId, row, evidence) => capabilityTracker.noteEvidence(patchbayAgentId, row, evidence),
-    ...stubFsTerminalHooks(),
-  });
-  stopsAtTestEnd(pool);
-  capabilityTracker = new CapabilityTracker(pool, new UsedCapabilityStore(new MemoryKV()), {
-    registryIdOf: () => null,
-    changed: () => {},
-    probeRoot: async () => cwd, // exists for the test's life — the contract
-  });
-  sessions = new SessionsStore(
-    pool,
-    {
-      emit: (...evs) => events.push(...evs),
-      capabilities: (patchbayAgentId) => capabilityTracker.matrix(patchbayAgentId),
-      ...extraHooks,
-    },
-    new SessionContinuityStore(new MemoryKV()),
-    new SessionFilesStore(join(cwd, "session-files")),
-    () => cwd,
-  );
-  return { pool, sessions, gates: gatesFor(sessions, (event) => events.push(event)), capabilityTracker, state };
+/** The window's orchestrator, its sessions side under the names these
+ * tests read. */
+function harness() {
+  const h = orchestratorHarness(cwd);
+  const o = h.orchestrator;
+  return {
+    orchestrator: o,
+    pool: o.pool,
+    sessions: o.sessions,
+    gates: o.sessionGates,
+    capabilityTracker: o.capabilityTracker,
+    state: h.agentView.state,
+    seedAgent: h.seedAgent,
+    /** Every knob combination the composer recorded as a user's — the
+     * writes of the last-session seed, in order. */
+    recorded: (() => {
+      const writes = vi.spyOn(o.agents, "recordKnobs");
+      return () => writes.mock.calls.map(([, seed]) => seed);
+    })(),
+  };
 }
 
 /** The fake agent's own ids for its sessions are `fake-<pid>-<n>` (or
@@ -297,33 +260,10 @@ describe("Session model/mode/effort knobs (P8)", () => {
   });
 
   it("per-agent defaults are applied post-create by option id — no category needed (ACP: category is UX-only)", async () => {
-    const events: AgentViewEvent[] = [];
-    let sessions!: SessionsStore;
-    let capabilityTracker!: CapabilityTracker;
-    const pool = new AgentPool({
-      onStatusChanged: () => {},
-      onDeclaredCaptured: (patchbayAgentId) => capabilityTracker.onDeclared(patchbayAgentId),
-      onSessionUpdate: (patchbayAgentId, sessionId, update) => sessions.handleUpdate(patchbayAgentId, sessionId, update),
-      ...stubFsTerminalHooks(),
-    });
-    stopsAtTestEnd(pool);
-    capabilityTracker = new CapabilityTracker(pool, new UsedCapabilityStore(new MemoryKV()), {
-      registryIdOf: () => null,
-    changed: () => {},
-    probeRoot: async () => cwd, // exists for the test's life — the contract
-  });
-    sessions = new SessionsStore(
-      pool,
-      {
-        emit: (...evs) => events.push(...evs),
-        capabilities: (patchbayAgentId) => capabilityTracker.matrix(patchbayAgentId),
-        // Folded seed (knob id → value), as the orchestrator delivers it.
-        seedFor: () => ({ mode: "code", "model-opt": "opus" }),
-      },
-      new SessionContinuityStore(new MemoryKV()),
-      new SessionFilesStore(join(cwd, "session-files")),
-      () => cwd,
-    );
+    const h = harness();
+    // the agent's saved defaults, folded by knob id — the entry seed
+    await h.seedAgent("defaulted" as PatchbayAgentId, undefined, { mode: "code", "model-opt": "opus" });
+    const { pool, sessions, state } = h;
     await pool.connect(
       spec(
         {
@@ -350,7 +290,6 @@ describe("Session model/mode/effort knobs (P8)", () => {
         "defaulted" as PatchbayAgentId,
       ),
     );
-    const state = () => events.reduce(reduceAgentView, initialAgentViewState);
     const patchbaySessionId = await sessions.createSession("defaulted" as PatchbayAgentId, "Fake Agent", cwd);
 
     expect(state().sessionKnobs[patchbaySessionId]!.find((k) => k.id === "mode")).toMatchObject({ currentValue: "code" });
@@ -378,36 +317,35 @@ describe("Knob two-fold rule (composer vs session)", () => {
   };
 
   it("composer recording fires on a user set only — create, reload, and re-attach publishes never record", async () => {
-    const records: Record<string, string | boolean>[] = [];
-    const h = harness({ onKnobsConfirmed: (_patchbayAgentId, seed) => records.push(seed) });
+    const h = harness();
+    const records = h.recorded;
     await h.pool.connect(
       spec({ declare: { loadSession: true }, configOptions: [MODEL_KNOB], turn: [{ type: "chunk", text: "hi" }] }, "rec" as PatchbayAgentId),
     );
     const patchbaySessionId = await h.sessions.createSession("rec" as PatchbayAgentId, "Fake Agent", cwd);
-    expect(records).toEqual([]); // the attach publish carries agent state, not a use
+    expect(records()).toEqual([]); // the attach publish carries agent state, not a use
 
     await h.gates.setKnob(patchbaySessionId, "model-opt", "opus");
-    expect(records).toEqual([{ "model-opt": "opus" }]);
+    expect(records()).toEqual([{ "model-opt": "opus" }]);
 
     await h.gates.prompt(patchbaySessionId, { text: "hello" });
     await h.gates.reload(patchbaySessionId);
-    expect(records).toHaveLength(1); // reload re-published and re-seeded — still not a use
+    expect(records()).toHaveLength(1); // reload re-published and re-seeded — still not a use
 
     await h.pool.stop("rec" as PatchbayAgentId);
   });
 
   it("a modes-surface user set records from the agent's own current_mode_update — a lying no-op set_mode records nothing", async () => {
-    const records: Record<string, string | boolean>[] = [];
     const modes = { currentModeId: "ask", availableModes: [{ id: "ask", name: "Ask" }, { id: "code", name: "Code" }] };
-    const h = harness({ onKnobsConfirmed: (_patchbayAgentId, seed) => records.push(seed) });
+    const h = harness();
     await h.pool.connect(spec({ modes }, "modes-rec" as PatchbayAgentId));
     const patchbaySessionId = await h.sessions.createSession("modes-rec" as PatchbayAgentId, "Fake Agent", cwd);
     await h.gates.setKnob(patchbaySessionId, "mode", "code");
-    await waitFor(() => (records.length > 0 ? true : undefined));
-    expect(records).toEqual([{ mode: "code" }]);
+    await waitFor(() => h.recorded().length > 0);
+    expect(h.recorded()).toEqual([{ mode: "code" }]);
     await h.pool.stop("modes-rec" as PatchbayAgentId);
 
-    const liar = harness({ onKnobsConfirmed: (_patchbayAgentId, seed) => records.push(seed) });
+    const liar = harness();
     await liar.pool.connect(spec({ modes, lies: { modeChangeNoop: true } }, "modes-liar" as PatchbayAgentId));
     const liarSession = await liar.sessions.createSession("modes-liar" as PatchbayAgentId, "Fake Agent", cwd);
     await liar.gates.setKnob(liarSession, "mode", "code");
@@ -415,7 +353,7 @@ describe("Knob two-fold rule (composer vs session)", () => {
     // so everything the agent will say about this set has been read. One
     // turn of the event loop lets a wrong record land — none may.
     await new Promise((r) => setImmediate(r));
-    expect(records).toHaveLength(1); // the lying success response recorded nothing
+    expect(liar.recorded()).toEqual([]); // the lying success response recorded nothing
     await liar.pool.stop("modes-liar" as PatchbayAgentId);
   });
 
@@ -455,15 +393,16 @@ describe("Knob two-fold rule (composer vs session)", () => {
 
     // Window two: known only via session/list — no combination in hand, so
     // the entry seed (composer/defaults, per knobSource) wins the attach.
-    const w2 = harness({ seedFor: () => ({ "model-opt": "opus" }) });
+    const w2 = harness();
+    await w2.seedAgent("entry" as PatchbayAgentId, undefined, { "model-opt": "opus" });
     await w2.pool.connect(
       spec(
         { declare: { loadSession: true, sessionCapabilities: { list: {} } }, configOptions: [MODEL_KNOB], turn: [{ type: "chunk", text: "hi" }] },
         "entry" as PatchbayAgentId,
       ),
     );
-    await w2.sessions.syncAgentSessions("entry" as PatchbayAgentId);
-    const listed = w2.sessions.rowFor("entry" as PatchbayAgentId, sessionId)!;
+    // connected, the agent's own list syncs in
+    const listed = await waitFor(() => w2.sessions.rowFor("entry" as PatchbayAgentId, sessionId));
     await w2.gates.revive(listed);
     expect(w2.state().sessionKnobs[listed]![0]).toMatchObject({ currentValue: "opus" });
 

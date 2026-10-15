@@ -4,16 +4,15 @@
 // The fixture's dependentOptions models the shape that motivated it
 // (OpenCode's `effort` exists only for models with variants): a surface
 // read at agent defaults cannot show a knob the saved default would reveal.
-import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { orchestratorHarness } from "./support/orchestrator-harness";
+import { SETTLE, waitFor } from "./support/wait-for";
 import { fakeAgent } from "./support/fake-agent";
-import { stopsAtTestEnd, tempDir } from "./support/teardown";
-import { DefaultsEditor } from "../src/orchestrator/defaults-editor";
-import { AgentPool, type LaunchSpec } from "../src/orchestrator/pool";
-import type { KnobSeed, SettingsEvent } from "../src/shared/protocol";
+import { tempDir } from "./support/teardown";
+import { type LaunchSpec } from "../src/orchestrator/pool";
+import type { KnobSeed } from "../src/shared/protocol";
 import type { FakeAgentScript } from "./fake-agent/main";
-import { stubFsTerminalHooks } from "./support/stub-hooks";
 import type { PatchbayAgentId } from "../src/shared/ids";
 
 
@@ -59,52 +58,45 @@ const DEPENDENT_SCRIPT: FakeAgentScript = {
 
 const spec = (script: FakeAgentScript, patchbayAgentId: string): LaunchSpec => fakeAgent(script, patchbayAgentId, cwd);
 
-function harness(opts: { defaults?: Record<string, KnobSeed>; mayOpen?: boolean } = {}) {
-  const events: SettingsEvent[] = [];
-  const defaults = new Map(Object.entries(opts.defaults ?? {}));
-  let editor!: DefaultsEditor;
-  const pool = new AgentPool({
-    onStatusChanged: (patchbayAgentId, status) => {
-      if (status !== "running") editor.forget(patchbayAgentId);
-    },
-    onDeclaredCaptured: () => {},
-    onSessionUpdate: (patchbayAgentId, sessionId, update) => {
-      if (editor.owns(patchbayAgentId, sessionId)) editor.handleUpdate(patchbayAgentId, sessionId, update);
-    },
-    onCapabilityEvidence: () => {},
-    onAuthWireFact: () => {},
-    ...stubFsTerminalHooks(),
-  });
-  stopsAtTestEnd(pool);
-  editor = new DefaultsEditor(
-    pool,
-    {
-      probeRoot: async (patchbayAgentId) => {
-        const dir = join(cwd, "probe", patchbayAgentId);
-        await mkdir(dir, { recursive: true });
-        return dir;
-      },
-      defaultsFor: (patchbayAgentId) => defaults.get(patchbayAgentId) ?? {},
-      mayOpen: () => opts.mayOpen ?? true,
-      emit: (...evs) => events.push(...evs),
-    },
-  );
-  /** The latest surface published for an agent — offered knob ids. */
-  const offered = (patchbayAgentId: PatchbayAgentId): string[] | undefined => {
-    const last = events.filter((e) => e.kind === "agentKnobsObserved" && e.patchbayAgentId === patchbayAgentId).at(-1);
-    return last?.kind === "agentKnobsObserved" ? last.knobs.knobs.map((k) => k.id) : undefined;
-  };
+/** The window's orchestrator with each agent of `defaults` saved under its
+ * knobs' defaults — `latched` names one added from the registry entry whose
+ * first session must be its own (its editor waits for it). */
+async function harness(opts: { defaults?: Record<string, KnobSeed>; latched?: string } = {}) {
+  const h = orchestratorHarness(cwd);
+  const o = h.orchestrator;
+  for (const [patchbayAgentId, seed] of Object.entries(opts.defaults ?? {})) {
+    await h.seedAgent(patchbayAgentId as PatchbayAgentId, undefined, seed);
+  }
+  if (opts.latched !== undefined) await h.seedAgent(opts.latched as PatchbayAgentId, "auggie");
+  const events = h.settings.events;
+  /** The latest surface published for an agent. */
   const lastView = (patchbayAgentId: PatchbayAgentId) => {
-    const last = events.filter((e) => e.kind === "agentKnobsObserved" && e.patchbayAgentId === patchbayAgentId).at(-1);
+    const last = events().filter((e) => e.kind === "agentKnobsObserved" && e.patchbayAgentId === patchbayAgentId).at(-1);
     return last?.kind === "agentKnobsObserved" ? last.knobs : undefined;
   };
-  return { pool, editor, events, defaults, offered, lastView };
+  /** Its offered knob ids. */
+  const offered = (patchbayAgentId: PatchbayAgentId): string[] | undefined => lastView(patchbayAgentId)?.knobs.map((k) => k.id);
+  /** The free check run, when there is one: its throwaway session is ended
+   * and the connection serves only what the test opens. */
+  const connected = async (script: FakeAgentScript, patchbayAgentId: PatchbayAgentId) => {
+    await o.pool.connect(spec(script, patchbayAgentId));
+    if (opts.latched !== patchbayAgentId) {
+      await waitFor(() => o.capabilityTracker.matrix(patchbayAgentId)?.["session.close"]?.used === true);
+    }
+  };
+  /** New defaults saved the way Settings saves them — the editor is told by
+   * the store, as in the window. */
+  const saveDefaults = async (patchbayAgentId: PatchbayAgentId, seed: KnobSeed) => {
+    const config = o.agents.config(patchbayAgentId)!;
+    await o.agents.save({ ...config, args: [...config.args], env: {}, defaults: seed });
+  };
+  return { pool: o.pool, editor: o.defaultsEditor, events, offered, lastView, connected, saveDefaults, paths: h.paths };
 }
 
 describe("DefaultsEditor", () => {
   it("opens a throwaway session and publishes the surface for the stored defaults — a dependent knob shows only when its condition holds", async () => {
-    const h = harness({ defaults: { dep: { model: "pro" } } });
-    await h.pool.connect(spec(DEPENDENT_SCRIPT, "dep" as PatchbayAgentId));
+    const h = await harness({ defaults: { dep: { model: "pro" } } });
+    await h.connected(DEPENDENT_SCRIPT, "dep" as PatchbayAgentId);
     await h.editor.open("dep" as PatchbayAgentId);
     // seeded to model=pro: effort exists on this surface, with pro's levels
     expect(h.offered("dep" as PatchbayAgentId)).toEqual(["model", "effort"]);
@@ -118,16 +110,16 @@ describe("DefaultsEditor", () => {
   });
 
   it("at agent defaults the dependent knob is absent — the read a one-time probe would have shown", async () => {
-    const h = harness();
-    await h.pool.connect(spec(DEPENDENT_SCRIPT, "bare" as PatchbayAgentId));
+    const h = await harness();
+    await h.connected(DEPENDENT_SCRIPT, "bare" as PatchbayAgentId);
     await h.editor.open("bare" as PatchbayAgentId);
     expect(h.offered("bare" as PatchbayAgentId)).toEqual(["model"]);
     await h.pool.stop("bare" as PatchbayAgentId);
   });
 
   it("a seed in the wrong key order still lands — effort is applied after the model that reveals it", async () => {
-    const h = harness({ defaults: { order: { effort: "high", model: "pro" } } });
-    await h.pool.connect(spec(DEPENDENT_SCRIPT, "order" as PatchbayAgentId));
+    const h = await harness({ defaults: { order: { effort: "high", model: "pro" } } });
+    await h.connected(DEPENDENT_SCRIPT, "order" as PatchbayAgentId);
     await h.editor.open("order" as PatchbayAgentId);
     expect(h.offered("order" as PatchbayAgentId)).toEqual(["model", "effort"]);
     // the session embodies both: a fresh read of the fixture's state
@@ -138,32 +130,32 @@ describe("DefaultsEditor", () => {
   });
 
   it("an edit re-reads the surface: changing the model away drops effort, back brings it", async () => {
-    const h = harness({ defaults: { edit: { model: "pro" } } });
-    await h.pool.connect(spec(DEPENDENT_SCRIPT, "edit" as PatchbayAgentId));
+    const h = await harness({ defaults: { edit: { model: "pro" } } });
+    await h.connected(DEPENDENT_SCRIPT, "edit" as PatchbayAgentId);
     await h.editor.open("edit" as PatchbayAgentId);
     expect(h.offered("edit" as PatchbayAgentId)).toEqual(["model", "effort"]);
 
-    h.defaults.set("edit", { model: "lite" });
-    await h.editor.defaultsChanged("edit" as PatchbayAgentId);
-    expect(h.offered("edit" as PatchbayAgentId)).toEqual(["model"]);
+    await h.saveDefaults("edit" as PatchbayAgentId, { model: "lite" });
+    await vi.waitFor(() => expect(h.offered("edit" as PatchbayAgentId)).toEqual(["model"]), SETTLE);
 
-    h.defaults.set("edit", { model: "pro", effort: "low" });
-    await h.editor.defaultsChanged("edit" as PatchbayAgentId);
-    expect(h.offered("edit" as PatchbayAgentId)).toEqual(["model", "effort"]);
+    await h.saveDefaults("edit" as PatchbayAgentId, { model: "pro", effort: "low" });
+    await vi.waitFor(() => expect(h.offered("edit" as PatchbayAgentId)).toEqual(["model", "effort"]), SETTLE);
     // one session throughout — sets, not reopen
     expect(h.pool.get("edit" as PatchbayAgentId)!.sessions).toHaveLength(1);
     await h.pool.stop("edit" as PatchbayAgentId);
   });
 
   it("clearing a default has no wire form — the session is recomputed from the store", async () => {
-    const h = harness({ defaults: { clear: { model: "pro", effort: "high" } } });
-    await h.pool.connect(spec(DEPENDENT_SCRIPT, "clear" as PatchbayAgentId));
+    const h = await harness({ defaults: { clear: { model: "pro", effort: "high" } } });
+    await h.connected(DEPENDENT_SCRIPT, "clear" as PatchbayAgentId);
     await h.editor.open("clear" as PatchbayAgentId);
     const first = h.pool.get("clear" as PatchbayAgentId)!.sessions[0];
 
-    h.defaults.set("clear", { model: "pro" });
-    await h.editor.defaultsChanged("clear" as PatchbayAgentId);
-    const second = h.pool.get("clear" as PatchbayAgentId)!.sessions[0];
+    await h.saveDefaults("clear" as PatchbayAgentId, { model: "pro" });
+    const second = await waitFor(() => {
+      const now = h.pool.get("clear" as PatchbayAgentId)!.sessions[0];
+      return now !== undefined && now !== first ? now : undefined;
+    });
     expect(second).toBeDefined();
     expect(second).not.toBe(first);
     expect(h.offered("clear" as PatchbayAgentId)).toEqual(["model", "effort"]);
@@ -171,22 +163,23 @@ describe("DefaultsEditor", () => {
   });
 
   it("collapse ends the session agent-side (close+delete where declared) and releases the surface", async () => {
-    const h = harness({ defaults: { end: { model: "pro" } } });
-    await h.pool.connect(spec(DEPENDENT_SCRIPT, "end" as PatchbayAgentId));
+    const h = await harness({ defaults: { end: { model: "pro" } } });
+    await h.connected(DEPENDENT_SCRIPT, "end" as PatchbayAgentId);
     await h.editor.open("end" as PatchbayAgentId);
     expect(h.pool.get("end" as PatchbayAgentId)!.sessions).toHaveLength(1);
+    const before = h.events().length;
     await h.editor.close("end" as PatchbayAgentId);
     expect(h.pool.get("end" as PatchbayAgentId)!.sessions).toEqual([]);
-    expect(h.events.at(-1)).toEqual({ kind: "agentKnobsReleased", patchbayAgentId: "end" });
+    expect(h.events().slice(before)).toContainEqual({ kind: "agentKnobsReleased", patchbayAgentId: "end" });
     // the agent's own history holds no junk from the edit
-    const list = await h.pool.listSessions("end" as PatchbayAgentId, { cwd: join(cwd, "probe", "end") });
+    const list = await h.pool.listSessions("end" as PatchbayAgentId, { cwd: join(h.paths.globalStorage, "probe", "end") });
     expect(list.sessions).toEqual([]);
     await h.pool.stop("end" as PatchbayAgentId);
   });
 
   it("a latched agent's editor waits — stated on the card, no session spent", async () => {
-    const h = harness({ mayOpen: false });
-    await h.pool.connect(spec(DEPENDENT_SCRIPT, "latched" as PatchbayAgentId));
+    const h = await harness({ latched: "latched" });
+    await h.connected(DEPENDENT_SCRIPT, "latched" as PatchbayAgentId);
     await h.editor.open("latched" as PatchbayAgentId);
     expect(h.lastView("latched" as PatchbayAgentId)).toMatchObject({ knobs: [], unavailable: expect.stringContaining("first session") });
     expect(h.pool.get("latched" as PatchbayAgentId)!.sessions).toEqual([]);
@@ -194,21 +187,23 @@ describe("DefaultsEditor", () => {
   });
 
   it("the connection ending drops the entry without a wire call; open is a no-op while stopped", async () => {
-    const h = harness({ defaults: { gone: { model: "pro" } } });
-    await h.pool.connect(spec(DEPENDENT_SCRIPT, "gone" as PatchbayAgentId));
+    const h = await harness({ defaults: { gone: { model: "pro" } } });
+    await h.connected(DEPENDENT_SCRIPT, "gone" as PatchbayAgentId);
     await h.editor.open("gone" as PatchbayAgentId);
     await h.pool.stop("gone" as PatchbayAgentId);
     expect(h.editor.owns("gone" as PatchbayAgentId, "anything")).toBe(false);
-    const before = h.events.length;
+    const before = h.events().length;
     await h.editor.open("gone" as PatchbayAgentId);
-    expect(h.events.length).toBe(before); // the card states "connect to edit" from status alone
+    // the card states "connect to edit" from status alone
+    // — none of the editor's own events
+    expect(h.events().slice(before).filter((e) => e.kind === "agentKnobsObserved" || e.kind === "agentKnobsReleased")).toEqual([]);
   });
 
   it("the editor's own permission requests never reach a transcript — it answers as a throwaway", async () => {
     // owns() is the routing fact the orchestrator consults; a real session's
     // id (different agent, same string) is never claimed.
-    const h = harness({ defaults: { own: { model: "pro" } } });
-    await h.pool.connect(spec(DEPENDENT_SCRIPT, "own" as PatchbayAgentId));
+    const h = await harness({ defaults: { own: { model: "pro" } } });
+    await h.connected(DEPENDENT_SCRIPT, "own" as PatchbayAgentId);
     await h.editor.open("own" as PatchbayAgentId);
     const id = h.pool.get("own" as PatchbayAgentId)!.sessions[0]!;
     expect(h.editor.owns("own" as PatchbayAgentId, id)).toBe(true);

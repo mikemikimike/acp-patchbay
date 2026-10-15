@@ -44,8 +44,9 @@ export interface OrchestratorHarness {
   probes: { patchbayAgentId: PatchbayAgentId; sessionId: string }[];
   /** A saved agent — and so a row in the views — for one a test connects
    * through the pool directly: the orchestrator acts only on agents that
-   * exist. `registryId` saves it as added from that registry entry. */
-  seedAgent(patchbayAgentId: PatchbayAgentId, registryId?: string): Promise<void>;
+   * exist. `registryId` saves it as added from that registry entry;
+   * `defaults` are its knobs' saved defaults. */
+  seedAgent(patchbayAgentId: PatchbayAgentId, registryId?: string, defaults?: Record<string, string | boolean>): Promise<void>;
 }
 
 export interface OrchestratorHarnessOptions {
@@ -168,14 +169,14 @@ export function orchestratorHarness(cwd: string, opts: OrchestratorHarnessOption
     if (sessionCwd.startsWith(probeRoot)) probes.push({ patchbayAgentId, sessionId: opened.sessionId });
     return opened;
   });
-  const seedAgent = async (patchbayAgentId: PatchbayAgentId, registryId?: string) => {
+  const seedAgent = async (patchbayAgentId: PatchbayAgentId, registryId?: string, defaults?: Record<string, string | boolean>) => {
     await orchestrator.agentConfigs.upsert({
       id: patchbayAgentId,
       name: patchbayAgentId,
       command: process.execPath,
       args: [],
       autoConnect: false,
-      defaults: {},
+      defaults: defaults === undefined ? {} : { options: defaults },
       registrySource: registryId === undefined ? null : { registryId, distributionKind: "npx", pinnedVersion: "1.0.0" },
       lastSeenVersion: null,
     });
