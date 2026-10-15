@@ -1,14 +1,17 @@
 // The OAuth callback registry: a wait lasts as long as the user takes in
 // the browser, and ends with its attempt — never on a clock.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { OAuthCallbackRegistry } from "../src/orchestrator/oauth-callback";
 
 describe("OAuthCallbackRegistry", () => {
   it("a callback answers its own state, whenever it comes", async () => {
+    vi.useFakeTimers();
     const registry = new OAuthCallbackRegistry();
     const waiting = registry.wait("abc");
     expect(registry.handle("state=other&code=x")).toBe(false);
-    await new Promise((r) => setTimeout(r, 50));
+    // the user takes an hour in the browser: no clock may end the wait
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    vi.useRealTimers();
     expect(registry.handle("state=abc&code=granted")).toBe(true);
     expect((await waiting).get("code")).toBe("granted");
     expect(registry.handle("state=abc&code=again")).toBe(false);

@@ -6,7 +6,8 @@
 // McpServersStore's own collaborators. The live half (a real agent
 // calling tools through the real bridge subprocess) is
 // test/mcp-bridge.test.ts.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SETTLE } from "./support/wait-for";
 import { McpServerGates } from "../src/orchestrator/mcp-server-gates";
 import { McpServersStore } from "../src/orchestrator/mcp-servers-store";
 import { Queue } from "../src/orchestrator/queue";
@@ -988,7 +989,7 @@ describe("McpServersStore — the lines: a connect, a probe, a remove", () => {
       },
     });
     const flow = h.gates.connectOAuth("svc", "Service").catch((err: unknown) => err);
-    for (let i = 0; i < 200 && waitSignal === undefined; i++) await new Promise((r) => setTimeout(r, 10));
+    await vi.waitFor(() => expect(waitSignal).toBeDefined(), SETTLE);
     expect(waitSignal?.aborted).toBe(false);
     await h.gates.cancel("catalog:svc");
     expect(await flow).toMatchObject({ by: "cancel" });
@@ -1000,7 +1001,7 @@ describe("McpServersStore — the lines: a connect, a probe, a remove", () => {
     const h = harness([entry()], { userAgent: { ...silentTab, authorize: () => (tabs++, new Promise(() => {})) } });
     const first = h.gates.connectOAuth("svc", "Service").catch((err: unknown) => err);
     const second = h.gates.connectOAuth("svc", "Service").catch((err: unknown) => err);
-    for (let i = 0; i < 200 && tabs === 0; i++) await new Promise((r) => setTimeout(r, 10));
+    await vi.waitFor(() => expect(tabs).toBeGreaterThan(0), SETTLE);
     await h.gates.cancel("catalog:svc");
     expect(await first).toMatchObject({ by: "cancel" });
     expect(await second).toMatchObject({ by: "cancel" });
@@ -1028,7 +1029,7 @@ describe("McpServersStore — the lines: a connect, a probe, a remove", () => {
     });
     const one = h.gates.probe(slow);
     const two = h.gates.probe(slow);
-    for (let i = 0; i < 200 && probes === 0; i++) await new Promise((r) => setTimeout(r, 10));
+    await vi.waitFor(() => expect(probes).toBeGreaterThan(0), SETTLE);
     await h.manager.refresh();
     const busy = h.events.filter((e) => e.kind === "mcpServersChanged").at(-1);
     expect(busy?.kind === "mcpServersChanged" && busy.servers[0]?.busy).toEqual(["probe"]);
@@ -1040,13 +1041,15 @@ describe("McpServersStore — the lines: a connect, a probe, a remove", () => {
   it("Remove cuts in: a probe still running is told to stop, keeps no outcome, and the server is gone", async () => {
     const h = harness([]);
     const hung = await h.gates.addCustom("Hung", { kind: "custom-stdio", command: "srv", args: [], env: {} }, "auto");
+    let started = false;
     let told = false;
     h.setProbeFn((_target, signal) => {
+      started = true;
       signal?.addEventListener("abort", () => (told = true), { once: true });
       return new Promise(() => {});
     });
     const probing = h.gates.probe(hung).catch((err: unknown) => err);
-    await new Promise((r) => setTimeout(r, 20));
+    await vi.waitFor(() => expect(started).toBe(true), SETTLE);
     await h.gates.remove(hung);
     expect(told).toBe(true);
     expect(await probing).toMatchObject({ by: "remove" });

@@ -10,6 +10,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SETTLE } from "./support/wait-for";
 import { Cancelled } from "../src/orchestrator/queue";
 import { AgentConfigStore } from "../src/orchestrator/stores/agent-configs";
 import { MemoryKV } from "../src/orchestrator/stores/kv";
@@ -410,7 +411,7 @@ describe("the gates", () => {
     const spawns = vi.spyOn(h.pool, "connect");
 
     const startup = h.gates.connect("auto" as PatchbayAgentId);
-    await vi.waitFor(() => expect(h.pool.get("auto" as PatchbayAgentId)?.status).toBe("reconnecting"));
+    await vi.waitFor(() => expect(h.pool.get("auto" as PatchbayAgentId)?.status).toBe("reconnecting"), SETTLE);
     const chat = h.gates.connect("auto" as PatchbayAgentId);
     expect(h.row("auto" as PatchbayAgentId)?.busy).toEqual([{ kind: "connect" }]);
     release();
@@ -431,7 +432,7 @@ describe("the gates", () => {
 
     const first = h.gates.upgrade("reg" as PatchbayAgentId);
     const second = h.gates.upgrade("reg" as PatchbayAgentId);
-    await vi.waitFor(() => expect(user.asked).toHaveLength(1));
+    await vi.waitFor(() => expect(user.asked).toHaveLength(1), SETTLE);
     expect(user.asked[0]).toMatch(/1 open conversation/);
     expect(h.row("reg" as PatchbayAgentId)?.busy).toEqual([{ kind: "upgrade", to: "2.0.0" }]);
     // A chat asked for meanwhile waits its turn behind the upgrade.
@@ -452,15 +453,15 @@ describe("the gates", () => {
     await upgradable(h);
 
     const upgrade = h.gates.upgrade("reg" as PatchbayAgentId);
-    await vi.waitFor(() => expect(user.asked).toHaveLength(1));
+    await vi.waitFor(() => expect(user.asked).toHaveLength(1), SETTLE);
     const cut = expect(upgrade).rejects.toBeInstanceOf(Cancelled);
     const stop = h.gates.stop("reg" as PatchbayAgentId);
     // A conversation is open, so the Stop puts the one question too.
-    await vi.waitFor(() => expect(user.asked).toHaveLength(2));
+    await vi.waitFor(() => expect(user.asked).toHaveLength(2), SETTLE);
     expect(user.asked[1]).toBe("Stop Fake reg? It disconnects 1 open conversation.");
     user.answer("Stop", true);
     // The escape hatch reaches the agent whatever its queue holds.
-    await vi.waitFor(() => expect(h.row("reg" as PatchbayAgentId)?.status).toBe("stopped"));
+    await vi.waitFor(() => expect(h.row("reg" as PatchbayAgentId)?.status).toBe("stopped"), SETTLE);
     await cut;
     expect(h.row("reg" as PatchbayAgentId)?.busy).toEqual([{ kind: "upgrade", to: "2.0.0" }, { kind: "stop" }]);
     // The upgrade's own question, still open, is answered yes: told to
@@ -479,14 +480,17 @@ describe("the gates", () => {
     const h = agentsHarness(dir, { resolveLaunch: async (spec) => (await download, spec) });
     await stored(h, fakeConfig("doomed", {}));
     const connect = h.gates.connect("doomed" as PatchbayAgentId);
-    await vi.waitFor(() => expect(h.pool.get("doomed" as PatchbayAgentId)?.status).toBe("reconnecting"));
+    await vi.waitFor(() => expect(h.pool.get("doomed" as PatchbayAgentId)?.status).toBe("reconnecting"), SETTLE);
     const cut = expect(connect).rejects.toBeInstanceOf(Cancelled);
 
     await h.gates.remove("doomed" as PatchbayAgentId);
     await cut;
     // The download lands after all — and launches nothing.
     release();
-    await new Promise((r) => setTimeout(r, 300));
+    // The cut connect let go of the download when it was cut: its late spec
+    // resolves into a race already settled. One turn of the event loop lets
+    // anything still holding it act — nothing may.
+    await new Promise((r) => setImmediate(r));
     expect(h.pool.get("doomed" as PatchbayAgentId)).toBeUndefined();
     expect(h.agents.config("doomed" as PatchbayAgentId)).toBeUndefined();
     expect(h.row("doomed" as PatchbayAgentId)).toBeUndefined();
@@ -498,7 +502,7 @@ describe("the gates", () => {
     const h = agentsHarness(dir, { resolveLaunch: async (spec) => (await hold, spec) });
     await stored(h, fakeConfig("slow", {}));
     const connect = h.gates.connect("slow" as PatchbayAgentId);
-    await vi.waitFor(() => expect(h.pool.get("slow" as PatchbayAgentId)?.status).toBe("reconnecting"));
+    await vi.waitFor(() => expect(h.pool.get("slow" as PatchbayAgentId)?.status).toBe("reconnecting"), SETTLE);
     const cut = expect(connect).rejects.toBeInstanceOf(Cancelled);
 
     await h.gates.stop("slow" as PatchbayAgentId);
@@ -520,9 +524,8 @@ describe("the gates", () => {
     );
     await h.gates.connect("tl" as PatchbayAgentId);
     const login = h.gates.login("tl" as PatchbayAgentId, "tl");
-    await vi.waitFor(() => expect(close).toBeDefined());
-    await new Promise((r) => setTimeout(r, 50));
-    expect(h.row("tl" as PatchbayAgentId)?.busy).toEqual([{ kind: "login" }]);
+    await vi.waitFor(() => expect(close).toBeDefined(), SETTLE);
+    await vi.waitFor(() => expect(h.row("tl" as PatchbayAgentId)?.busy).toEqual([{ kind: "login" }]), SETTLE);
 
     close?.(1);
     await login;
@@ -582,7 +585,7 @@ describe("the gates", () => {
     const probes = vi.spyOn(h.tracker, "recheck");
     const restarts = vi.spyOn(h.pool, "restart");
     const login = h.gates.login("tl" as PatchbayAgentId, "tl");
-    await vi.waitFor(() => expect(close).toBeDefined());
+    await vi.waitFor(() => expect(close).toBeDefined(), SETTLE);
     const cut = expect(login).rejects.toBeInstanceOf(Cancelled);
 
     // The terminal is still open; the Stop doesn't wait for it.
@@ -593,7 +596,7 @@ describe("the gates", () => {
     // The probe and the restart that follow a login need the process the
     // stop ended: neither runs.
     close?.(1);
-    await vi.waitFor(() => expect(h.agents.authLocked("tl" as PatchbayAgentId)).toBe(true));
+    await vi.waitFor(() => expect(h.agents.authLocked("tl" as PatchbayAgentId)).toBe(true), SETTLE);
     expect(probes).not.toHaveBeenCalled();
     expect(restarts).not.toHaveBeenCalled();
     expect(h.row("tl" as PatchbayAgentId)?.status).toBe("stopped");

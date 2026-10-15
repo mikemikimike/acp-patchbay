@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SETTLE } from "./support/wait-for";
 import { assertKind } from "./support/assert-kind";
 import { ATTACHMENTS_DIR, imageFileName } from "../src/orchestrator/attachments";
 import type { LaunchSpec } from "../src/orchestrator/pool";
@@ -52,6 +53,13 @@ function spec(script: FakeAgentScript, patchbayAgentId = "fake"): LaunchSpec {
 /** The shared harness (support/sessions-harness.ts) over this file's cwd. */
 function harness(opts?: Parameters<typeof sessionsHarness>[1]): ReturnType<typeof sessionsHarness> {
   return sessionsHarness(cwd, opts);
+}
+
+/** Settles once the session's turn is on the wire: its user message written
+ * and its prompt sent (the two happen together), its end not yet landed. A
+ * test acting mid-turn waits here, never on a guessed delay. */
+async function untilTurnOnWire(h: ReturnType<typeof harness>, patchbaySessionId: PatchbaySessionId): Promise<void> {
+  await vi.waitFor(() => expect(h.state().activeTurn[patchbaySessionId]).toBeDefined(), SETTLE);
 }
 
 function textOf(block: ChatBlock | undefined): string {
@@ -153,7 +161,7 @@ describe("SessionsStore", () => {
     const patchbaySessionId = await h.sessions.createSession("sm3" as PatchbayAgentId, "Fake Agent", cwd);
 
     const promptDone = h.gates.prompt(patchbaySessionId, { text: "long turn" }).catch((err: unknown) => err);
-    await new Promise((r) => setTimeout(r, 80));
+    await untilTurnOnWire(h, patchbaySessionId);
     await h.gates.stop(patchbaySessionId);
     expect(await promptDone).toMatchObject({ by: "stop" });
 
@@ -171,11 +179,10 @@ describe("SessionsStore", () => {
     );
     const patchbaySessionId = await h.sessions.createSession("slowstop" as PatchbayAgentId, "Fake Agent", cwd);
     const promptDone = h.gates.prompt(patchbaySessionId, { text: "long turn" }).catch((err: unknown) => err);
-    await new Promise((r) => setTimeout(r, 80));
+    await untilTurnOnWire(h, patchbaySessionId);
     const stopped = Date.now();
     const stop = h.gates.stop(patchbaySessionId);
-    await new Promise((r) => setTimeout(r, 300));
-    expect(h.state().sessions[0]?.busy).toEqual(["stopping"]);
+    await vi.waitFor(() => expect(h.state().sessions[0]?.busy).toEqual(["stopping"]), SETTLE);
     await stop;
     expect(Date.now() - stopped).toBeGreaterThanOrEqual(1200);
     expect(await promptDone).toMatchObject({ by: "stop" });
@@ -199,10 +206,9 @@ describe("SessionsStore", () => {
     );
     const first = await h.sessions.createSession("nostop" as PatchbayAgentId, "Fake Agent", cwd);
     const firstDone = h.gates.prompt(first, { text: "long turn" }).catch((err: unknown) => err);
-    await new Promise((r) => setTimeout(r, 80));
+    await untilTurnOnWire(h, first);
     void h.gates.stop(first);
-    await new Promise((r) => setTimeout(r, 200));
-    expect(h.state().sessions.find((s) => s.id === first)?.busy).toEqual(["stopping"]);
+    await vi.waitFor(() => expect(h.state().sessions.find((s) => s.id === first)?.busy).toEqual(["stopping"]), SETTLE);
     let at = Date.now();
     await h.gates.stop(first);
     expect(Date.now() - at).toBeLessThan(1000);
@@ -210,7 +216,7 @@ describe("SessionsStore", () => {
 
     const second = await h.sessions.createSession("nostop" as PatchbayAgentId, "Fake Agent", cwd);
     const secondDone = h.gates.prompt(second, { text: "long turn" }).catch((err: unknown) => err);
-    await new Promise((r) => setTimeout(r, 80));
+    await untilTurnOnWire(h, second);
     at = Date.now();
     await h.gates.close(second);
     expect(Date.now() - at).toBeLessThan(1000);
@@ -233,16 +239,15 @@ describe("SessionsStore", () => {
     const patchbaySessionId = await h.sessions.createSession("smq1" as PatchbayAgentId, "Fake Agent", cwd);
 
     const promptDone = h.gates.prompt(patchbaySessionId, { text: "first" });
-    await new Promise((r) => setTimeout(r, 80));
+    await untilTurnOnWire(h, patchbaySessionId);
     await h.gates.prompt(patchbaySessionId, { text: "second" }); // resolves immediately: queued
     expect(h.state().promptQueue[patchbaySessionId]).toMatchObject([{ text: "second" }]);
     await promptDone;
 
     // the drain fired the queued prompt as a real turn
-    await new Promise((r) => setTimeout(r, 500));
+    const users = () => h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "user");
+    await vi.waitFor(() => expect(users().map((b) => b.kind === "user" && userPartsText(b.parts))).toEqual(["first", "second"]), SETTLE);
     expect(h.state().promptQueue[patchbaySessionId] ?? []).toEqual([]);
-    const users = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "user");
-    expect(users.map((b) => b.kind === "user" && userPartsText(b.parts))).toEqual(["first", "second"]);
     await h.pool.stop("smq1" as PatchbayAgentId);
   });
 
@@ -257,7 +262,7 @@ describe("SessionsStore", () => {
     const patchbaySessionId = await h.sessions.createSession("smq4" as PatchbayAgentId, "Fake Agent", cwd);
 
     const promptDone = h.gates.prompt(patchbaySessionId, { text: "first" });
-    await new Promise((r) => setTimeout(r, 80));
+    await untilTurnOnWire(h, patchbaySessionId);
     await h.gates.prompt(patchbaySessionId, { text: "second", draft: '{"editor":"second"}' });
     await h.gates.prompt(patchbaySessionId, { text: "third" }); // held before the composer sent drafts
     await h.gates.prompt(patchbaySessionId, { text: "fourth", draft: '{"editor":"fourth"}' });
@@ -287,9 +292,9 @@ describe("SessionsStore", () => {
     expect(h.state().promptQueue[patchbaySessionId]).toHaveLength(2);
 
     await promptDone;
-    await new Promise((r) => setTimeout(r, 900));
-    const users = h.state().transcripts[patchbaySessionId]!.filter((x) => x.kind === "user");
-    expect(users.map((x) => x.kind === "user" && userPartsText(x.parts))).toEqual(["first", "second", "third"]);
+    // the held two drain one per turn end
+    const users = () => h.state().transcripts[patchbaySessionId]!.filter((x) => x.kind === "user");
+    await vi.waitFor(() => expect(users().map((x) => x.kind === "user" && userPartsText(x.parts))).toEqual(["first", "second", "third"]), SETTLE);
     await h.pool.stop("smq4" as PatchbayAgentId);
   });
 
@@ -304,15 +309,20 @@ describe("SessionsStore", () => {
     const patchbaySessionId = await h.sessions.createSession("smq2" as PatchbayAgentId, "Fake Agent", cwd);
 
     const promptDone = h.gates.prompt(patchbaySessionId, { text: "first" }).catch((err: unknown) => err);
-    await new Promise((r) => setTimeout(r, 80));
+    await untilTurnOnWire(h, patchbaySessionId);
     await h.gates.prompt(patchbaySessionId, { text: "second" });
     await h.gates.stop(patchbaySessionId);
     expect(await promptDone).toMatchObject({ by: "stop" });
 
-    await new Promise((r) => setTimeout(r, 200));
     expect(h.state().promptQueue[patchbaySessionId] ?? []).toEqual([]);
-    const users = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "user");
-    expect(users).toHaveLength(1); // "second" never fired
+    // Words asked after a Stop go through the same drain once the stopped
+    // turn has wound down — had "second" survived the Stop, it would stand
+    // ahead of them and fire first.
+    await h.gates.prompt(patchbaySessionId, { text: "third" });
+    const users = () =>
+      h.state().transcripts[patchbaySessionId]!.flatMap((b) => (b.kind === "user" ? [userPartsText(b.parts)] : []));
+    await vi.waitFor(() => expect(users()).toContain("third"), SETTLE);
+    expect(users()).toEqual(["first", "third"]); // "second" never fired
     await h.pool.stop("smq2" as PatchbayAgentId);
   });
 
@@ -334,10 +344,9 @@ describe("SessionsStore", () => {
 
     locked = false;
     h.gates.lockCleared("smq3" as PatchbayAgentId);
-    await new Promise((r) => setTimeout(r, 500));
+    const users = () => h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "user");
+    await vi.waitFor(() => expect(users().map((b) => b.kind === "user" && userPartsText(b.parts))).toEqual(["held words"]), SETTLE);
     expect(h.state().promptQueue[patchbaySessionId] ?? []).toEqual([]);
-    const users = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "user");
-    expect(users.map((b) => b.kind === "user" && userPartsText(b.parts))).toEqual(["held words"]);
     await h.pool.stop("smq3" as PatchbayAgentId);
   });
 
@@ -353,11 +362,12 @@ describe("SessionsStore", () => {
     const patchbaySessionId = await h.sessions.createSession("smq4" as PatchbayAgentId, "Fake Agent", cwd);
 
     const promptDone = h.gates.prompt(patchbaySessionId, { text: "first" });
-    await new Promise((r) => setTimeout(r, 80));
+    await untilTurnOnWire(h, patchbaySessionId);
     await h.gates.prompt(patchbaySessionId, { text: "second" }); // queued mid-turn
     locked = true; // logout witnessed while the turn streamed
+    // A turn that ends cleanly settles only after its drain has run — under
+    // the lock, that drain held the words.
     await promptDone;
-    await new Promise((r) => setTimeout(r, 300));
 
     // held, not fired — and not dropped
     expect(h.state().promptQueue[patchbaySessionId]).toMatchObject([{ text: "second" }]);
@@ -366,9 +376,8 @@ describe("SessionsStore", () => {
     // login clears the lock: the release valve fires the held words
     locked = false;
     h.gates.lockCleared("smq4" as PatchbayAgentId);
-    await new Promise((r) => setTimeout(r, 600));
+    await vi.waitFor(() => expect(h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "user")).toHaveLength(2), SETTLE);
     expect(h.state().promptQueue[patchbaySessionId] ?? []).toEqual([]);
-    expect(h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "user")).toHaveLength(2);
     await h.pool.stop("smq4" as PatchbayAgentId);
   });
 
@@ -390,7 +399,7 @@ describe("SessionsStore", () => {
     const patchbaySessionId = await h.sessions.createSession("sm3c" as PatchbayAgentId, "Fake Agent", cwd);
 
     const promptDone = h.gates.prompt(patchbaySessionId, { text: "long turn" }).catch((err: unknown) => err);
-    await new Promise((r) => setTimeout(r, 80));
+    await untilTurnOnWire(h, patchbaySessionId);
     await h.gates.close(patchbaySessionId);
     expect(await promptDone).toMatchObject({ by: "close" });
 
@@ -415,7 +424,7 @@ describe("SessionsStore", () => {
     const patchbaySessionId = await h.sessions.createSession("sm3d" as PatchbayAgentId, "Fake Agent", cwd);
 
     const promptDone = h.gates.prompt(patchbaySessionId, { text: "long turn" }).catch((err: unknown) => err);
-    await new Promise((r) => setTimeout(r, 80));
+    await untilTurnOnWire(h, patchbaySessionId);
     await h.gates.reload(patchbaySessionId);
     expect(await promptDone).toMatchObject({ by: "reload" });
 
@@ -445,7 +454,7 @@ describe("SessionsStore", () => {
     // Stopped once the call has landed and before the next step's own
     // delay runs out — otherwise there's nothing yet to strand.
     const promptDone = h.gates.prompt(patchbaySessionId, { text: "long turn" }).catch((err: unknown) => err);
-    await vi.waitFor(() => expect(h.state().transcripts[patchbaySessionId]!.some((b) => b.id === "t1")).toBe(true), { interval: 10 });
+    await vi.waitFor(() => expect(h.state().transcripts[patchbaySessionId]!.some((b) => b.id === "t1")).toBe(true), SETTLE);
     await h.gates.stop(patchbaySessionId);
     expect(await promptDone).toMatchObject({ by: "stop" });
 
@@ -570,11 +579,7 @@ describe("SessionsStore", () => {
     const patchbaySessionId = await h.sessions.createSession("sm48d" as PatchbayAgentId, "Fake Agent", cwd);
     const turn = h.gates.prompt(patchbaySessionId, { text: "overwrite" });
     const card = () => h.state().transcripts[patchbaySessionId]?.find((b) => b.kind === "toolCall");
-    const start = Date.now();
-    while (card() === undefined) {
-      if (Date.now() - start > 2000) throw new Error("tool call never announced");
-      await new Promise((r) => setTimeout(r, 10));
-    }
+    await vi.waitFor(() => expect(card(), "tool call never announced").toBeDefined(), SETTLE);
     // announced: what the agent said — a creation
     expect(assertKind(card(), "toolCall").diffs).toEqual({ [target]: { additions: 2, deletions: 0 } });
     await turn;
@@ -616,11 +621,7 @@ describe("SessionsStore", () => {
     const patchbaySessionId = await h.sessions.createSession("sm48e" as PatchbayAgentId, "Fake Agent", cwd);
     const turn = h.gates.prompt(patchbaySessionId, { text: "edit" });
     const card = () => h.state().transcripts[patchbaySessionId]?.find((b) => b.kind === "toolCall");
-    const start = Date.now();
-    while (card() === undefined) {
-      if (Date.now() - start > 2000) throw new Error("tool call never announced");
-      await new Promise((r) => setTimeout(r, 10));
-    }
+    await vi.waitFor(() => expect(card(), "tool call never announced").toBeDefined(), SETTLE);
     expect(assertKind(card(), "toolCall").diffs).toEqual({ [target]: { additions: 1, deletions: 1 } });
     await turn;
     expect(assertKind(card(), "toolCall").diffs).toEqual({});
@@ -666,32 +667,31 @@ describe("SessionsStore", () => {
     await h.pool.connect(spec(dying, "smc1"));
     const patchbaySessionId = await h.sessions.createSession("smc1" as PatchbayAgentId, "Fake Agent", cwd);
     const promptDone = h.gates.prompt(patchbaySessionId, { text: "first" }).catch(() => {});
-    await new Promise((r) => setTimeout(r, 100));
+    await untilTurnOnWire(h, patchbaySessionId);
     await h.gates.prompt(patchbaySessionId, { text: "held words" }); // queued mid-turn
     await promptDone; // the crash step kills the process under the live turn
-    await new Promise((r) => setTimeout(r, 250)); // exit handler + deferred drain settle
+    // the exit handler drops the live session — a failed turn drains nothing
+    await vi.waitFor(() => expect(h.sessions.isLive(patchbaySessionId)).toBe(false), SETTLE);
 
     // the crash dropped the live session — but the words held, visibly
-    expect(h.sessions.isLive(patchbaySessionId)).toBe(false);
     expect(h.state().promptQueue[patchbaySessionId]).toMatchObject([{ text: "held words" }]);
 
     // reconnect: the next prompt joins BEHIND the held words, which fire first
     await h.pool.connect(spec(healthy, "smc1"));
     await h.gates.prompt(patchbaySessionId, { text: "after reconnect" });
-    const start = Date.now();
     let users: string[] = [];
-    for (;;) {
-      users = (h.state().transcripts[patchbaySessionId] ?? [])
-        .filter((b) => b.kind === "user")
-        .map((b) => (b.kind === "user" ? userPartsText(b.parts) : ""));
-      if ((h.state().promptQueue[patchbaySessionId]?.length ?? 0) === 0 && users.length >= 2) break;
-      if (Date.now() - start > 3500) {
-        throw new Error(
+    await vi.waitFor(
+      () => {
+        users = (h.state().transcripts[patchbaySessionId] ?? [])
+          .filter((b) => b.kind === "user")
+          .map((b) => (b.kind === "user" ? userPartsText(b.parts) : ""));
+        expect(
+          (h.state().promptQueue[patchbaySessionId]?.length ?? 0) === 0 && users.length >= 2,
           `held words never fired — users: ${JSON.stringify(users)} queue: ${JSON.stringify(h.state().promptQueue[patchbaySessionId])} live: ${h.sessions.isLive(patchbaySessionId)} status: ${h.pool.get("smc1" as PatchbayAgentId)?.status}`,
-        );
-      }
-      await new Promise((r) => setTimeout(r, 30));
-    }
+        ).toBe(true);
+      },
+      SETTLE,
+    );
     expect(users.slice(-2)).toEqual(["held words", "after reconnect"]);
     await h.pool.stop("smc1" as PatchbayAgentId);
   }, 15000);
@@ -725,7 +725,7 @@ describe("SessionsStore", () => {
     await h.gates.setKnob(patchbaySessionId, "model", "sonnet");
     await h.gates.addRoot(patchbaySessionId, "/repo/extra");
     const promptDone = h.gates.prompt(patchbaySessionId, { text: "first" }).catch(() => {});
-    await new Promise((r) => setTimeout(r, 100));
+    await untilTurnOnWire(h, patchbaySessionId);
     await h.gates.prompt(patchbaySessionId, { text: "held words" }); // queued mid-turn
     await h.pool.stop("sms1" as PatchbayAgentId); // the agent's Stop, under the live turn
     await promptDone;
@@ -736,18 +736,19 @@ describe("SessionsStore", () => {
 
     await h.pool.connect(spec({ ...script, stepDelayMs: 0 }, "sms1"));
     await h.gates.prompt(patchbaySessionId, { text: "after reconnect" });
-    const start = Date.now();
     let users: string[] = [];
-    for (;;) {
-      users = (h.state().transcripts[patchbaySessionId] ?? [])
-        .filter((b) => b.kind === "user")
-        .map((b) => (b.kind === "user" ? userPartsText(b.parts) : ""));
-      if ((h.state().promptQueue[patchbaySessionId]?.length ?? 0) === 0 && users.length >= 3) break;
-      if (Date.now() - start > 3500) {
-        throw new Error(`held words never fired — users: ${JSON.stringify(users)} queue: ${JSON.stringify(h.state().promptQueue[patchbaySessionId])}`);
-      }
-      await new Promise((r) => setTimeout(r, 30));
-    }
+    await vi.waitFor(
+      () => {
+        users = (h.state().transcripts[patchbaySessionId] ?? [])
+          .filter((b) => b.kind === "user")
+          .map((b) => (b.kind === "user" ? userPartsText(b.parts) : ""));
+        expect(
+          (h.state().promptQueue[patchbaySessionId]?.length ?? 0) === 0 && users.length >= 3,
+          `held words never fired — users: ${JSON.stringify(users)} queue: ${JSON.stringify(h.state().promptQueue[patchbaySessionId])}`,
+        ).toBe(true);
+      },
+      SETTLE,
+    );
     expect(users.slice(-2)).toEqual(["held words", "after reconnect"]);
     expect(h.state().sessionKnobs[patchbaySessionId]?.find((k) => k.id === "model")?.currentValue).toBe("sonnet");
     expect(h.state().contextRoots[patchbaySessionId]).toEqual(["/repo/extra"]);
@@ -870,7 +871,8 @@ describe("SessionsStore", () => {
     );
     const patchbaySessionId = await h.sessions.createSession("sm5i" as PatchbayAgentId, "Fake Agent", cwd);
     const promptDone = h.gates.prompt(patchbaySessionId, { text: "long turn" }).catch((err: unknown) => err);
-    await new Promise((r) => setTimeout(r, 220));
+    // stopped once the call has landed, before the next step's delay runs out
+    await vi.waitFor(() => expect(h.state().transcripts[patchbaySessionId]!.some((b) => b.id === "t1")).toBe(true), SETTLE);
     await h.gates.stop(patchbaySessionId);
     expect(await promptDone).toMatchObject({ by: "stop" });
 
@@ -1805,15 +1807,12 @@ describe("SessionsStore", () => {
     const patchbaySessionId = await h.sessions.createSession("sm28t" as PatchbayAgentId, "Fake Agent", cwd);
     await h.gates.prompt(patchbaySessionId, { text: "warm-up" }); // everPrompted: the resume rung, not recreate
     const slow = h.gates.prompt(patchbaySessionId, { text: "slow turn" });
-    await new Promise((r) => setTimeout(r, 30)); // the turn is in flight
+    await untilTurnOnWire(h, patchbaySessionId);
     await h.gates.addRoot(patchbaySessionId, "/repo/backend"); // deferred to turn end
     const held = h.gates.prompt(patchbaySessionId, { text: "roots?" }); // held until the turn ends
     await Promise.all([slow, held]);
-    for (let i = 0; i < 100; i++) {
-      const texts = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text");
-      if (texts.length >= 3) break;
-      await new Promise((r) => setTimeout(r, 20));
-    }
+    // the held prompt's own echo: the third, after warm-up's and the slow turn's
+    await vi.waitFor(() => expect(h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text").length).toBeGreaterThanOrEqual(3), SETTLE);
     const echoed = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text").at(-1);
     expect(echoed?.kind === "text" && JSON.parse(echoed.text)).toEqual(["/repo/backend"]);
     await h.pool.stop("sm28t" as PatchbayAgentId);
@@ -1827,7 +1826,7 @@ describe("SessionsStore", () => {
     const patchbaySessionId = await h.sessions.createSession("sm28s" as PatchbayAgentId, "Fake Agent", cwd);
     await h.gates.prompt(patchbaySessionId, { text: "warm-up" }); // everPrompted: the resume rung, not recreate
     const slow = h.gates.prompt(patchbaySessionId, { text: "slow turn" }).catch((err: unknown) => err);
-    await new Promise((r) => setTimeout(r, 30)); // the turn is in flight
+    await untilTurnOnWire(h, patchbaySessionId);
     await h.gates.addRoot(patchbaySessionId, "/repo/backend"); // deferred to turn end
     const stopped = h.gates.stop(patchbaySessionId);
     // Asked after the Stop, while the stopped turn is still winding down:
@@ -1835,11 +1834,15 @@ describe("SessionsStore", () => {
     const after = h.gates.prompt(patchbaySessionId, { text: "roots?" });
     expect(await slow).toMatchObject({ by: "stop" });
     await Promise.all([stopped, after]);
+    // the words sent after the Stop echo second, after warm-up's
     let echoed: ChatBlock | undefined;
-    for (let i = 0; i < 100 && echoed === undefined; i++) {
-      echoed = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text")[1];
-      if (echoed === undefined) await new Promise((r) => setTimeout(r, 20));
-    }
+    await vi.waitFor(
+      () => {
+        echoed = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text")[1];
+        expect(echoed).toBeDefined();
+      },
+      SETTLE,
+    );
     expect(echoed?.kind === "text" && JSON.parse(echoed.text)).toEqual(["/repo/backend"]);
     await h.pool.stop("sm28s" as PatchbayAgentId);
   });
@@ -1849,13 +1852,16 @@ describe("SessionsStore", () => {
     await h.pool.connect(spec({ declare: ROOTS_CAPS, turn: [{ type: "echoRoots" }] }, "sm28f"));
     const patchbaySessionId = await h.sessions.createSession("sm28f" as PatchbayAgentId, "Fake Agent", cwd);
     await h.gates.prompt(patchbaySessionId, { text: "warm-up" }); // everPrompted: the resume rung, not recreate
+    let fail!: () => void;
+    const failed = new Promise<void>((r) => (fail = r));
     vi.spyOn(h.pool, "prompt").mockImplementationOnce(async () => {
-      await new Promise((r) => setTimeout(r, 100));
+      await failed; // the agent works until the test lets the turn fail
       throw new Error("the agent failed the turn");
     });
     const failing = h.gates.prompt(patchbaySessionId, { text: "failing turn" });
-    await new Promise((r) => setTimeout(r, 30)); // the turn is on the wire
+    await untilTurnOnWire(h, patchbaySessionId);
     await h.gates.addRoot(patchbaySessionId, "/repo/backend"); // deferred to turn end
+    fail();
     await expect(failing).rejects.toThrow("the agent failed the turn");
     await h.gates.prompt(patchbaySessionId, { text: "roots?" });
     const echoed = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text").at(-1);
@@ -1946,15 +1952,14 @@ describe("SessionsStore", () => {
     h2.gates.activate(restored);
     // session/load hands back the script default; the involuntary-arm
     // reseed must restore the session's own confirmed value
-    const start = Date.now();
-    for (;;) {
-      const model = h2.state().sessionKnobs[restored]?.find((k) => k.id === "model");
-      if (model?.currentValue === "sonnet") break;
-      if (Date.now() - start > 4000) {
-        throw new Error(`knob never restored — surface: ${JSON.stringify(h2.state().sessionKnobs[restored])}`);
-      }
-      await new Promise((r) => setTimeout(r, 25));
-    }
+    await vi.waitFor(
+      () =>
+        expect(
+          h2.state().sessionKnobs[restored]?.find((k) => k.id === "model")?.currentValue,
+          `knob never restored — surface: ${JSON.stringify(h2.state().sessionKnobs[restored])}`,
+        ).toBe("sonnet"),
+      SETTLE,
+    );
     await h2.pool.stop("smk1" as PatchbayAgentId);
   });
 
@@ -2000,27 +2005,18 @@ describe("SessionsStore", () => {
     expect(h2.state().promptQueue[listed]).toMatchObject([{ text: "held words", chips: [{ id: "chip-1" }] }]);
     expect(h2.state().contextRoots[listed]).toEqual(["/repo/extra"]);
     expect(h2.state().drafts[listed]).toBe("half-typed thought");
-    {
-      // chips decode async (stash read) — give the tick a moment
-      const start = Date.now();
-      while ((h2.state().contextChips[listed]?.length ?? 0) === 0) {
-        if (Date.now() - start > 2000) throw new Error("chip never rehydrated");
-        await new Promise((r) => setTimeout(r, 20));
-      }
-    }
+    // chips decode async (stash read)
+    await vi.waitFor(() => expect(h2.state().contextChips[listed]?.length ?? 0, "chip never rehydrated").toBeGreaterThan(0), SETTLE);
     expect(h2.state().contextChips[listed]).toMatchObject([{ id: "chip-2", label: "util.ts:4" }]);
 
     // login clears the lock: the held words fire with their own chip, the
     // staged one stays the composer's
     locked = false;
     h2.gates.lockCleared("smq6" as PatchbayAgentId);
-    const start = Date.now();
-    for (;;) {
-      const users = h2.state().transcripts[listed]?.filter((b) => b.kind === "user") ?? [];
-      if (users.length >= 2) break;
-      if (Date.now() - start > 4000) throw new Error("held words never fired after unlock");
-      await new Promise((r) => setTimeout(r, 25));
-    }
+    await vi.waitFor(
+      () => expect(h2.state().transcripts[listed]?.filter((b) => b.kind === "user").length ?? 0, "held words never fired after unlock").toBeGreaterThanOrEqual(2),
+      SETTLE,
+    );
     expect(h2.state().promptQueue[listed] ?? []).toEqual([]);
     const fired = h2.state().transcripts[listed]!.filter((b) => b.kind === "user").at(-1)!;
     expect(fired.kind === "user" && fired.parts.flatMap((p) => (p.kind === "context" ? [p.label] : []))).toEqual(["main.ts:1-3"]);
@@ -2263,11 +2259,7 @@ describe("SessionsStore", () => {
   // is patchbay's. The next use mints the session again from the row.
   describe("a never-prompted session whose connection died (issue #30)", () => {
     async function untilStatus(h: ReturnType<typeof harness>, patchbayAgentId: PatchbayAgentId, status: string): Promise<void> {
-      const start = Date.now();
-      while (h.pool.get(patchbayAgentId)?.status !== status) {
-        if (Date.now() - start > 3000) throw new Error(`${patchbayAgentId} never reached ${status}`);
-        await new Promise((r) => setTimeout(r, 20));
-      }
+      await vi.waitFor(() => expect(h.pool.get(patchbayAgentId)?.status, `${patchbayAgentId} never reached ${status}`).toBe(status), SETTLE);
     }
 
     it("new-session focus still finds the row, and the first prompt mints it again — the same session, its draft in place, no sibling", async () => {
@@ -2305,7 +2297,7 @@ describe("SessionsStore", () => {
 
       await h.pool.connect(spec({}, "c30b"));
       h.gates.activate(patchbaySessionId);
-      await vi.waitFor(() => expect(h.sessions.isLive(patchbaySessionId)).toBe(true), { timeout: 3000 });
+      await vi.waitFor(() => expect(h.sessions.isLive(patchbaySessionId)).toBe(true), SETTLE);
       expect(h.sessions.sessionIdOf(patchbaySessionId)).not.toBe(before);
       expect(h.state().sessions.filter((s) => s.patchbayAgentId === "c30b").map((s) => s.id)).toEqual([patchbaySessionId]);
       expect(h.state().activePatchbaySessionId).toBe(patchbaySessionId);
@@ -2353,7 +2345,7 @@ describe("SessionsStore", () => {
     expect(h.sessions.openWork("w47" as PatchbayAgentId)).toEqual({ conversations: 0, turns: 0 });
 
     const turn = h.gates.prompt(fresh, { text: "go" });
-    await vi.waitFor(() => expect(h.sessions.openWork("w47" as PatchbayAgentId)).toEqual({ conversations: 1, turns: 1 }));
+    await vi.waitFor(() => expect(h.sessions.openWork("w47" as PatchbayAgentId)).toEqual({ conversations: 1, turns: 1 }), SETTLE);
     await turn;
     expect(h.sessions.openWork("w47" as PatchbayAgentId)).toEqual({ conversations: 1, turns: 0 });
 
@@ -2380,7 +2372,7 @@ describe("held prompts and their chips", () => {
     await h.pool.connect(spec({ turn: [{ type: "chunk", text: "ok" }], stepDelayMs: 150 }, "hc1"));
     const id = await h.sessions.createSession(agent, "Fake Agent", cwd);
     const first = h.gates.prompt(id, { text: "first" }); // a turn underway
-    await new Promise((r) => setTimeout(r, 30));
+    await untilTurnOnWire(h, id);
     await h.sessions.addContext(id, selection("A"));
     await h.gates.prompt(id, { text: "second" }); // held, with A
     await h.sessions.addContext(id, selection("B"));
@@ -2388,8 +2380,8 @@ describe("held prompts and their chips", () => {
     expect(h.state().promptQueue[id]!.map((q) => q.chips?.map((c) => c.id))).toEqual([["A"], ["B"]]);
     expect(h.state().contextChips[id]).toEqual([]);
     await first;
-    await vi.waitFor(() => expect(h.state().transcripts[id]!.filter((b) => b.kind === "user")).toHaveLength(3), { timeout: 5000 });
-    await vi.waitFor(() => expect(h.state().promptQueue[id] ?? []).toEqual([]), { timeout: 5000 });
+    await vi.waitFor(() => expect(h.state().transcripts[id]!.filter((b) => b.kind === "user")).toHaveLength(3), SETTLE);
+    await vi.waitFor(() => expect(h.state().promptQueue[id] ?? []).toEqual([]), SETTLE);
     const users = h.state().transcripts[id]!.filter((b) => b.kind === "user");
     expect(users.map(contextLabels)).toEqual([[], ["Selection A"], ["Selection B"]]);
     await h.pool.stop(agent);
@@ -2401,14 +2393,14 @@ describe("held prompts and their chips", () => {
     await h.pool.connect(spec({ turn: [{ type: "chunk", text: "ok" }], stepDelayMs: 300 }, "hc2"));
     const id = await h.sessions.createSession(agent, "Fake Agent", cwd);
     const first = h.gates.prompt(id, { text: "first" });
-    await new Promise((r) => setTimeout(r, 30));
+    await untilTurnOnWire(h, id);
     await h.sessions.addContext(id, selection("A"));
     await h.gates.prompt(id, { text: "second", draft: "the second, as typed" });
     const held = h.state().promptQueue[id]![0]!;
     h.sessions.takeBack(id, held.id);
     expect(h.state().promptQueue[id] ?? []).toEqual([]);
     expect(h.state().drafts[id]).toBe("the second, as typed");
-    await vi.waitFor(() => expect(h.state().contextChips[id]!.map((c) => c.id)).toEqual(["A"]));
+    await vi.waitFor(() => expect(h.state().contextChips[id]!.map((c) => c.id)).toEqual(["A"]), SETTLE);
     await first;
     await h.pool.stop(agent);
   });
@@ -2552,8 +2544,9 @@ describe("session history (list / resume / delete)", () => {
     // a prompt behind held words releases the front — whose load then fails
     const lost = h.sessions.rowFor("sh2e" as PatchbayAgentId, "lost-3")!;
     await h.gates.prompt(lost, { text: "second" });
-    await vi.waitFor(() =>
-      expect(h.events.filter((e) => e.kind === "promptQueueCleared" && e.patchbaySessionId === lost)).toHaveLength(1),
+    await vi.waitFor(
+      () => expect(h.events.filter((e) => e.kind === "promptQueueCleared" && e.patchbaySessionId === lost)).toHaveLength(1),
+      SETTLE,
     );
 
     expect(h.state().promptQueue[lost]?.map((q) => q.text)).toEqual(["first", "second"]);
@@ -2602,9 +2595,8 @@ describe("session history (list / resume / delete)", () => {
     );
     const patchbaySessionId = await h.sessions.createSession("sh4" as PatchbayAgentId, "Fake Agent", cwd);
     await h.gates.prompt(patchbaySessionId, { text: "hello" });
-    // noteInfoUpdate is fire-and-forget off the notification — settle it
-    await new Promise((r) => setTimeout(r, 50));
-    expect(h.state().sessions[0]?.title).toBe("agent named me");
+    // noteInfoUpdate is fire-and-forget off the notification — wait for it
+    await vi.waitFor(() => expect(h.state().sessions[0]?.title).toBe("agent named me"), SETTLE);
 
     await h.pool.stop("sh4" as PatchbayAgentId);
   });
@@ -2653,18 +2645,22 @@ describe("session history (list / resume / delete)", () => {
     const resetsBefore = h.events.filter((e) => e.kind === "transcriptReset").length;
 
     h.gates.activate(patchbaySessionId); // a click, nothing more
-    const start = Date.now();
-    while (h.events.filter((e) => e.kind === "transcriptReset").length === resetsBefore) {
-      if (Date.now() - start > 3000) throw new Error("hydrate never replayed");
-      await new Promise((r) => setTimeout(r, 20));
-    }
-    await new Promise((r) => setTimeout(r, 100)); // let the replay stream settle
+    await vi.waitFor(
+      () => expect(h.events.filter((e) => e.kind === "transcriptReset").length, "hydrate never replayed").toBeGreaterThan(resetsBefore),
+      SETTLE,
+    );
 
     // The fake agent's durable record replays its own updates (its store
-    // holds no user_message_chunk) — the agent prose coming back is the proof.
-    const blocks = h.state().transcripts[patchbaySessionId]!;
-    expect(blocks.some((b) => b.kind === "text" && b.text.includes("remembered"))).toBe(true);
-    expect(h.sessions.isLive(patchbaySessionId)).toBe(true);
+    // holds no user_message_chunk) — the agent prose coming back after the
+    // reset is the proof.
+    await vi.waitFor(
+      () => {
+        const blocks = h.state().transcripts[patchbaySessionId]!;
+        expect(blocks.some((b) => b.kind === "text" && b.text.includes("remembered"))).toBe(true);
+        expect(h.sessions.isLive(patchbaySessionId)).toBe(true);
+      },
+      SETTLE,
+    );
 
     await h.pool.stop("sh7" as PatchbayAgentId);
   });
@@ -2680,11 +2676,10 @@ describe("session history (list / resume / delete)", () => {
 
     const dead = h.sessions.rowFor("sh8" as PatchbayAgentId, "dead-1")!;
     h.gates.activate(dead);
-    const start = Date.now();
-    while (!h.events.some((e) => e.kind === "transcriptSeeded" && e.patchbaySessionId === dead)) {
-      if (Date.now() - start > 3000) throw new Error("notice never seeded");
-      await new Promise((r) => setTimeout(r, 20));
-    }
+    await vi.waitFor(
+      () => expect(h.events.some((e) => e.kind === "transcriptSeeded" && e.patchbaySessionId === dead), "notice never seeded").toBe(true),
+      SETTLE,
+    );
     const blocks = h.state().transcripts[dead]!;
     expect(blocks).toHaveLength(1);
     expect(blocks[0]?.kind === "patchbayNotice" && blocks[0].text).toContain("can't be reopened");
@@ -2705,11 +2700,10 @@ describe("session history (list / resume / delete)", () => {
     h.gates.activate(patchbaySessionId); // a click
     // The open's own end, not isLive: a rung claims the session before its
     // wire call, so isLive turns true while the resume is still in flight.
-    const start = Date.now();
-    while (attaching(h.state().sessions.find((s) => s.id === patchbaySessionId)!)) {
-      if (Date.now() - start > 3000) throw new Error("open never resumed");
-      await new Promise((r) => setTimeout(r, 20));
-    }
+    await vi.waitFor(
+      () => expect(attaching(h.state().sessions.find((s) => s.id === patchbaySessionId)!), "open never resumed").toBe(false),
+      SETTLE,
+    );
     expect(h.sessions.isLive(patchbaySessionId)).toBe(true);
     const blocks = h.state().transcripts[patchbaySessionId]!;
     const notice = blocks.find((b) => b.kind === "patchbayNotice");
@@ -2739,11 +2733,7 @@ describe("session history (list / resume / delete)", () => {
     expect(h.state().sessions.map((s) => s.id)).toEqual([patchbaySessionId]);
 
     h.gates.activate(patchbaySessionId);
-    const start = Date.now();
-    while (!h.sessions.isLive(patchbaySessionId)) {
-      if (Date.now() - start > 3000) throw new Error("re-open never re-attached");
-      await new Promise((r) => setTimeout(r, 20));
-    }
+    await vi.waitFor(() => expect(h.sessions.isLive(patchbaySessionId), "re-open never re-attached").toBe(true), SETTLE);
 
     await h.pool.stop("sh10" as PatchbayAgentId);
   });
@@ -2778,11 +2768,7 @@ describe("session history (list / resume / delete)", () => {
     await h.gates.prompt(active, { text: "also silent, but visible" });
     expect(h.state().activePatchbaySessionId).toBe(active);
 
-    const start = Date.now();
-    while (h.sessions.isLive(idle)) {
-      if (Date.now() - start > 3000) throw new Error("reaper never fired");
-      await new Promise((r) => setTimeout(r, 25));
-    }
+    await vi.waitFor(() => expect(h.sessions.isLive(idle), "reaper never fired").toBe(false), SETTLE);
     // long past its own idle threshold, the visible session is still attached
     expect(h.sessions.isLive(active)).toBe(true);
     // the reaped row survives in the list — released, not closed
@@ -2810,11 +2796,7 @@ describe("session history (list / resume / delete)", () => {
     const active = await h.sessions.createSession("smq5" as PatchbayAgentId, "Fake Agent", cwd); // takes the view
 
     // the reaper proves it ran by releasing the queue-less idle session…
-    const start = Date.now();
-    while (h.sessions.isLive(victim)) {
-      if (Date.now() - start > 3000) throw new Error("reaper never fired");
-      await new Promise((r) => setTimeout(r, 25));
-    }
+    await vi.waitFor(() => expect(h.sessions.isLive(victim), "reaper never fired").toBe(false), SETTLE);
     // …while the one holding words stays attached, words intact
     expect(h.sessions.isLive(holding)).toBe(true);
     expect(h.state().promptQueue[holding]).toMatchObject([{ text: "held words" }]);
@@ -2833,13 +2815,16 @@ describe("session history (list / resume / delete)", () => {
       ),
     );
     const fresh = await h.sessions.createSession("sh13" as PatchbayAgentId, "Fake Agent", cwd);
+    // A control the reaper may take: prompted after `fresh` was made, so the
+    // sweep that releases it has `fresh` past the idle threshold too.
+    const control = await h.sessions.createSession("sh13" as PatchbayAgentId, "Fake Agent", cwd);
+    await h.gates.prompt(control, { text: "idle, seen, prompted — the reaper's" });
     const active = await h.sessions.createSession("sh13" as PatchbayAgentId, "Fake Agent", cwd);
     await h.gates.prompt(active, { text: "make this one the visible, prompted one" });
     expect(h.state().activePatchbaySessionId).toBe(active);
 
-    // well past the idle threshold: the never-prompted session is untouched
-    await new Promise((r) => setTimeout(r, 400));
-    expect(h.sessions.isLive(fresh)).toBe(true);
+    await vi.waitFor(() => expect(h.sessions.isLive(control)).toBe(false), SETTLE);
+    expect(h.sessions.isLive(fresh)).toBe(true); // the never-prompted session is untouched
 
     h.gates.dispose();
     await h.pool.stop("sh13" as PatchbayAgentId);
@@ -2857,18 +2842,18 @@ describe("session history (list / resume / delete)", () => {
     const idle = await h.sessions.createSession("sh14" as PatchbayAgentId, "Fake Agent", cwd);
     await h.gates.prompt(idle, { text: "finished while looking away" });
     unseenId = idle;
+    // A control the reaper may take: prompted after `idle`, so the sweep that
+    // releases it has `idle` past the threshold too — only the mark holds it.
+    const control = await h.sessions.createSession("sh14" as PatchbayAgentId, "Fake Agent", cwd);
+    await h.gates.prompt(control, { text: "seen" });
     const active = await h.sessions.createSession("sh14" as PatchbayAgentId, "Fake Agent", cwd);
     await h.gates.prompt(active, { text: "the visible one" });
 
-    await new Promise((r) => setTimeout(r, 400));
+    await vi.waitFor(() => expect(h.sessions.isLive(control)).toBe(false), SETTLE);
     expect(h.sessions.isLive(idle)).toBe(true); // blue mark holds it open
 
     unseenId = null; // the user looked — first reap after that may release it
-    const start = Date.now();
-    while (h.sessions.isLive(idle)) {
-      if (Date.now() - start > 3000) throw new Error("reaper never fired after unseen cleared");
-      await new Promise((r) => setTimeout(r, 25));
-    }
+    await vi.waitFor(() => expect(h.sessions.isLive(idle), "reaper never fired after unseen cleared").toBe(false), SETTLE);
 
     h.gates.dispose();
     await h.pool.stop("sh14" as PatchbayAgentId);
@@ -2998,7 +2983,7 @@ describe("session history (list / resume / delete)", () => {
     );
     const original = await h.sessions.createSession(agent, "Fake Agent", cwd);
     const turn = h.gates.prompt(original, { text: "go" }).then(() => "finished", (err: unknown) => err);
-    await new Promise((r) => setTimeout(r, 50)); // the turn is underway
+    await untilTurnOnWire(h, original);
     const forked = await h.gates.fork(original, "go");
     expect(await turn).toBe("finished");
     expect(h.state().sessions.map((s) => s.id)).toContain(forked);
@@ -3181,8 +3166,9 @@ describe("session activity stamp — one home", () => {
       before!,
       readUpdate({ sessionUpdate: "session_info_update", title: "agent named me" }),
     );
-    await vi.waitFor(() =>
-      expect(h.state().sessions.find((s) => s.id === patchbaySessionId)?.title).toBe("agent named me"),
+    await vi.waitFor(
+      () => expect(h.state().sessions.find((s) => s.id === patchbaySessionId)?.title).toBe("agent named me"),
+      SETTLE,
     );
 
     await h.gates.addRoot(patchbaySessionId, "/repo/backend");
@@ -3284,8 +3270,9 @@ describe("context tokens — what the IPC socket admits (#72)", () => {
     const c = composer();
     const h = harness({ mcpServersFor: c.mcpServersFor });
     await h.pool.connect(spec({ newSessionReplyDelayMs: 200 }, "ct1"));
+    const newSession = vi.spyOn(h.pool, "newSession");
     const born = h.sessions.createSession("ct1" as PatchbayAgentId, "Fake Agent", cwd);
-    await new Promise((r) => setTimeout(r, 80)); // session/new is on the wire
+    await vi.waitFor(() => expect(newSession).toHaveBeenCalled(), SETTLE); // session/new is on the wire
     const [token] = c.minted;
     expect(token).toMatch(UUID);
     // the agent may start the session's servers before it answers
@@ -3347,8 +3334,24 @@ describe("a session's work enters behind its agent's", () => {
    * agent's row — a restart, say — that runs until the test finishes it. */
   function agentsQueue() {
     const line = new Queue<"restart">(() => {});
+    const parkWaiters: Array<() => void> = [];
     return {
-      settled: (patchbayAgentId: PatchbayAgentId) => line.settled(patchbayAgentId),
+      settled: (patchbayAgentId: PatchbayAgentId): Promise<void> => {
+        const settled = line.settled(patchbayAgentId);
+        // Waited on through `then`, by `await` and `Promise.all` alike: its
+        // first reading is the moment work parks behind the row.
+        const waitedOn: PromiseLike<void> = {
+          then: (onSettled, onFailed) => {
+            for (const parked of parkWaiters.splice(0)) parked();
+            return settled.then(onSettled, onFailed);
+          },
+        };
+        return waitedOn as Promise<void>;
+      },
+      /** Settles once something asked after this call waits on the agent's
+       * row. Past that point it can't move until the test finishes the row's
+       * work — merely asking about the row, and going on, never settles it. */
+      nextPark: () => new Promise<void>((r) => parkWaiters.push(r)),
       hold(patchbayAgentId: PatchbayAgentId): { finish(): Promise<void> } {
         let end!: () => void;
         const running = new Promise<void>((started) => {
@@ -3358,7 +3361,6 @@ describe("a session's work enters behind its agent's", () => {
       },
     };
   }
-  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   it("a reload asked while the agent's row holds work runs after it — never against a connection being replaced", async () => {
     const agents = agentsQueue();
@@ -3367,8 +3369,9 @@ describe("a session's work enters behind its agent's", () => {
     const patchbaySessionId = await h.sessions.createSession("sw1" as PatchbayAgentId, "Fake Agent", cwd);
     await h.gates.prompt(patchbaySessionId, { text: "first" });
     const restart = agents.hold("sw1" as PatchbayAgentId);
+    const parked = agents.nextPark();
     const reloaded = h.gates.reload(patchbaySessionId);
-    await sleep(50);
+    await parked; // no replay may start against the held row
     expect(h.events.some((e) => e.kind === "transcriptReset")).toBe(false);
     expect(h.state().sessions[0]!.busy).toEqual(["reload"]);
     await restart.finish();
@@ -3384,8 +3387,9 @@ describe("a session's work enters behind its agent's", () => {
     await h.pool.connect(spec({ turn: [{ type: "chunk", text: "hi" }], declare: { sessionCapabilities: { close: {} } } }, "sw2"));
     const patchbaySessionId = await h.sessions.createSession("sw2" as PatchbayAgentId, "Fake Agent", cwd);
     const restart = agents.hold("sw2" as PatchbayAgentId);
+    const parked = agents.nextPark();
     const turn = h.gates.prompt(patchbaySessionId, { text: "go" });
-    await sleep(50);
+    await parked; // the prompt may not reach the wire meanwhile
     expect(h.state().transcripts[patchbaySessionId]).toEqual([]);
     expect(h.state().sessions[0]!.busy).toEqual(["prompt"]);
     await restart.finish();
@@ -3407,13 +3411,13 @@ describe("a session's work enters behind its agent's", () => {
     await h.gates.prompt(patchbaySessionId, { text: "first" });
     h.sessions.invalidateAgent("sw3" as PatchbayAgentId); // its sessions detach, as a restart's would
     const restart = agents.hold("sw3" as PatchbayAgentId);
+    const parked = agents.nextPark();
     h.gates.activate(patchbaySessionId);
-    await sleep(50);
+    await parked; // the open may not attach meanwhile
     expect(h.sessions.isLive(patchbaySessionId)).toBe(false);
     expect(h.state().sessions[0]!.busy).toEqual(["open"]);
     await restart.finish();
-    for (let i = 0; i < 100 && !h.sessions.isLive(patchbaySessionId); i++) await sleep(20);
-    expect(h.sessions.isLive(patchbaySessionId)).toBe(true);
+    await vi.waitFor(() => expect(h.sessions.isLive(patchbaySessionId)).toBe(true), SETTLE);
     await h.pool.stop("sw3" as PatchbayAgentId);
   });
 });
@@ -3422,11 +3426,7 @@ describe("open — one ceremony for every entrance", () => {
   const LOAD: FakeAgentScript = { declare: { loadSession: true }, turn: [{ type: "chunk", text: "remembered" }] };
 
   async function untilLive(h: ReturnType<typeof harness>, patchbaySessionId: PatchbaySessionId): Promise<void> {
-    const start = Date.now();
-    while (!h.sessions.isLive(patchbaySessionId)) {
-      if (Date.now() - start > 3000) throw new Error(`${patchbaySessionId} never attached`);
-      await new Promise((r) => setTimeout(r, 20));
-    }
+    await vi.waitFor(() => expect(h.sessions.isLive(patchbaySessionId), `${patchbaySessionId} never attached`).toBe(true), SETTLE);
   }
 
   it("pinned open hydrates the session without moving the pointer, and asks for its agent", async () => {
@@ -3880,7 +3880,7 @@ describe("a session's files live with the session", () => {
   const PNG = Buffer.from("fake-png-bytes").toString("base64");
   /** Folder removals are fire-and-forget from the store's operations. */
   const gone = async (path: string) => {
-    for (let i = 0; i < 100 && existsSync(path); i++) await new Promise((r) => setTimeout(r, 10));
+    await vi.waitFor(() => expect(existsSync(path), `${path} never removed`).toBe(false), SETTLE);
     return !existsSync(path);
   };
   const echoedKinds = (h: ReturnType<typeof harness>, patchbaySessionId: PatchbaySessionId) => {

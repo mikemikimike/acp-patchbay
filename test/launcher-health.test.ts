@@ -10,6 +10,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { SETTLE } from "./support/wait-for";
 import {
   bundledVersionInNpxCache,
   droppedOptionals,
@@ -219,7 +220,7 @@ describe("the npx entry", () => {
       const healing = healNpxEntry(launch, env(), { log: nullLogger, onPhase: (p) => phases.push(p) });
       // released only once the heal is seen waiting on it — npm's own
       // answer can take seconds to come back
-      await vi.waitFor(() => expect(phases).toHaveLength(1), { timeout: 60_000 });
+      await vi.waitFor(() => expect(phases).toHaveLength(1), { ...SETTLE, timeout: 60_000 });
       // The other npm finishes: its marker written, its lock released.
       await writeFile(join(dir, "node_modules", ".package-lock.json"), "{}");
       await rm(join(dir, "concurrency.lock"), { recursive: true });
@@ -300,8 +301,7 @@ describe.skipIf(process.platform === "win32")("prepareLauncher", () => {
     while (pid === "") pid = await readFile(pidFile(), "utf8").catch(() => "");
     controller.abort(new Error("stopped by test"));
     await expect(preparing).rejects.toThrow("stopped by test");
-    await new Promise((r) => setTimeout(r, 100));
-    expect(() => process.kill(Number(pid), 0)).toThrow();
+    await vi.waitFor(() => expect(() => process.kill(Number(pid), 0)).toThrow(), SETTLE);
   });
 });
 

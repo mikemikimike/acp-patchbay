@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { waitFor } from "./support/wait-for";
 import { CapabilityTracker } from "../src/orchestrator/capability-tracker";
 import { AgentPool, type LaunchSpec } from "../src/orchestrator/pool";
 import type { SessionGates } from "../src/orchestrator/session-gates";
@@ -42,15 +43,6 @@ function spec(script: FakeAgentScript, patchbayAgentId: PatchbayAgentId): Launch
   };
 }
 
-async function waitFor<T>(probe: () => T | undefined, timeoutMs = 5000): Promise<T> {
-  const start = Date.now();
-  for (;;) {
-    const value = probe();
-    if (value !== undefined) return value;
-    if (Date.now() - start > timeoutMs) throw new Error("waitFor timed out");
-    await new Promise((r) => setTimeout(r, 20));
-  }
-}
 
 /** Wires pool + verifier + sessions store the way Orchestrator does, minus
  * vscode. */
@@ -428,7 +420,10 @@ describe("Knob two-fold rule (composer vs session)", () => {
     await liar.pool.connect(spec({ modes, lies: { modeChangeNoop: true } }, "modes-liar" as PatchbayAgentId));
     const liarSession = await liar.sessions.createSession("modes-liar" as PatchbayAgentId, "Fake Agent", cwd);
     await liar.gates.setKnob(liarSession, "mode", "code");
-    await new Promise((r) => setTimeout(r, 100)); // no confirmation will come
+    // An agent's update for a set comes before its answer; the answer is in,
+    // so everything the agent will say about this set has been read. One
+    // turn of the event loop lets a wrong record land — none may.
+    await new Promise((r) => setImmediate(r));
     expect(records).toHaveLength(1); // the lying success response recorded nothing
     await liar.pool.stop("modes-liar" as PatchbayAgentId);
   });

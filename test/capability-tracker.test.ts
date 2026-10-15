@@ -4,6 +4,7 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SETTLE, waitFor } from "./support/wait-for";
 import type { LaunchSpec } from "../src/orchestrator/pool";
 import { capabilityState } from "../src/shared/protocol";
 import type { FakeAgentScript } from "./fake-agent/main";
@@ -31,15 +32,6 @@ function spec(script: FakeAgentScript, patchbayAgentId: PatchbayAgentId): Launch
 
 const harness = () => agentsHarness(cwd);
 
-async function waitFor<T>(probe: () => T | undefined, timeoutMs = 5000): Promise<T> {
-  const start = Date.now();
-  for (;;) {
-    const value = probe();
-    if (value !== undefined) return value;
-    if (Date.now() - start > timeoutMs) throw new Error("waitFor timed out");
-    await new Promise((r) => setTimeout(r, 20));
-  }
-}
 
 describe("CapabilityTracker", () => {
   it("an honest agent's declared close gets used on connect — the check's own round trip", async () => {
@@ -67,9 +59,11 @@ describe("CapabilityTracker", () => {
   });
 
   it("a probe session the agent can't close still leaves the connection's session set", async () => {
-    const { pool } = harness();
+    const { pool, probes } = harness();
     await pool.connect(spec({}, "tidy2" as PatchbayAgentId));
-    await new Promise((r) => setTimeout(r, 300));
+    // With no close to make, the probe forgets its session the moment its
+    // session/new is announced.
+    await vi.waitFor(() => expect(probes).toHaveLength(1), SETTLE);
     expect(pool.get("tidy2" as PatchbayAgentId)!.sessions).toEqual([]);
     await pool.stop("tidy2" as PatchbayAgentId);
   });
@@ -139,9 +133,11 @@ describe("CapabilityTracker", () => {
   });
 
   it("an agent that never declares fork never shows declared, let alone used", async () => {
-    const { pool, tracker } = harness();
+    const { pool, tracker, probes } = harness();
     await pool.connect(spec({}, "nofork" as PatchbayAgentId));
-    await new Promise((r) => setTimeout(r, 100));
+    // The probe is the connection's only traffic: once it's announced,
+    // nothing is left to touch the row.
+    await vi.waitFor(() => expect(probes).toHaveLength(1), SETTLE);
     expect(capabilityState(tracker.matrix("nofork" as PatchbayAgentId)!["session.fork"])).toBe("not-declared");
     await pool.stop("nofork" as PatchbayAgentId);
   });
@@ -182,22 +178,24 @@ describe("CapabilityTracker", () => {
   });
 
   it("a latched agent's probe waits for the first real session, and the trigger spends once (first-session-mcp-latch)", async () => {
-    const { pool, tracker, probes, seedAgent } = harness();
+    const { pool, tracker, agents, probes, seedAgent } = harness();
     // The latch's curated entry names the registry entry "auggie"; the agent
     // added from it has an id of its own.
     seedAgent("latched" as PatchbayAgentId, "auggie");
+    // A probe's first step asks for its root, in the same call that decides
+    // to run it — so a probe that started is counted where it was decided.
+    const started = vi.spyOn(agents, "probeRoot");
     await pool.connect(
       spec({ modes: { currentModeId: "code", availableModes: [{ id: "code", name: "Code" }] } }, "latched" as PatchbayAgentId),
     );
-    await new Promise((r) => setTimeout(r, 200));
-    expect(probes).toHaveLength(0); // connect did NOT spend the process's first session
+    expect(started).not.toHaveBeenCalled(); // connect did NOT spend the process's first session
     expect(tracker.isProbeDeferred("latched" as PatchbayAgentId)).toBe(true); // what the defaults editor consults
     tracker.noteRealSessionOpened("latched" as PatchbayAgentId, "real-1");
     await waitFor(() => (probes.length > 0 ? true : undefined));
     expect(probes[0]!.patchbayAgentId).toBe("latched");
     expect(tracker.isProbeDeferred("latched" as PatchbayAgentId)).toBe(false);
     tracker.noteRealSessionOpened("latched" as PatchbayAgentId, "real-2"); // already spent — no second probe
-    await new Promise((r) => setTimeout(r, 200));
+    expect(started).toHaveBeenCalledOnce();
     expect(probes).toHaveLength(1);
     // ...and a non-latched agent id is a no-op trigger.
     tracker.noteRealSessionOpened("someone-else" as PatchbayAgentId, "real-3");
@@ -225,7 +223,7 @@ describe("CapabilityTracker", () => {
     // agent may know none until its first message): real use proves them.
     const { pool, tracker } = harness();
     await pool.connect(spec({ declare: { sessionCapabilities: { fork: {}, delete: {}, close: {}, list: {} } } }, "chk" as PatchbayAgentId));
-    await vi.waitFor(() => expect(tracker.matrix("chk" as PatchbayAgentId)!["session.close"].used).toBe(true));
+    await vi.waitFor(() => expect(tracker.matrix("chk" as PatchbayAgentId)!["session.close"].used).toBe(true), SETTLE);
     const matrix = tracker.matrix("chk" as PatchbayAgentId)!;
     expect(matrix["session.fork"]).toEqual({ declared: true, used: false });
     expect(matrix["session.delete"]).toEqual({ declared: true, used: false });
@@ -245,9 +243,7 @@ describe("CapabilityTracker", () => {
         "needsauth" as PatchbayAgentId,
       ),
     );
-    await new Promise((r) => setTimeout(r, 300));
-    const agent = state().agents.find((a) => a.id === "needsauth");
-    expect(agent?.needsAuth).toBe(true);
+    await vi.waitFor(() => expect(state().agents.find((a) => a.id === "needsauth")?.needsAuth).toBe(true), SETTLE);
     expect(capabilityState(tracker.matrix("needsauth" as PatchbayAgentId)!.auth)).toBe("declared");
 
     await pool.stop("needsauth" as PatchbayAgentId);
@@ -266,8 +262,7 @@ describe("CapabilityTracker", () => {
         "login" as PatchbayAgentId,
       ),
     );
-    await new Promise((r) => setTimeout(r, 300));
-    expect(state().agents.find((a) => a.id === "login")?.needsAuth).toBe(true);
+    await vi.waitFor(() => expect(state().agents.find((a) => a.id === "login")?.needsAuth).toBe(true), SETTLE);
 
     await tracker.authenticate("login" as PatchbayAgentId, "default");
     expect(state().agents.find((a) => a.id === "login")?.needsAuth).toBe(false);

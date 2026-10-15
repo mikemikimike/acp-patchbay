@@ -6,6 +6,7 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { waitFor } from "./support/wait-for";
 import { assertKind } from "./support/assert-kind";
 import { formatCommandLine } from "../src/shared/command-line";
 import { AsksStore } from "../src/orchestrator/asks-store";
@@ -656,15 +657,6 @@ describe("fs/terminal — gated by the broker, same as everything else", () => {
     await h.pool.stop("p4" as PatchbayAgentId);
   });
 });
-
-async function waitFor(probe: () => boolean | undefined, timeoutMs = 5000): Promise<void> {
-  const start = Date.now();
-  for (;;) {
-    if (probe()) return;
-    if (Date.now() - start > timeoutMs) throw new Error("waitFor timed out");
-    await new Promise((r) => setTimeout(r, 20));
-  }
-}
 
 describe("ClientHost — replies for a terminal id it never issued", () => {
   it("is the agent's bad params (-32602), never the client breaking (-32603)", async () => {

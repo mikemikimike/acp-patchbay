@@ -10,6 +10,7 @@ import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { waitFor } from "./support/wait-for";
 import { nullLogger } from "../src/orchestrator/logger";
 import type { LaunchSpec } from "../src/orchestrator/pool";
 import { ChecksumMismatch, type BinaryInstallSpec, type InstalledBinary } from "../src/orchestrator/stores/binary-installer";
@@ -361,21 +362,28 @@ describe("resolveRuntime", () => {
       await fakeExe(managed, "pb-sf-npx", "10.0.0");
       return { command: join(managed, "pb-sf-node"), args: [], env: {}, cwd: managed };
     };
+    // The flight is held at its ask until both connects have reached it:
+    // each logs the managed runtime it falls back to in the step that
+    // takes the flight, so two such lines mean the second joined (or, were
+    // single-flight broken, asked too).
+    let release!: () => void;
+    const asked = new Promise<void>((r) => (release = r));
+    let reached = 0;
     const flightDeps = {
       cacheRoot: root,
-      log: nullLogger,
+      log: { ...nullLogger, info: (m: string) => void (m.includes("using managed") && reached++) },
       probes: { interpreter: "pb-sf-node", launcher: "pb-sf-npx" },
       install,
       confirmDownload: async () => {
         confirms++;
-        await new Promise((r) => setTimeout(r, 30)); // hold the flight open
+        await asked;
         return true;
       },
     };
-    const [a, b] = await Promise.all([
-      resolveRuntime(spec("npx"), flightDeps),
-      resolveRuntime(spec("npx"), flightDeps),
-    ]);
+    const both = Promise.all([resolveRuntime(spec("npx"), flightDeps), resolveRuntime(spec("npx"), flightDeps)]);
+    await waitFor(() => reached === 2);
+    release();
+    const [a, b] = await both;
     expect(a.env.PATH!.startsWith(managed)).toBe(true);
     expect(b.env.PATH!.startsWith(managed)).toBe(true);
     expect(confirms).toBe(1);
@@ -479,10 +487,11 @@ describe("resolveBinaryLaunch", () => {
       install: fakeInstall(calls),
       confirmDownload: async () => {
         asks++;
-        await new Promise((r) => setTimeout(r, 30));
         return true;
       },
     };
+    // Nothing awaits before the flight: both calls reach it in this tick,
+    // so the second joins whatever the first's ask takes.
     const [a, b] = await Promise.all([
       resolveBinaryLaunch(binarySpec(root), deps),
       resolveBinaryLaunch(binarySpec(root), deps),

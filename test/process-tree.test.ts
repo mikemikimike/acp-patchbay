@@ -6,7 +6,8 @@
 // process-tree.ts implementation note, not silently assumed).
 import { spawn } from "node:child_process";
 import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { SETTLE } from "./support/wait-for";
 import { commandOf, isAlive, killTree, reapOrphans, treeSpawnOptions } from "../src/orchestrator/process-tree";
 import { AgentPool } from "../src/orchestrator/pool";
 import { stubFsTerminalHooks } from "./support/stub-hooks";
@@ -14,12 +15,13 @@ import type { PatchbayAgentId } from "../src/shared/ids";
 
 const posix = describe.skipIf(process.platform === "win32");
 
-async function waitUntil(probe: () => boolean, what: string, timeoutMs = 5_000): Promise<void> {
-  const start = Date.now();
-  while (!probe()) {
-    if (Date.now() - start > timeoutMs) throw new Error(`timed out waiting for ${what}`);
-    await new Promise((r) => setTimeout(r, 25));
-  }
+async function waitUntil(probe: () => boolean, what: string): Promise<void> {
+  await vi.waitFor(
+    () => {
+      if (!probe()) throw new Error(`timed out waiting for ${what}`);
+    },
+    SETTLE,
+  );
 }
 
 /** `sh` leader that reports its `sleep` grandchild's pid on stdout, then

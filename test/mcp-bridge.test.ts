@@ -16,7 +16,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { McpServer } from "@agentclientprotocol/sdk";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SETTLE } from "./support/wait-for";
 import { IpcClient } from "../src/mcp/ipc-client";
 import { encodeLine, ipcAddress, parseLines, type IpcRequest, type IpcResponse } from "../src/mcp/ipc-protocol";
 import { AgentPool, type LaunchSpec } from "../src/orchestrator/pool";
@@ -443,10 +444,13 @@ describe("MCP bridge — real agent, real bridge subprocess, fake remote MCP ser
     const stdoutLines: string[] = [];
     bridge.stdout.setEncoding("utf8");
     bridge.stdout.on("data", (chunk: string) => stdoutLines.push(...chunk.split("\n").filter((l) => l.trim() !== "")));
-    const until = async (done: () => boolean, what: string) => {
-      for (let i = 0; i < 200 && !done(); i++) await new Promise((r) => setTimeout(r, 25));
-      if (!done()) throw new Error(`timed out waiting for ${what}`);
-    };
+    const until = (done: () => boolean, what: string) =>
+      vi.waitFor(
+        () => {
+          if (!done()) throw new Error(`timed out waiting for ${what}`);
+        },
+        SETTLE,
+      );
     // the agent's handshake, hand-rolled: initialize, then initialized
     bridge.stdin.write(
       JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "agent", version: "0" } } }) + "\n",
@@ -500,7 +504,7 @@ describe("MCP bridge — real agent, real bridge subprocess, fake remote MCP ser
     const client = new IpcClient(socketPath, "github");
     const inFlight = client.request("getMcpServerToken");
     // Wait until the server has the connection, then drop it mid-request.
-    for (let i = 0; sockets.length === 0 && i < 100; i++) await new Promise((r) => setTimeout(r, 10));
+    await vi.waitFor(() => expect(sockets).toHaveLength(1), SETTLE);
     for (const socket of sockets) socket.destroy();
 
     await expect(inFlight).rejects.toThrow("ipc socket closed");

@@ -60,7 +60,9 @@ async function settledYet(p: Promise<unknown>): Promise<boolean> {
     () => (done = true),
     () => (done = true),
   );
-  await new Promise((r) => setTimeout(r, 0));
+  // A deliberate yield: one macrotask lets every queued microtask run, so a
+  // promise that could settle now has — nothing later bounds "not yet".
+  await new Promise((r) => setImmediate(r));
   return done;
 }
 

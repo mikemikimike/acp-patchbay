@@ -2,7 +2,8 @@
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SETTLE, waitFor } from "./support/wait-for";
 import { AsksStore } from "../src/orchestrator/asks-store";
 import { PermissionBroker } from "../src/orchestrator/broker";
 import { sliceTextFileRead } from "../src/orchestrator/client-host";
@@ -283,12 +284,12 @@ async function cardOf(
     () => (settled = true),
     () => (settled = true),
   );
-  for (;;) {
+  return waitFor(() => {
     const asked = events.find((e) => e.kind === "permissionRequested");
     if (asked?.kind === "permissionRequested") return asked;
     if (settled) throw new Error("no card — the request was auto-allowed");
-    await new Promise((r) => setTimeout(r, 5));
-  }
+    return undefined;
+  });
 }
 
 describe("PermissionBroker.resolveAgentPermissionRequest — an edit is judged by every file it names", () => {
@@ -441,9 +442,7 @@ describe("PermissionBroker audit trail", () => {
     const commandGate = broker.gateCommand("s1" as PatchbaySessionId, run("curl example.com"));
     const otherSession = broker.gateCommand("s2" as PatchbaySessionId, run("npm run lint"));
     // the agent's request is judged before its card shows
-    for (let i = 0; i < 50 && events.filter((e) => e.kind === "permissionRequested").length < 3; i++) {
-      await new Promise((r) => setTimeout(r, 5));
-    }
+    await vi.waitFor(() => expect(events.filter((e) => e.kind === "permissionRequested")).toHaveLength(3), SETTLE);
 
     asks.stopSession("s1" as PatchbaySessionId);
     await expect(agentReq).resolves.toEqual({ cancelled: true });
@@ -611,13 +610,15 @@ describe("resolveProbePermissionRequest — probe sessions answer, never dangle"
 
 /** The gate reads the file before it proposes, so the card's event lands a
  * tick after the call — wait for it rather than assume it. */
-async function proposedEvent(events: AgentViewEvent[]) {
-  for (let i = 0; i < 50; i++) {
-    const e = events.find((e) => e.kind === "diffProposed");
-    if (e?.kind === "diffProposed") return e;
-    await new Promise((r) => setTimeout(r, 5));
-  }
-  throw new Error("diffProposed never emitted");
+function proposedEvent(events: AgentViewEvent[]) {
+  return vi.waitFor(
+    () => {
+      const e = events.find((e) => e.kind === "diffProposed");
+      if (e?.kind !== "diffProposed") throw new Error("diffProposed never emitted");
+      return e;
+    },
+    SETTLE,
+  );
 }
 
 describe("PermissionBroker.gateFileWrite — the proposal's full texts", () => {

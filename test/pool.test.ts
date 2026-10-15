@@ -1,10 +1,12 @@
 // P2 gate: pool against the fake agent — connect, capture declared,
 // crash → visible → one-action restart, two concurrent sessions on one connection.
+import { existsSync } from "node:fs";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionUpdateFact } from "../src/orchestrator/readers/session-update";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { SETTLE, waitFor } from "./support/wait-for";
 import { AgentPool, type LaunchSpec } from "../src/orchestrator/pool";
 import type { AgentStatus } from "../src/shared/protocol";
 import type { FakeAgentScript } from "./fake-agent/main";
@@ -53,18 +55,6 @@ function spec(script: FakeAgentScript, patchbayAgentId = "fake"): LaunchSpec {
   };
 }
 
-async function waitFor<T>(
-  probe: () => T | undefined,
-  timeoutMs = 5000,
-): Promise<T> {
-  const start = Date.now();
-  for (;;) {
-    const value = probe();
-    if (value !== undefined) return value;
-    if (Date.now() - start > timeoutMs) throw new Error("waitFor timed out");
-    await new Promise((r) => setTimeout(r, 20));
-  }
-}
 
 describe("AgentPool", () => {
   it("connects and captures the declared table from initialize", async () => {
@@ -202,7 +192,7 @@ describe("AgentPool", () => {
   });
 
   it("cancel mid-turn yields stopReason cancelled", async () => {
-    const { pool } = makePool();
+    const { pool, rec } = makePool();
     await pool.connect(
       spec(
         {
@@ -218,7 +208,8 @@ describe("AgentPool", () => {
     );
     const { sessionId } = await pool.newSession("cancelly" as PatchbayAgentId, cwd);
     const turn = pool.prompt("cancelly" as PatchbayAgentId, sessionId, [{ type: "text", text: "go" }]);
-    await new Promise((r) => setTimeout(r, 120));
+    // the first chunk is in: the turn is under way, two steps still to go
+    await vi.waitFor(() => expect(rec.updates.some((u) => u.sessionId === sessionId)).toBe(true), SETTLE);
     await pool.cancel("cancelly" as PatchbayAgentId, sessionId);
     const response = await turn;
     expect(response.stopReason).toBe("cancelled");
@@ -374,7 +365,10 @@ describe("AgentPool — stopping", () => {
     // neither its late label nor its spec moves the stopped launch.
     phase("downloading Fake 1.0… 90%");
     release();
-    await new Promise((r) => setTimeout(r, 300));
+    // The stopped connect let go of the resolver when it stopped: its late
+    // spec resolves into a race already settled. One turn of the event loop
+    // lets anything still holding it act — nothing may.
+    await new Promise((r) => setImmediate(r));
     expect(pool.get("mid-download" as PatchbayAgentId)?.status).toBe("stopped");
     expect(pool.get("mid-download" as PatchbayAgentId)?.detail).toBeUndefined();
     expect(statuses.map((s) => s.status)).toEqual(["reconnecting", "reconnecting", "stopped"]);
@@ -401,10 +395,23 @@ describe("AgentPool — stopping", () => {
         { patchbayAgentId: "warm" as PatchbayAgentId, name: "Warm", command: join(bin, "npx"), args: ["-y", "fake-pkg@1.0.0"], env: { PATH: bin }, cwd },
         { signal: controller.signal },
       );
-      const pid = Number(await waitFor(() => readFile(pidFile, "utf8").then((t) => t || undefined, () => undefined)));
+      // The stand-in writes its pid once it starts — a process start, so
+      // the spawn budget waitFor gives, not a round trip's.
+      const pid = Number(
+        await vi.waitFor(
+          async () => {
+            const text = await readFile(pidFile, "utf8");
+            expect(text).not.toBe("");
+            return text;
+          },
+          SETTLE,
+        ),
+      );
       controller.abort(new Error("stopped by test"));
       await expect(connecting).rejects.toThrow("stopped by test");
-      expect(() => process.kill(pid, 0)).toThrow();
+      // The stop kills the tree and rejects without waiting on the exit:
+      // the process is gone once the kill lands.
+      await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), SETTLE);
       expect(pool.get("warm" as PatchbayAgentId)?.status).toBe("stopped");
       expect(rec.statuses.map((s) => s.status)).not.toContain("running");
       await rm(bin, { recursive: true, force: true });
@@ -458,7 +465,8 @@ describe("AgentPool — stopping", () => {
     const { sessionId } = await pool.newSession("cut-off" as PatchbayAgentId, cwd);
     const turn = pool.prompt("cut-off" as PatchbayAgentId, sessionId, [{ type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" }]);
     const cut = expect(turn).rejects.toThrow();
-    await new Promise((r) => setTimeout(r, 100));
+    // the fake agent records a prompt as it arrives: the call is on the wire
+    await vi.waitFor(() => expect(existsSync(join(cwd, ".fake-agent-sessions", `${sessionId}.jsonl`))).toBe(true), SETTLE);
     await pool.stop("cut-off" as PatchbayAgentId);
     await cut;
     expect(evidence.filter((e) => e.startsWith("prompt.image"))).toEqual([]);

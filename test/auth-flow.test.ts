@@ -4,11 +4,13 @@
 // — the extension host's path. The pure transition-table tests prove the table; these prove which
 // evidence the wire actually delivers to it — and that a persisted lock is
 // never laundered by facts that don't contradict it.
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { methods } from "@agentclientprotocol/sdk";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SETTLE, waitFor } from "./support/wait-for";
 import { LOGGED_OUT_REASON, type AuthLock } from "../src/orchestrator/auth-evidence";
 import type { LaunchSpec } from "../src/orchestrator/pool";
 import { capabilityState } from "../src/shared/protocol";
@@ -78,15 +80,6 @@ function harness() {
   return { ...h, locks, authFlips };
 }
 
-async function waitFor<T>(probe: () => T | undefined, timeoutMs = 5000): Promise<T> {
-  const start = Date.now();
-  for (;;) {
-    const value = probe();
-    if (value !== undefined) return value;
-    if (Date.now() - start > timeoutMs) throw new Error("waitFor timed out");
-    await new Promise((r) => setTimeout(r, 20));
-  }
-}
 
 describe("auth flows on the wire", () => {
   it("strict agent: the probe's -32000 raises a lock carrying session/new; authenticate clears it and marks auth used", async () => {
@@ -119,8 +112,18 @@ describe("auth flows on the wire", () => {
     // Fresh process, credentials still absent agent-side: the reconnect
     // probe hits the same -32000 with the same method and reason — a
     // non-transition, so no event spam and certainly no resolve.
+    const witnessed = vi.spyOn(h.agents, "noteAuthWireFact");
     await h.pool.connect(spec(STRICT, "relock" as PatchbayAgentId));
-    await new Promise((r) => setTimeout(r, 300)); // let the reconnect probe settle
+    // the reconnect probe's -32000 has reached the auth writer: the probe is settled
+    await vi.waitFor(
+      () =>
+        expect(
+          witnessed.mock.calls.some(
+            ([id, method, settled]) => id === "relock" && method === methods.agent.session.new && settled === "auth_required",
+          ),
+        ).toBe(true),
+      SETTLE,
+    );
     expect(h.authFlips("relock" as PatchbayAgentId).raised).toBe(1);
     expect(h.authFlips("relock" as PatchbayAgentId).resolved).toBe(0);
     expect(h.locks.get("relock" as PatchbayAgentId)).toMatchObject({
@@ -174,7 +177,8 @@ describe("auth flows on the wire", () => {
     const { sessionId } = await h.pool.newSession("lazy" as PatchbayAgentId, cwd);
 
     const inFlight = h.pool.prompt("lazy" as PatchbayAgentId, sessionId, [{ type: "text", text: "left before the lock" }]);
-    await new Promise((r) => setTimeout(r, 50)); // the prompt is on the wire
+    // the fake agent records a prompt as it arrives: the prompt is on the wire
+    await vi.waitFor(() => expect(existsSync(join(cwd, ".fake-agent-sessions", `${sessionId}.jsonl`))).toBe(true), SETTLE);
     h.locks.set("lazy" as PatchbayAgentId, { kind: "loggedOut", reason: LOGGED_OUT_REASON, at: new Date().toISOString() });
     await inFlight;
     expect(h.locks.get("lazy" as PatchbayAgentId)).toMatchObject({ kind: "loggedOut" });
