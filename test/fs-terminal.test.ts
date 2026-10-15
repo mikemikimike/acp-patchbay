@@ -388,7 +388,7 @@ describe("fs/terminal — gated by the broker, same as everything else", () => {
     const patchbaySessionId = await h.sessions.createSession("c2" as PatchbayAgentId, "Fake Agent", workspaceRoot);
     await h.gates.prompt(patchbaySessionId, { text: "go" });
     expect(textOf(patchbaySessionId, h.events)).toContain(
-      `command: rejected (-32803 The user rejected the command \`${NODE} -e 1\`)`,
+      `command: rejected (-32803 The user rejected the command \`${formatCommandLine(process.execPath, ["-e", "1"])}\`)`,
     );
     expect(h.evidence).toContain("terminal:used");
     await h.pool.stop("c2" as PatchbayAgentId);

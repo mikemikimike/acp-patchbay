@@ -573,9 +573,9 @@ describe("elicitation blocks (#36) — the answer's own vocabulary", () => {
       patchbayAskId: "e1" as PatchbayAskId,
       state,
     });
-    expect(card([])?.kind === "elicitation" && card([])?.linkState).toBeFalsy();
+    expect(assertKind(card([]), "elicitation").linkState).toBeFalsy();
     expect(card([resolved("accepted")])).toMatchObject({ linkState: "waiting" });
-    expect(card([resolved("declined")])?.kind === "elicitation" && card([resolved("declined")])?.linkState).toBeFalsy();
+    expect(assertKind(card([resolved("declined")]), "elicitation").linkState).toBeFalsy();
     expect(card([resolved("accepted"), settled("completed")])).toMatchObject({ linkState: "completed" });
     expect(card([resolved("accepted"), settled("ended")])).toMatchObject({ linkState: "ended" });
     // finished by the agent before the user answered: one fact, done
