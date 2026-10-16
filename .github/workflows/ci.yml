@@ -1,16 +1,20 @@
 name: CI
 
 # The gate on every push to main and every pull request: the full
-# `npm run check` on Linux — the same command run before every commit, the
+# `npm run check` on Linux — the same command run before every push, the
 # Electron suite and the UI gate included — and the unit suite on Windows,
-# where paths, IPC endpoints and env-name casing differ. A fork's pull
-# request runs with a read-only token and no secrets; GitHub holds a
-# first-time contributor's run until it is approved.
+# where paths, IPC endpoints and env-name casing differ. A change touching
+# only prose (docs, markdown) runs nothing: no suite reads it and CI
+# packages no .vsix. A fork's pull request runs with a read-only token and
+# no secrets; GitHub holds a first-time contributor's run until it is
+# approved.
 
 on:
   push:
     branches: [main]
+    paths-ignore: &prose ["docs/**", "**/*.md"]
   pull_request:
+    paths-ignore: *prose
 
 permissions:
   contents: read
