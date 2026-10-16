@@ -38,6 +38,7 @@ import { openAsks, type OpenAsk } from "../shared/attention";
 import { AgentGates, endQuestion, type AgentOperation } from "./agent-gates";
 import { AgentsStore, type ConnectionOperations } from "./agents-store";
 import { ATTACHMENTS_DIR } from "./attachments";
+import { DIFFS_DIR } from "./diff-files";
 import { AsksStore, type AskPlace } from "./asks-store";
 import { sessionOwner, type SessionOwner } from "./session-owner";
 import { PermissionBroker } from "./broker";
@@ -827,7 +828,7 @@ export class Orchestrator {
       tempStashes: {
         wipe: async () => {
           await rm(ATTACHMENTS_DIR, { recursive: true, force: true });
-          await rm(join(tmpdir(), "acp-patchbay-diffs"), { recursive: true, force: true });
+          await rm(DIFFS_DIR, { recursive: true, force: true });
         },
       },
     });

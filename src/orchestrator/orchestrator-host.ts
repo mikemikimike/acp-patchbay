@@ -7,7 +7,7 @@
 // orchestrator (orchestrator.ts) from this editor's storage and fills the
 // ports it asks through.
 import { mkdir, rm, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import * as vscode from "vscode";
 import {
@@ -18,6 +18,7 @@ import {
 import { askNotice } from "../shared/ask-notice";
 import { type OpenAsk } from "../shared/attention";
 import { chipId, fileChipLabel, pickedFileForm } from "./attachments";
+import { diffDir } from "./diff-files";
 import { applyFileWrite } from "./client-host";
 import { configurationText, exportConfiguration, writeConfigurationFile } from "./config-export";
 import { EditorStateHost } from "./editor-state-host";
@@ -520,17 +521,11 @@ export class OrchestratorHost {
 </html>`;
   }
 
-  /** Where one scope's diff texts are written — a tool call's, or an
-   * ask's. */
-  private diffDir(scope: string): string {
-    return join(tmpdir(), "acp-patchbay-diffs", scope.replace(/[^a-zA-Z0-9_-]/g, "_"));
-  }
-
   /** One stash text → one temp file with a real URI, for vscode.diff — both
    * native-diff openers share this (diffs always open in VS Code's own diff
    * editor, never an inline webview diff). */
   private async diffTempFile(scope: string, fileName: string, content: string): Promise<vscode.Uri> {
-    const dir = this.diffDir(scope);
+    const dir = diffDir(scope);
     await mkdir(dir, { recursive: true });
     const file = join(dir, fileName);
     await writeFile(file, content, "utf8");
@@ -561,7 +556,7 @@ export class OrchestratorHost {
    * read, not remembered — a tab the user already closed is simply not
    * there. */
   private async closeAskDiffs(patchbayAskId: PatchbayAskId): Promise<void> {
-    const dir = this.diffDir(patchbayAskId);
+    const dir = diffDir(patchbayAskId);
     const inDir = (uri: vscode.Uri) => uri.scheme === "file" && dirname(uri.fsPath) === dir;
     const tabs = vscode.window.tabGroups.all
       .flatMap((group) => group.tabs)

@@ -7,12 +7,13 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import * as vscode from "vscode";
+import { diffDir } from "../../src/orchestrator/diff-files";
 import { fakeAgentConfig } from "./fake-agent-config";
 import { fakeAgentPath, Patchbay } from "./patchbay";
 import { WINDOW_SETTLE, waitFor } from "../support/wait-for";
 
 /** Where one ask's diff texts live — under its own id. */
-const askDir = (patchbayAskId: string) => `${sep}acp-patchbay-diffs${sep}${patchbayAskId}${sep}`;
+const askDir = (patchbayAskId: string) => `${diffDir(patchbayAskId)}${sep}`;
 
 /** The diff tabs opened for one ask. */
 function askDiffTabs(patchbayAskId: string): vscode.Tab[] {
