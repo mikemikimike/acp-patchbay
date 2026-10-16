@@ -2,11 +2,11 @@
 // P0 gate — dev host launches, Agent View resolves, settings command runs.
 import * as assert from "node:assert";
 import * as vscode from "vscode";
+import { extension } from "./patchbay";
 
 suite("activation", () => {
   test("extension activates", async () => {
-    const ext = vscode.extensions.getExtension("solutionsunity.acp-patchbay");
-    assert.ok(ext, "extension not found by id");
+    const ext = extension();
     await ext.activate();
     assert.strictEqual(ext.isActive, true);
   });

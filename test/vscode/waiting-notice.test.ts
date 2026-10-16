@@ -6,7 +6,8 @@ import * as assert from "node:assert";
 import * as vscode from "vscode";
 import { fakeAgentConfig } from "./fake-agent-config";
 import { fakeAgentPath, Patchbay } from "./patchbay";
-import { waitFor } from "./wait-for";
+import { WINDOW_SETTLE, waitFor } from "../support/wait-for";
+import type { PatchbaySessionId } from "../../src/shared/ids";
 
 const LABEL = "waiting-notice";
 
@@ -24,7 +25,7 @@ suite("waiting-on-user notice", () => {
 
     // Answers the session's open question the way its card would, and lets
     // the turn finish.
-    const answer = async (patchbaySessionId: string, turn: Promise<void>) => {
+    const answer = async (patchbaySessionId: PatchbaySessionId, turn: Promise<void>) => {
       const card = await pb.openCard(patchbaySessionId, "elicitation");
       pb.act({ kind: "resolveElicitation", patchbayAskId: card.id, answer: { action: "cancel" } });
       await turn;
@@ -39,10 +40,10 @@ suite("waiting-on-user notice", () => {
 
       // 1. The Agent View is hidden.
       await vscode.commands.executeCommand("workbench.action.closeSidebar");
-      await waitFor(() => (pb.view.screen.pointer ? undefined : true));
+      await waitFor(() => !pb.view.screen.pointer, WINDOW_SETTLE);
       const first = await pb.newSession(patchbayAgentId);
       const firstTurn = pb.prompt(first, "go");
-      const hiddenNotice = await waitFor(() => noticeFor("Which branch?"));
+      const hiddenNotice = await waitFor(() => noticeFor("Which branch?"), WINDOW_SETTLE);
       assert.ok(hiddenNotice.includes("Open"), "a question's notice offers Open");
       await answer(first, firstTurn);
 
@@ -51,9 +52,9 @@ suite("waiting-on-user notice", () => {
       const asking = await pb.newSession(patchbayAgentId);
       pb.switchTo(first);
       await vscode.commands.executeCommand("acpPatchbay.agentView.focus");
-      await waitFor(() => (pb.view.screen.pointer && pb.view.activePatchbaySessionId === first ? true : undefined));
+      await waitFor(() => pb.view.screen.pointer && pb.view.activePatchbaySessionId === first, WINDOW_SETTLE);
       const askingTurn = pb.prompt(asking, "go");
-      await waitFor(() => noticeFor("Which branch?"));
+      await waitFor(() => noticeFor("Which branch?"), WINDOW_SETTLE);
       await answer(asking, askingTurn);
 
       // 3. The session on screen asks: its card is in front of the user —
@@ -82,9 +83,7 @@ suite("waiting-on-user notice", () => {
       const card = await pb.openCard(patchbaySessionId, "permission");
 
       await pb.stop(patchbayAgentId);
-      await waitFor(() =>
-        pb.view.transcripts[patchbaySessionId]?.find((b) => b.id === card.id)?.resolution != null ? true : undefined,
-      );
+      await waitFor(() => pb.answered(patchbaySessionId, card), WINDOW_SETTLE);
     } finally {
       await pb.removeAdded();
     }

@@ -9,7 +9,7 @@ import { join, sep } from "node:path";
 import * as vscode from "vscode";
 import { fakeAgentConfig } from "./fake-agent-config";
 import { fakeAgentPath, Patchbay } from "./patchbay";
-import { waitFor } from "./wait-for";
+import { WINDOW_SETTLE, waitFor } from "../support/wait-for";
 
 /** Where one ask's diff texts live — under its own id. */
 const askDir = (patchbayAskId: string) => `${sep}acp-patchbay-diffs${sep}${patchbayAskId}${sep}`;
@@ -26,8 +26,8 @@ function askDiffTabs(patchbayAskId: string): vscode.Tab[] {
  * race VS Code logs ("Model is disposed!"), not one a reader makes. */
 function askDiffShown(patchbayAskId: string): Promise<true> {
   return waitFor(
-    () => (vscode.window.visibleTextEditors.some((e) => e.document.uri.fsPath.includes(askDir(patchbayAskId))) && askDiffTabs(patchbayAskId).length === 1 ? true : undefined),
-    8000,
+    () => vscode.window.visibleTextEditors.some((e) => e.document.uri.fsPath.includes(askDir(patchbayAskId))) && askDiffTabs(patchbayAskId).length === 1,
+    WINDOW_SETTLE,
     `the diff of ${patchbayAskId} on screen`,
   );
 }
@@ -61,7 +61,7 @@ suite("decision diffs open and close with their ask (issue #90)", () => {
       await askDiffShown(card.id);
       await pb.answerDiff(patchbaySessionId, card, false);
       await turnDone;
-      await waitFor(() => (askDiffTabs(card.id).length === 0 ? true : undefined), 8000, "the write's diff tab closed");
+      await waitFor(() => askDiffTabs(card.id).length === 0, WINDOW_SETTLE, "the write's diff tab closed");
     } finally {
       await pb.removeAdded();
     }
@@ -98,7 +98,7 @@ suite("decision diffs open and close with their ask (issue #90)", () => {
       await askDiffShown(card.id);
       pb.act({ kind: "resolvePermission", patchbayAskId: card.id, optionId: "reject_once" });
       await turnDone;
-      await waitFor(() => (askDiffTabs(card.id).length === 0 ? true : undefined), 8000, "the request's diff tab closed");
+      await waitFor(() => askDiffTabs(card.id).length === 0, WINDOW_SETTLE, "the request's diff tab closed");
       assert.match(pb.text(patchbaySessionId), /permission: reject_once/);
     } finally {
       await pb.removeAdded();

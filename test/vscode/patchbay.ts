@@ -8,96 +8,57 @@ import * as assert from "node:assert";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import * as vscode from "vscode";
-import type { AgentConfig } from "./fake-agent-config";
+import { name, publisher } from "../../package.json";
+import type { Orchestrator } from "../../src/orchestrator/orchestrator";
+import type { PatchbayAgentId, PatchbaySessionId } from "../../src/shared/ids";
+import type { Action, AgentConfigView, AgentSummary, AgentViewState, ChatBlock, SettingsState } from "../../src/shared/protocol";
 import { answeringYes } from "./modal";
-import { waitFor } from "./wait-for";
+import { WINDOW_SETTLE, waitFor } from "../support/wait-for";
 
-export interface Block {
-  id: string;
-  kind: string;
-  text?: string;
-  resolution?: unknown;
-}
+/** A block of a session's transcript. */
+export type Block = ChatBlock;
 
-export interface AgentRow {
-  id: string;
-  status: string;
-  capabilities?: Record<string, { declared: boolean; used: boolean }>;
-  update?: { from: string; to: string };
-}
+/** A block the user answers — asked, then resolved. */
+export type Card = Extract<ChatBlock, { resolution: unknown }>;
 
-/** What the Agent View is shown — the part the suites read. */
-export interface AgentViewState {
-  agents: AgentRow[];
-  sessions: Array<{ id: string; busy: readonly string[] }>;
-  activePatchbaySessionId: string | null;
-  screen: { pointer: boolean };
-  transcripts: Record<string, Block[]>;
-  contextRoots: Record<string, readonly string[]>;
-}
-
-/** What Settings is shown — the part the suites read. */
-interface SettingsState {
-  machineCommandRules: ReadonlyArray<{ pattern: string }>;
-  writeScope: { rows: ReadonlyArray<{ location: { kind: string }; machine: boolean }> };
-  registryFetchedAt: string;
-  registryAgents: ReadonlyArray<{ id: string }>;
-}
-
-/** A channel's sync with its mounted webview. */
-export interface ViewSync<S> {
-  current: S;
-  revision: number;
-  waitForApplied(rev?: number): Promise<number>;
-}
-
-interface Orchestrator {
-  agentView: ViewSync<AgentViewState>;
-  settings: ViewSync<SettingsState>;
-}
-
-/** The orchestrator's host: the views' actions arrive there. */
-interface OrchestratorHost {
-  handleAction(action: { kind: string } & Record<string, unknown>): void;
+/** This extension, found by the id its manifest gives it. */
+export function extension(): vscode.Extension<unknown> {
+  const ext = vscode.extensions.getExtension(`${publisher}.${name}`);
+  assert.ok(ext, "extension not found by id");
+  return ext;
 }
 
 /** For a suite whose subject is a mechanism behind the views: the
  * extension's internals, typed by what that suite reaches. */
 export async function internals<T>(): Promise<T> {
-  const ext = vscode.extensions.getExtension("solutionsunity.acp-patchbay");
-  assert.ok(ext);
-  return ((await ext.activate()) as { internal: T }).internal;
+  return ((await extension().activate()) as { internal: T }).internal;
 }
 
 /** The scriptable fake agent the suites connect. */
 export function fakeAgentPath(): string {
-  const ext = vscode.extensions.getExtension("solutionsunity.acp-patchbay");
-  assert.ok(ext);
-  return join(ext.extensionUri.fsPath, "out-test", "fake-agent.mjs");
+  return join(extension().extensionUri.fsPath, "out-test", "fake-agent.mjs");
 }
 
 export class Patchbay {
   /** The agents this driver added, each with the folder its fake agent
    * keeps records in — what `removeAdded` takes away. */
-  private readonly added = new Map<string, string | undefined>();
+  private readonly added = new Map<PatchbayAgentId, string | undefined>();
 
-  private constructor(
-    private readonly orchestrator: Orchestrator,
-    private readonly host: OrchestratorHost,
-  ) {}
+  private constructor(private readonly orchestrator: Orchestrator) {}
 
   static async open(): Promise<Patchbay> {
-    const { orchestrator, host } = await internals<{ orchestrator: Orchestrator; host: OrchestratorHost }>();
-    return new Patchbay(orchestrator, host);
+    const { orchestrator } = await internals<{ orchestrator: Orchestrator }>();
+    return new Patchbay(orchestrator);
   }
 
-  /** The views' one door — the action a click sends. */
-  act(action: { kind: string } & Record<string, unknown>): void {
-    this.host.handleAction(action);
+  /** The views' one door — the action a click sends, posted as a webview
+   * posts it. Every view's actions land at the same handler. */
+  act(action: Action): void {
+    this.orchestrator.agentView.handleViewMessage({ kind: "action", action });
   }
 
   /** The Agent View's state and its sync with the mounted webview. */
-  get agentView(): ViewSync<AgentViewState> {
+  get agentView(): Orchestrator["agentView"] {
     return this.orchestrator.agentView;
   }
 
@@ -109,44 +70,44 @@ export class Patchbay {
     return this.orchestrator.settings.current;
   }
 
-  agent(patchbayAgentId: string): AgentRow | undefined {
+  agent(patchbayAgentId: PatchbayAgentId): AgentSummary | undefined {
     return this.view.agents.find((a) => a.id === patchbayAgentId);
   }
 
   /** Settings' save of a new config: the store adds it under an id it
    * mints, and that id — the row that wasn't listed before — is what the
    * test names the agent by from then on. */
-  async addAgent(config: AgentConfig): Promise<string> {
+  async addAgent(config: AgentConfigView): Promise<PatchbayAgentId> {
     const before = new Set(this.view.agents.map((a) => a.id));
     this.act({ kind: "addOrUpdateAgentConfig", config });
-    const patchbayAgentId = await waitFor(() => this.view.agents.find((a) => !before.has(a.id))?.id, 8000, `${config.name} listed`);
+    const patchbayAgentId = await waitFor(() => this.view.agents.find((a) => !before.has(a.id))?.id, WINDOW_SETTLE, `${config.name} listed`);
     this.added.set(patchbayAgentId, config.env.FAKE_AGENT_STORE);
     return patchbayAgentId;
   }
 
-  async connect(patchbayAgentId: string): Promise<void> {
+  async connect(patchbayAgentId: PatchbayAgentId): Promise<void> {
     this.act({ kind: "connectAgent", source: { patchbayAgentId } });
     await waitFor(
-      () => (this.agent(patchbayAgentId)?.status === "running" ? true : undefined),
+      () => this.agent(patchbayAgentId)?.status === "running",
       15000,
       () => `${patchbayAgentId} running (status: ${this.agent(patchbayAgentId)?.status})`,
     );
   }
 
   /** Stop, its question answered yes. */
-  async stop(patchbayAgentId: string): Promise<void> {
+  async stop(patchbayAgentId: PatchbayAgentId): Promise<void> {
     await answeringYes(async () => {
       this.act({ kind: "stopAgent", patchbayAgentId });
-      await waitFor(() => (this.agent(patchbayAgentId)?.status !== "running" ? true : undefined), 8000, `${patchbayAgentId} stopped`);
+      await waitFor(() => this.agent(patchbayAgentId)?.status !== "running", WINDOW_SETTLE, `${patchbayAgentId} stopped`);
     });
   }
 
   /** Remove, its question answered yes — and a fake agent's records with
    * it. */
-  async remove(patchbayAgentId: string): Promise<void> {
+  async remove(patchbayAgentId: PatchbayAgentId): Promise<void> {
     await answeringYes(async () => {
       this.act({ kind: "removeAgentConfig", patchbayAgentId });
-      await waitFor(() => (this.agent(patchbayAgentId) === undefined ? true : undefined), 8000, `${patchbayAgentId} removed`);
+      await waitFor(() => this.agent(patchbayAgentId) === undefined, WINDOW_SETTLE, `${patchbayAgentId} removed`);
     });
     const store = this.added.get(patchbayAgentId);
     if (store !== undefined) await rm(store, { recursive: true, force: true });
@@ -162,7 +123,7 @@ export class Patchbay {
   /** A new chat with the agent — the session it lands on. An agent's
    * never-prompted session is reused, as the product does: prompt it
    * before asking for another. */
-  async newSession(patchbayAgentId: string): Promise<string> {
+  async newSession(patchbayAgentId: PatchbayAgentId): Promise<PatchbaySessionId> {
     const known = new Set(this.view.sessions.map((s) => s.id));
     this.act({ kind: "startChat", patchbayAgentId });
     return waitFor(
@@ -177,39 +138,39 @@ export class Patchbay {
 
   /** The words sent from the composer, at once; settles once their turn
    * has ended and left the session's line. */
-  async prompt(patchbaySessionId: string, text: string): Promise<void> {
+  async prompt(patchbaySessionId: PatchbaySessionId, text: string): Promise<void> {
     const before = this.turnsEnded(patchbaySessionId);
     this.act({ kind: "sendPrompt", patchbaySessionId, text });
     await waitFor(
-      () => (this.turnsEnded(patchbaySessionId) > before && !this.busy(patchbaySessionId).includes("prompt") ? true : undefined),
+      () => this.turnsEnded(patchbaySessionId) > before && !this.busy(patchbaySessionId).includes("prompt"),
       15000,
       `a turn ended in ${patchbaySessionId}`,
     );
   }
 
-  busy(patchbaySessionId: string): readonly string[] {
+  busy(patchbaySessionId: PatchbaySessionId): readonly string[] {
     return this.view.sessions.find((s) => s.id === patchbaySessionId)?.busy ?? [];
   }
 
-  switchTo(patchbaySessionId: string): void {
+  switchTo(patchbaySessionId: PatchbaySessionId): void {
     this.act({ kind: "switchSession", patchbaySessionId });
   }
 
   /** The roots chip's Add, its folder picked in the dialog. */
-  async addRoot(patchbaySessionId: string, path: string): Promise<void> {
+  async addRoot(patchbaySessionId: PatchbaySessionId, path: string): Promise<void> {
     const window = vscode.window as { showOpenDialog: (...args: unknown[]) => Thenable<vscode.Uri[] | undefined> };
     const original = window.showOpenDialog;
     window.showOpenDialog = async () => [vscode.Uri.file(path)];
     try {
       this.act({ kind: "addContextRoot", patchbaySessionId });
-      await waitFor(() => (this.view.contextRoots[patchbaySessionId]?.includes(path) ? true : undefined), 8000, `root ${path}`);
+      await waitFor(() => this.view.contextRoots[patchbaySessionId]?.includes(path), WINDOW_SETTLE, `root ${path}`);
     } finally {
       window.showOpenDialog = original;
     }
   }
 
   /** The `index`-th block of `kind` in a session's transcript, once there. */
-  block(patchbaySessionId: string, kind: string, index = 0): Promise<Block> {
+  block(patchbaySessionId: PatchbaySessionId, kind: string, index = 0): Promise<Block> {
     return waitFor(
       () => (this.view.transcripts[patchbaySessionId] ?? []).filter((b) => b.kind === kind)[index],
       15000,
@@ -219,9 +180,9 @@ export class Patchbay {
 
   /** The session's open card of `kind` — asked, not yet answered — once
    * there. */
-  openCard(patchbaySessionId: string, kind: string): Promise<Block> {
+  openCard(patchbaySessionId: PatchbaySessionId, kind: Card["kind"]): Promise<Card> {
     return waitFor(
-      () => (this.view.transcripts[patchbaySessionId] ?? []).find((b) => b.kind === kind && b.resolution === null),
+      () => (this.view.transcripts[patchbaySessionId] ?? []).find((b): b is Card => b.kind === kind && "resolution" in b && b.resolution === null),
       15000,
       `an open ${kind} card in ${patchbaySessionId}`,
     );
@@ -229,32 +190,36 @@ export class Patchbay {
 
   /** A proposed write answered on its card; settles once the card shows
    * the answer. */
-  async answerDiff(patchbaySessionId: string, card: Block, accept: boolean): Promise<void> {
+  async answerDiff(patchbaySessionId: PatchbaySessionId, card: Card, accept: boolean): Promise<void> {
     this.act({ kind: "resolveDiff", patchbayAskId: card.id, accept });
     await waitFor(
-      () => ((this.view.transcripts[patchbaySessionId] ?? []).find((b) => b.id === card.id)?.resolution != null ? true : undefined),
-      8000,
+      () => this.answered(patchbaySessionId, card),
+      WINDOW_SETTLE,
       `diff ${card.id} answered`,
     );
   }
 
+  /** Whether the card shows an answer yet. */
+  answered(patchbaySessionId: PatchbaySessionId, card: Card): boolean {
+    return (this.view.transcripts[patchbaySessionId] ?? []).some((b) => b.id === card.id && "resolution" in b && b.resolution !== null);
+  }
+
   /** The text the agent has written in a session so far. */
-  text(patchbaySessionId: string): string {
+  text(patchbaySessionId: PatchbaySessionId): string {
     return (this.view.transcripts[patchbaySessionId] ?? [])
-      .filter((b) => b.kind === "text")
-      .map((b) => b.text ?? "")
+      .flatMap((b) => (b.kind === "text" ? [b.text] : []))
       .join("");
   }
 
   /** A machine command rule, as the Permissions page adds it. */
   async addMachineRule(pattern: string, verdict: "allow" | "ask" | "deny"): Promise<void> {
     this.act({ kind: "addCommandRule", rule: { pattern, verdict }, layer: "machine" });
-    await waitFor(() => (this.hasMachineRule(pattern) ? true : undefined), 8000, `rule ${pattern}`);
+    await waitFor(() => this.hasMachineRule(pattern), WINDOW_SETTLE, `rule ${pattern}`);
   }
 
   async removeMachineRule(pattern: string): Promise<void> {
     this.act({ kind: "removeCommandRule", pattern, layer: "machine" });
-    await waitFor(() => (this.hasMachineRule(pattern) ? undefined : true), 8000, `rule ${pattern} gone`);
+    await waitFor(() => !(this.hasMachineRule(pattern)), WINDOW_SETTLE, `rule ${pattern} gone`);
   }
 
   /** A file-write switch's machine answer, as the Permissions table sets
@@ -262,7 +227,7 @@ export class Patchbay {
   async setMachineWriteSwitch(kind: "alwaysAsk" | "workspace" | "sessionRoots" | "temp", on: boolean): Promise<void> {
     this.act({ kind: "setWriteLocation", location: { kind }, layer: "machine", on });
     const row = () => this.settings.writeScope.rows.find((r) => r.location.kind === kind);
-    await waitFor(() => (row()?.machine === on ? true : undefined), 8000, `${kind} ${on ? "on" : "off"} on the machine`);
+    await waitFor(() => row()?.machine === on, WINDOW_SETTLE, `${kind} ${on ? "on" : "off"} on the machine`);
   }
 
   /** A registry fetch landing with these agents: the CDN is served by a
@@ -281,11 +246,11 @@ export class Patchbay {
     for (let asked = 0; !landed(); asked++) {
       if (asked === 5) assert.fail("the served registry never landed");
       this.act({ kind: "refreshRegistry" });
-      await waitFor(() => (landed() ? true : undefined), 3000).catch(() => {});
+      await waitFor(() => landed(), 3000).catch(() => {});
     }
   }
 
-  private turnsEnded(patchbaySessionId: string): number {
+  private turnsEnded(patchbaySessionId: PatchbaySessionId): number {
     return (this.view.transcripts[patchbaySessionId] ?? []).filter((b) => b.kind === "turnEnd").length;
   }
 

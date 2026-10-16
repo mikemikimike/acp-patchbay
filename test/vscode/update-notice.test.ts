@@ -4,7 +4,8 @@
 // and one notification for several agents.
 import * as assert from "node:assert";
 import * as vscode from "vscode";
-import type { AgentConfig } from "./fake-agent-config";
+import type { PatchbayAgentId } from "../../src/shared/ids";
+import type { AgentConfigView } from "../../src/shared/protocol";
 import { Patchbay } from "./patchbay";
 
 const registryAgent = (id: string, version: string) => ({
@@ -19,8 +20,8 @@ const registryAgent = (id: string, version: string) => ({
 
 /** An agent added from the registry, pinned at `pinnedVersion` — never
  * connected here. */
-const config = (registryId: string, pinnedVersion: string): AgentConfig => ({
-  id: "",
+const config = (registryId: string, pinnedVersion: string): AgentConfigView => ({
+  id: "" as PatchbayAgentId,
   name: `Agent ${registryId}`,
   command: "npx",
   args: [],

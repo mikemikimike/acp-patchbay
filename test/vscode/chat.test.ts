@@ -7,7 +7,7 @@ import * as assert from "node:assert";
 import * as vscode from "vscode";
 import { fakeAgentConfig } from "./fake-agent-config";
 import { fakeAgentPath, Patchbay } from "./patchbay";
-import { waitFor } from "./wait-for";
+import { WINDOW_SETTLE, waitFor } from "../support/wait-for";
 
 suite("chat vertical slice", () => {
   test("full turn streams end-to-end; webview kill/reopen mid-turn recovers", async function () {
@@ -35,11 +35,11 @@ suite("chat vertical slice", () => {
       const turnDone = pb.prompt(patchbaySessionId, "go");
 
       // wait for the first chunk to land, then kill the webview mid-turn
-      await waitFor(() => (pb.text(patchbaySessionId).length > 0 ? true : undefined));
+      await waitFor(() => pb.text(patchbaySessionId).length > 0, WINDOW_SETTLE);
       assert.ok(pb.busy(patchbaySessionId).includes("prompt"), "turn should still be underway");
 
       await vscode.commands.executeCommand("workbench.action.closeSidebar");
-      await waitFor(() => (pb.view.screen.pointer ? undefined : true));
+      await waitFor(() => !pb.view.screen.pointer, WINDOW_SETTLE);
 
       // reopen mid-turn — the webview must resync to whatever canonical state
       // has accumulated by now (render cache lives in the orchestrator, not

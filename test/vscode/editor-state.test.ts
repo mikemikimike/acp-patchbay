@@ -4,7 +4,8 @@
 // test/mcp-wire.test.ts and test/mcp-end-to-end.test.ts (vitest, no vscode
 // available there) — this covers exactly the remaining untested surface:
 // real vscode.window/workspace/languages data.
-import { focusNote, waitFor } from "./wait-for";
+import { focusNote } from "./focus-note";
+import { WINDOW_SETTLE, waitFor } from "../support/wait-for";
 import * as assert from "node:assert";
 import * as vscode from "vscode";
 import { internals } from "./patchbay";
@@ -82,7 +83,7 @@ suite("EditorStateHost — real vscode data", () => {
       // VS Code hands the active editor to the panel only in a focused
       // window; unfocused, the text editor stays active and the scenario
       // can't be set up — fail naming that, never hang.
-      await waitFor(() => (vscode.window.activeTextEditor === undefined ? true : undefined)).catch(() =>
+      await waitFor(() => vscode.window.activeTextEditor === undefined, WINDOW_SETTLE).catch(() =>
         assert.fail(`the panel never became the active editor${focusNote()}`),
       );
 

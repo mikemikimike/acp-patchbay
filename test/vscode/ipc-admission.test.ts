@@ -7,7 +7,7 @@ import * as assert from "node:assert";
 import { connect } from "node:net";
 import { fakeAgentConfig } from "./fake-agent-config";
 import { fakeAgentPath, internals, Patchbay } from "./patchbay";
-import { waitFor } from "./wait-for";
+import { WINDOW_SETTLE, waitFor } from "../support/wait-for";
 
 /** The socket is this suite's subject: its path is the one thing it
  * reaches behind the views. */
@@ -64,7 +64,7 @@ suite("IPC admission (issue #72)", () => {
       await pb.connect(patchbayAgentId);
       const patchbaySessionId = await pb.newSession(patchbayAgentId);
       await pb.prompt(patchbaySessionId, "go");
-      const text = await waitFor(() => pb.text(patchbaySessionId) || undefined);
+      const text = await waitFor(() => pb.text(patchbaySessionId) || undefined, WINDOW_SETTLE);
       assert.ok(!text.startsWith("mcp: rejected"), text);
       assert.ok(Array.isArray(JSON.parse(text)), `open editors answered as a list: ${text}`);
     } finally {

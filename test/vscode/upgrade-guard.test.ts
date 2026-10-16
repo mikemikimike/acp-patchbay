@@ -6,7 +6,7 @@ import * as assert from "node:assert";
 import * as vscode from "vscode";
 import { fakeAgentConfig } from "./fake-agent-config";
 import { fakeAgentPath, Patchbay } from "./patchbay";
-import { waitFor } from "./wait-for";
+import { WINDOW_SETTLE, waitFor } from "../support/wait-for";
 
 const REGISTRY_ID = "upgrade-guard";
 
@@ -49,7 +49,7 @@ suite("upgrade guard", () => {
         return Promise.resolve(undefined); // the user dismisses the dialog
       };
       pb.act({ kind: "upgradeAgent", patchbayAgentId });
-      const [message, options] = await waitFor(() => asked[0]);
+      const [message, options] = await waitFor(() => asked[0], WINDOW_SETTLE);
       assert.match(String(message), /1 open conversation/);
       assert.deepStrictEqual(options, { modal: true });
       // Let a stop that ignored the answer land before looking.

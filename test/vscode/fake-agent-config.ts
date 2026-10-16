@@ -4,23 +4,14 @@
 // after.
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { PatchbayAgentId } from "../../src/shared/ids";
+import type { AgentConfigView } from "../../src/shared/protocol";
+import type { FakeAgentScript } from "../fake-agent/main";
 
 /** Where a fake agent keeps its sessions' records: the suite's window has
  * no folder, and its cwd is the repo — not the agent's to write in. */
 function fakeAgentStore(label: string): string {
   return join(tmpdir(), "patchbay-fake-agent", label);
-}
-
-export interface AgentConfig {
-  id: string;
-  name: string;
-  command: string;
-  args: string[];
-  env: Record<string, string>;
-  autoConnect: boolean;
-  defaults: Record<string, never>;
-  registrySource: { registryId: string; distributionKind: "npx"; pinnedVersion: string } | null;
-  lastSeenVersion: null;
 }
 
 /** `label` names the fake agent's records folder; its id is the one the
@@ -29,11 +20,11 @@ export function fakeAgentConfig(
   label: string,
   name: string,
   fakeAgentPath: string,
-  script: unknown,
-  registrySource: AgentConfig["registrySource"] = null,
-): AgentConfig {
+  script: FakeAgentScript,
+  registrySource: AgentConfigView["registrySource"] = null,
+): AgentConfigView {
   return {
-    id: "",
+    id: "" as PatchbayAgentId,
     name,
     command: process.execPath,
     args: [fakeAgentPath],

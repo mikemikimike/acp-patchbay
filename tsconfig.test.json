@@ -10,8 +10,9 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "outDir": "out-test",
-    "rootDir": "test",
+    "rootDir": ".",
+    "resolveJsonModule": true,
     "types": ["node", "mocha", "vscode"]
   },
-  "include": ["test/vscode"]
+  "include": ["test/vscode", "src/types"]
 }

@@ -7,7 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as vscode from "vscode";
 import { Patchbay } from "./patchbay";
-import { focusNote, waitFor } from "./wait-for";
+import { focusNote } from "./focus-note";
+import { WINDOW_SETTLE, waitFor } from "../support/wait-for";
 
 /** Waits for the active editor to show `path` with the cursor at
  * [line, character]. `vscode.open` makes the editor active before it
@@ -20,10 +21,10 @@ async function assertCursor(path: string, line: number, character: number): Prom
   let seen: [number, number] | null = null;
   await waitFor(() => {
     const editor = vscode.window.activeTextEditor;
-    if (editor?.document.uri.fsPath !== path) return undefined;
+    if (editor?.document.uri.fsPath !== path) return false;
     seen = [editor.selection.active.line, editor.selection.active.character];
-    return seen[0] === line && seen[1] === character ? true : undefined;
-  }).catch(() => {
+    return seen[0] === line && seen[1] === character;
+  }, WINDOW_SETTLE).catch(() => {
     if (seen === null) {
       assert.fail(`${path} never became the active editor${focusNote()}`);
     }
@@ -80,7 +81,8 @@ suite("open a tool-call location (issue #41)", () => {
     await waitFor(() =>
       vscode.window.tabGroups.all
         .flatMap((g) => g.tabs)
-        .some((t) => (t.input as { uri?: vscode.Uri } | undefined)?.uri?.fsPath === png) || undefined,
+        .some((t) => (t.input as { uri?: vscode.Uri } | undefined)?.uri?.fsPath === png),
+      WINDOW_SETTLE,
     );
   });
 
