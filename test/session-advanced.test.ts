@@ -262,7 +262,7 @@ describe("Session model/mode/effort knobs (P8)", () => {
   it("per-agent defaults are applied post-create by option id — no category needed (ACP: category is UX-only)", async () => {
     const h = harness();
     // the agent's saved defaults, folded by knob id — the entry seed
-    await h.seedAgent("defaulted" as PatchbayAgentId, undefined, { mode: "code", "model-opt": "opus" });
+    await h.seedAgent("defaulted" as PatchbayAgentId, { defaults: { mode: "code", "model-opt": "opus" } });
     const { pool, sessions, state } = h;
     await pool.connect(
       spec(
@@ -394,7 +394,7 @@ describe("Knob two-fold rule (composer vs session)", () => {
     // Window two: known only via session/list — no combination in hand, so
     // the entry seed (composer/defaults, per knobSource) wins the attach.
     const w2 = harness();
-    await w2.seedAgent("entry" as PatchbayAgentId, undefined, { "model-opt": "opus" });
+    await w2.seedAgent("entry" as PatchbayAgentId, { defaults: { "model-opt": "opus" } });
     await w2.pool.connect(
       spec(
         { declare: { loadSession: true, sessionCapabilities: { list: {} } }, configOptions: [MODEL_KNOB], turn: [{ type: "chunk", text: "hi" }] },

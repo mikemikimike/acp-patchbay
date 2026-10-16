@@ -14,7 +14,7 @@ import type { LaunchSpec } from "../src/orchestrator/pool";
 import type { AgentViewState } from "../src/shared/protocol";
 import type { PatchbayAgentId, PatchbaySessionId } from "../src/shared/ids";
 import type { FakeAgentScript } from "./fake-agent/main";
-import { sessionsHarness } from "./support/sessions-harness";
+import { orchestratorHarness } from "./support/orchestrator-harness";
 
 
 let cwd: string;
@@ -209,15 +209,16 @@ function rendered(state: AgentViewState, patchbaySessionId: PatchbaySessionId): 
 
 describe("wire corpus", () => {
   it("every agent message renders as pinned — live, and replayed by a reload", async () => {
-    const h = sessionsHarness(cwd);
+    const h = orchestratorHarness(cwd);
+    const { pool, sessions, sessionGates: gates } = h.orchestrator;
     const agent = "corpus" as PatchbayAgentId;
-    await h.pool.connect(spec({ declare: { loadSession: true }, turn: CORPUS.map((update) => ({ type: "update", update })) }, agent));
-    const patchbaySessionId = await h.sessions.createSession(agent, "Fake Agent", cwd);
-    await h.gates.prompt(patchbaySessionId, { text: "go" });
-    await expect(rendered(h.state(), patchbaySessionId)).toMatchFileSnapshot("./goldens/wire-corpus.live.json");
+    await pool.connect(spec({ declare: { loadSession: true }, turn: CORPUS.map((update) => ({ type: "update", update })) }, agent));
+    const patchbaySessionId = await sessions.createSession(agent, "Fake Agent", cwd);
+    await gates.prompt(patchbaySessionId, { text: "go" });
+    await expect(rendered(h.agentView.state(), patchbaySessionId)).toMatchFileSnapshot("./goldens/wire-corpus.live.json");
 
-    await h.gates.reload(patchbaySessionId);
-    await expect(rendered(h.state(), patchbaySessionId)).toMatchFileSnapshot("./goldens/wire-corpus.replay.json");
-    await h.pool.stop(agent);
+    await gates.reload(patchbaySessionId);
+    await expect(rendered(h.agentView.state(), patchbaySessionId)).toMatchFileSnapshot("./goldens/wire-corpus.replay.json");
+    await pool.stop(agent);
   });
 });

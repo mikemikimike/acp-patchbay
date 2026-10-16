@@ -31,10 +31,6 @@ import type { PatchbayAgentId, PatchbaySessionId } from "../shared/ids";
  * turn. */
 export type AttachWork = Exclude<SessionWork, "prompt" | "stopping">;
 
-/** Attached-but-idle sessions release their agent-side resources after an
- * hour — the row stays listed and re-attaches on the next open/prompt. */
-const DEFAULT_IDLE_CLOSE_MS = 60 * 60_000;
-
 /** What the gates ask the orchestrator for. */
 export interface SessionGateAsks {
   /** Connect on demand: opening a session whose agent may be off asks for
@@ -53,33 +49,27 @@ export class SessionGates {
   /** Sessions whose root list moved under their running turn: the agent's
    * copy is re-applied once the turn ends, ahead of the next held words. */
   private readonly rootsWaiting = new Set<string>();
-  private readonly idleCloseMs: () => number | null;
-  private readonly idleTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly idleTimer: ReturnType<typeof setInterval>;
 
   constructor(
     private readonly sessions: SessionsStore,
     private readonly attachLine: Queue<AttachWork, PatchbaySessionId>,
     private readonly turnLine: Queue<"prompt", PatchbaySessionId>,
     private readonly asks: SessionGateAsks,
-    /** `idleCloseMs`: attached sessions idle past this are released
-     * (session/close) by the reaper — null disables it entirely. A getter
-     * is read fresh on every sweep (store-truth: the orchestrator hands in
-     * the Preferences read, so an edit applies to the very next sweep, no
-     * reconstruction). */
-    opts?: { idleCloseMs?: number | null | (() => number | null) },
+    /** Attached sessions idle past this are released (session/close) by the
+     * reaper and stay listed, re-attaching on the next open or prompt —
+     * null: never. Read fresh on every sweep (store-truth: the orchestrator
+     * hands in the Preferences read, so an edit applies to the very next
+     * sweep, no reconstruction). */
+    private readonly idleCloseMs: () => number | null,
   ) {
-    const idle = opts?.idleCloseMs === undefined ? DEFAULT_IDLE_CLOSE_MS : opts.idleCloseMs;
-    this.idleCloseMs = typeof idle === "function" ? idle : () => idle;
-    if (idle !== null) {
-      // Static values keep their own cadence (tests run ms-scale timers);
-      // a getter sweeps every minute — the setting is minute-grained.
-      this.idleTimer = setInterval(() => this.reap(), typeof idle === "number" ? Math.min(60_000, idle) : 60_000);
-      this.idleTimer.unref?.();
-    }
+    // a sweep a minute — the setting is minute-grained
+    this.idleTimer = setInterval(() => this.reap(), 60_000);
+    this.idleTimer.unref?.();
   }
 
   dispose(): void {
-    if (this.idleTimer !== null) clearInterval(this.idleTimer);
+    clearInterval(this.idleTimer);
   }
 
   /** What the session's lines hold — its busy state for the views. */

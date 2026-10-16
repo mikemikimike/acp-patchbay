@@ -14,6 +14,8 @@ import { MemoryKV } from "../../src/orchestrator/stores/kv";
 import { MemorySecrets } from "../../src/orchestrator/stores/mcp-server-tokens";
 import type { PatchbayAgentId } from "../../src/shared/ids";
 import type { AgentViewEvent, AgentViewState, HostToView, SettingsEvent, SettingsState } from "../../src/shared/protocol";
+import type { FakeAgentScript } from "../fake-agent/main";
+import { fakeAgent } from "./fake-agent";
 import { atTestEnd, stopsAtTestEnd } from "./teardown";
 
 /** One view as a webview sees it: every patch it was sent, in order. */
@@ -22,6 +24,8 @@ export interface WatchedView<S, E> {
   events(): E[];
   /** The view's canonical state, as its next snapshot would carry it. */
   state(): S;
+  /** How many whole-state snapshots the view was sent. */
+  snapshots(): number;
 }
 
 export interface OrchestratorHarness {
@@ -42,11 +46,18 @@ export interface OrchestratorHarness {
   /** Every free-check probe the orchestrator opened, in order: the
    * session/new each agent was sent in its probe root. */
   probes: { patchbayAgentId: PatchbayAgentId; sessionId: string }[];
-  /** A saved agent — and so a row in the views — for one a test connects
-   * through the pool directly: the orchestrator acts only on agents that
-   * exist. `registryId` saves it as added from that registry entry;
+  /** A saved agent — and so a row in the views: the orchestrator acts only
+   * on agents that exist. It launches the fake agent playing `script`, so
+   * a test may connect it through the pool directly or the window's own
+   * Connect. `registryId` saves it as added from that registry entry;
    * `defaults` are its knobs' saved defaults. */
-  seedAgent(patchbayAgentId: PatchbayAgentId, registryId?: string, defaults?: Record<string, string | boolean>): Promise<void>;
+  seedAgent(patchbayAgentId: PatchbayAgentId, opts?: SeedAgent): Promise<void>;
+}
+
+export interface SeedAgent {
+  script?: FakeAgentScript;
+  registryId?: string;
+  defaults?: Record<string, string | boolean>;
 }
 
 export interface OrchestratorHarnessOptions {
@@ -68,10 +79,12 @@ export interface OrchestratorHarnessOptions {
 
 function watch<S, E>(channel: Orchestrator["agentView"] | Orchestrator["settings"]): WatchedView<S, E> {
   const sent: E[] = [];
+  let snapshots = 0;
   channel.attach({
     postMessage: (message: unknown) => {
       const msg = message as HostToView<S, E>;
       if (msg.kind === "patch") sent.push(...msg.events);
+      if (msg.kind === "snapshot") snapshots++;
       return Promise.resolve(true);
     },
   });
@@ -81,6 +94,7 @@ function watch<S, E>(channel: Orchestrator["agentView"] | Orchestrator["settings
       return [...sent];
     },
     state: () => channel.current as S,
+    snapshots: () => snapshots,
   };
 }
 
@@ -150,12 +164,14 @@ export function orchestratorHarness(cwd: string, opts: OrchestratorHarnessOption
     nullLogger,
   );
   // Its startup runs on from the constructor; the view is told when it ends.
+  // What the harness reads off the orchestrator it wraps by hand, never by
+  // a spy: a test's own spy on the same method then wraps this one.
   const started = new Promise<void>((resolve) => {
     const emit = orchestrator.agentView.emit.bind(orchestrator.agentView);
-    vi.spyOn(orchestrator.agentView, "emit").mockImplementation((...events) => {
+    orchestrator.agentView.emit = (...events) => {
       emit(...events);
       if (events.some((e) => e.kind === "startupSettled")) resolve();
-    });
+    };
   });
   atTestEnd(() => orchestrator.dispose());
   stopsAtTestEnd(orchestrator.pool);
@@ -164,17 +180,19 @@ export function orchestratorHarness(cwd: string, opts: OrchestratorHarnessOption
   const probes: OrchestratorHarness["probes"] = [];
   const probeRoot = join(paths.globalStorage, "probe") + sep;
   const newSession = orchestrator.pool.newSession.bind(orchestrator.pool);
-  vi.spyOn(orchestrator.pool, "newSession").mockImplementation(async (patchbayAgentId, sessionCwd, ...rest) => {
+  orchestrator.pool.newSession = async (patchbayAgentId, sessionCwd, ...rest) => {
     const opened = await newSession(patchbayAgentId, sessionCwd, ...rest);
     if (sessionCwd.startsWith(probeRoot)) probes.push({ patchbayAgentId, sessionId: opened.sessionId });
     return opened;
-  });
-  const seedAgent = async (patchbayAgentId: PatchbayAgentId, registryId?: string, defaults?: Record<string, string | boolean>) => {
+  };
+  const seedAgent = async (patchbayAgentId: PatchbayAgentId, { script = {}, registryId, defaults }: SeedAgent = {}) => {
+    const launch = fakeAgent(script, patchbayAgentId, cwd);
+    await orchestrator.agentEnv.set(patchbayAgentId, launch.env!);
     await orchestrator.agentConfigs.upsert({
       id: patchbayAgentId,
       name: patchbayAgentId,
-      command: process.execPath,
-      args: [],
+      command: launch.command,
+      args: [...launch.args],
       autoConnect: false,
       defaults: defaults === undefined ? {} : { options: defaults },
       registrySource: registryId === undefined ? null : { registryId, distributionKind: "npx", pinnedVersion: "1.0.0" },

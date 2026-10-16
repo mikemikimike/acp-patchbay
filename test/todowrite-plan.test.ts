@@ -4,14 +4,14 @@
 // the agent sent it. The frames are OpenCode 1.18.35's, captured live
 // (the list's JSON text trimmed from `content`/`output`; nothing reads it).
 import { beforeEach, describe, expect, it } from "vitest";
-import { FAKE_AGENT } from "./support/fake-agent";
+import { fakeAgent } from "./support/fake-agent";
 import { tempDir } from "./support/teardown";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import type { ToolCallReading } from "../src/orchestrator/extensions";
 import { createTodoWritePlanRewriter } from "../src/orchestrator/extensions/todowrite-plan";
-import { readSessionUpdate } from "../src/orchestrator/readers/session-update";
 import type { PatchbayAgentId } from "../src/shared/ids";
-import { sessionsHarness } from "./support/sessions-harness";
+import { orchestratorHarness } from "./support/orchestrator-harness";
+import { readUpdate } from "./support/read-update";
 
 const TODOS = [
   { content: "read README", status: "completed", priority: "high" },
@@ -52,7 +52,7 @@ function liveWrite(id: string, todos: unknown[], end: "completed" | "failed"): S
 function run(frames: SessionUpdate[]): ToolCallReading[][] {
   const r = createTodoWritePlanRewriter();
   return frames.map((f) => {
-    const fact = readSessionUpdate(f, () => {});
+    const fact = readUpdate(f);
     if (fact.kind !== "toolCall") throw new Error("not a tool call");
     return r.push(fact);
   });
@@ -96,7 +96,7 @@ describe("todowrite plan rewriter", () => {
   it("a write still open is released whole, once", () => {
     const r = createTodoWritePlanRewriter();
     for (const f of liveWrite("w-1", TODOS, "completed").slice(0, 2)) {
-      const fact = readSessionUpdate(f, () => {});
+      const fact = readUpdate(f);
       if (fact.kind === "toolCall") r.push(fact);
     }
     expect(r.release().map((f) => f.call.status)).toEqual(["pending", "in_progress"]);
@@ -120,33 +120,27 @@ beforeEach(async () => {
 
 describe("todowrite plan, end to end", () => {
   it("the plan chip holds the stored list, the transcript only the write that failed — live, and replayed by a reload", async () => {
-    const h = sessionsHarness(cwd);
+    const h = orchestratorHarness(cwd);
+    const { pool, sessions, sessionGates: gates } = h.orchestrator;
     const agent = "opencode-like" as PatchbayAgentId;
     const turn = [
       ...liveWrite("w-1", TODOS, "completed"),
       ...liveWrite("w-2", [{ content: "never stored", status: "pending", priority: "low" }], "failed"),
       { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Done." } },
     ] satisfies SessionUpdate[];
-    await h.pool.connect({
-      patchbayAgentId: agent,
-      name: "Fake Agent",
-      command: process.execPath,
-      args: [FAKE_AGENT],
-      env: { FAKE_AGENT_SCRIPT: JSON.stringify({ declare: { loadSession: true }, turn: turn.map((update) => ({ type: "update", update })) }) },
-      cwd,
-    });
-    const id = await h.sessions.createSession(agent, "Fake Agent", cwd);
-    await h.gates.prompt(id, { text: "go" });
+    await pool.connect(fakeAgent({ declare: { loadSession: true }, turn: turn.map((update) => ({ type: "update", update })) }, agent, cwd));
+    const id = await sessions.createSession(agent, "Fake Agent", cwd);
+    await gates.prompt(id, { text: "go" });
 
     const seen = () => ({
-      plan: h.state().activePlan[id],
-      calls: (h.state().transcripts[id] ?? []).flatMap((b) => (b.kind === "toolCall" ? [[b.id, b.status]] : [])),
+      plan: h.agentView.state().activePlan[id],
+      calls: (h.agentView.state().transcripts[id] ?? []).flatMap((b) => (b.kind === "toolCall" ? [[b.id, b.status]] : [])),
     });
     const expected = { plan: TODOS, calls: [["w-2", "failed"]] };
     expect(seen()).toEqual(expected);
 
-    await h.gates.reload(id);
+    await gates.reload(id);
     expect(seen()).toEqual(expected);
-    await h.pool.stop(agent);
+    await pool.stop(agent);
   });
 });

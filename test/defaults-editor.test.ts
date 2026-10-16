@@ -65,9 +65,9 @@ async function harness(opts: { defaults?: Record<string, KnobSeed>; latched?: st
   const h = orchestratorHarness(cwd);
   const o = h.orchestrator;
   for (const [patchbayAgentId, seed] of Object.entries(opts.defaults ?? {})) {
-    await h.seedAgent(patchbayAgentId as PatchbayAgentId, undefined, seed);
+    await h.seedAgent(patchbayAgentId as PatchbayAgentId, { defaults: seed });
   }
-  if (opts.latched !== undefined) await h.seedAgent(opts.latched as PatchbayAgentId, "auggie");
+  if (opts.latched !== undefined) await h.seedAgent(opts.latched as PatchbayAgentId, { registryId: "auggie" });
   const events = h.settings.events;
   /** The latest surface published for an agent. */
   const lastView = (patchbayAgentId: PatchbayAgentId) => {

@@ -185,7 +185,7 @@ export class Orchestrator {
   readonly preferences: PreferencesStore;
   readonly composerKnobs: ComposerKnobsStore;
   readonly sessionContinuity: SessionContinuityStore;
-  private readonly sessionFiles: SessionFilesStore;
+  readonly sessionFiles: SessionFilesStore;
   /** The updates already announced this window ("patchbayAgentId@version") — each
    * newer version is told once. */
   readonly announcedUpdates = new Set<string>();
@@ -628,12 +628,10 @@ export class Orchestrator {
         failed: (context, err) => this.logCatch(context)(err),
         agentSettled: (patchbayAgentId) => this.gates.settled(patchbayAgentId),
       },
-      {
-        // Read fresh every sweep (store-truth) — 0 in Preferences disables.
-        idleCloseMs: () => {
-          const minutes = this.preferences.get().idleCloseMinutes;
-          return minutes <= 0 ? null : minutes * 60_000;
-        },
+      // Read fresh every sweep (store-truth) — 0 in Preferences disables.
+      () => {
+        const minutes = this.preferences.get().idleCloseMinutes;
+        return minutes <= 0 ? null : minutes * 60_000;
       },
     );
     this.capabilityTracker = new CapabilityTracker(
@@ -998,6 +996,12 @@ export class Orchestrator {
     await Promise.all([this.gates.stopAll(), this.sessionGates.endAll(), this.mcpServerGates.endAll()]);
   }
 
+  /** Settles once every list sync a connect started has run, however it
+   * ended. */
+  async listsSynced(): Promise<void> {
+    await Promise.allSettled([...this.pendingSyncs.values()]);
+  }
+
   /** Reload continuity's third rung (flag → list → pointer): return to the
    * session that was open when the window went down. One rule, found or
    * not: the pointer (an agent and its id for the session) is looked up in
@@ -1012,7 +1016,7 @@ export class Orchestrator {
    * spawns a process the startup rules didn't start. */
   async restoreLastActiveSession(): Promise<void> {
     if (!this.lastActiveSession.stored()) return;
-    await Promise.allSettled([...this.pendingSyncs.values()]);
+    await this.listsSynced();
     const pointer = await this.lastActiveSession.resolve((sessionId) => this.sessions.pairsNamed(sessionId));
     if (pointer === undefined) return;
     if (this.agentView.current.activePatchbaySessionId !== null) return;
