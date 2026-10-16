@@ -1,9 +1,10 @@
 // P15 gate (mechanics half): tree-wide kill against real spawned process
 // trees, the PID-reuse guard, orphan reaping, and pool.stop's graceful
 // ladder against a SIGTERM-ignoring agent that survives stdin EOF — the
-// exact process the ladder exists for. POSIX group semantics throughout;
-// the Windows arm of killTree is taskkill (untestable here — covered by the
-// process-tree.ts implementation note, not silently assumed).
+// exact process the ladder exists for. Every process here is this Node, so
+// each platform's own arm runs: process groups and signals on POSIX,
+// taskkill /T and the CIM command line on Windows (where the ladder's
+// polite rung is already the forced one).
 import { spawn } from "node:child_process";
 import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { describe, expect, it, vi } from "vitest";
@@ -14,7 +15,12 @@ import { AgentPool } from "../src/orchestrator/pool";
 import { stubFsTerminalHooks } from "./support/stub-hooks";
 import type { PatchbayAgentId } from "../src/shared/ids";
 
-const posix = describe.skipIf(process.platform === "win32");
+/** A process of this Node that idles until killed; `marker` rides its
+ * command line, so a read of that line can tell it from any other. */
+function idler(marker: string) {
+  return spawn(process.execPath, ["-e", IDLE, marker], { stdio: "ignore", ...treeSpawnOptions });
+}
+const IDLE = "setInterval(() => {}, 1 << 30)";
 
 async function waitUntil(probe: () => boolean, what: string): Promise<void> {
   await vi.waitFor(
@@ -25,28 +31,36 @@ async function waitUntil(probe: () => boolean, what: string): Promise<void> {
   );
 }
 
-/** `sh` leader that reports its `sleep` grandchild's pid on stdout, then
- * waits — a real two-level tree. */
+/** How a grandchild is spawned to outlive its parent on its own — the
+ * case a tree kill exists for. On POSIX any child does; on Windows a Node
+ * child is held in its Node parent's job and dies with it, so it is spawned
+ * outside it — as a .cmd wrapper's node is, which nothing but taskkill /T
+ * reaches. */
+const SURVIVING_CHILD = JSON.stringify({ stdio: "ignore", detached: process.platform === "win32", windowsHide: true });
+
+/** A leader that reports its idling grandchild's pid on stdout, then
+ * idles too — a real two-level tree. */
 function spawnTree(): Promise<{ leaderPid: number; grandchildPid: number }> {
   return new Promise((resolve, reject) => {
-    const sh = spawn("sh", ["-c", "sleep 300 & echo $!; wait"], {
-      stdio: ["ignore", "pipe", "ignore"],
-      ...treeSpawnOptions,
-    });
-    sh.once("error", reject);
-    sh.stdout.setEncoding("utf8");
+    const leader = spawn(
+      process.execPath,
+      ["-e", `const c = require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(IDLE)}], ${SURVIVING_CHILD}); console.log(c.pid); ${IDLE};`],
+      { stdio: ["ignore", "pipe", "ignore"], ...treeSpawnOptions },
+    );
+    leader.once("error", reject);
+    leader.stdout.setEncoding("utf8");
     let out = "";
-    sh.stdout.on("data", (chunk: string) => {
+    leader.stdout.on("data", (chunk: string) => {
       out += chunk;
       const line = out.split("\n")[0];
       if (line !== undefined && line.trim() !== "") {
-        resolve({ leaderPid: sh.pid!, grandchildPid: Number(line.trim()) });
+        resolve({ leaderPid: leader.pid!, grandchildPid: Number(line.trim()) });
       }
     });
   });
 }
 
-posix("killTree", () => {
+describe("killTree", () => {
   it("ends the whole tree, grandchild included", async () => {
     const { leaderPid, grandchildPid } = await spawnTree();
     expect(isAlive(leaderPid)).toBe(true);
@@ -61,21 +75,21 @@ posix("killTree", () => {
   });
 });
 
-posix("commandOf", () => {
+describe("commandOf", () => {
   it("reads a live command line, and \"\" for a gone pid", async () => {
-    const child = spawn("sleep", ["300"], { stdio: "ignore", ...treeSpawnOptions });
+    const child = idler("patchbay-idler");
     await waitUntil(() => child.pid !== undefined, "spawn");
-    expect(await commandOf(child.pid!)).toContain("sleep");
+    expect(await commandOf(child.pid!)).toContain("patchbay-idler");
     killTree(child.pid!, "SIGKILL");
     await waitUntil(() => !isAlive(child.pid!), "death");
     expect(await commandOf(child.pid!)).toBe("");
   });
 });
 
-posix("reapOrphans", () => {
+describe("reapOrphans", () => {
   it("kills a live record whose command still matches; spares a mismatch (reused pid)", async () => {
-    const orphan = spawn("sleep", ["300"], { stdio: "ignore", ...treeSpawnOptions });
-    const bystander = spawn("sleep", ["301"], { stdio: "ignore", ...treeSpawnOptions });
+    const orphan = idler("patchbay-orphan");
+    const bystander = idler("patchbay-bystander");
     await waitUntil(() => orphan.pid !== undefined && bystander.pid !== undefined, "spawn");
     const records = [
       { pid: orphan.pid!, command: await commandOf(orphan.pid!) }, // honest record
@@ -101,7 +115,7 @@ posix("reapOrphans", () => {
 const STUBBORN_AGENT = `
 process.on("SIGTERM", () => {});
 const { spawn } = require("node:child_process");
-const grandchild = spawn("sleep", ["300"]);
+const grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1 << 30)"], ${SURVIVING_CHILD});
 console.error("grandchild " + grandchild.pid);
 let buf = "";
 process.stdin.setEncoding("utf8");
@@ -130,7 +144,7 @@ process.stdin.on("end", () => {});
 setInterval(() => {}, 1 << 30);
 `;
 
-posix("pool.stop ladder", () => {
+describe("pool.stop ladder", () => {
   it("a SIGTERM-ignoring, EOF-surviving agent still ends up dead — tree and all — and reads \"stopped\"", async () => {
     const statuses: string[] = [];
     const pool = new AgentPool({
