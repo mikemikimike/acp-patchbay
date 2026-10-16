@@ -121,7 +121,7 @@ describe("binary digests", () => {
     expect(resolveDistribution(binaryAgent("1.0.0"))).toMatchObject({ kind: "binary", sha256: null });
   });
 
-  it("a malformed digest still parses — one vendor's bad field never fails the registry", () => {
+  it("a malformed digest still parses — a bad field never hides its agent", () => {
     const raw = { ...binaryAgent("1.0.0"), distribution: { binary: { "linux-x86_64": { archive: "https://x/a", cmd: "./a", sha256: "not-a-digest" } } } };
     expect(registryAgentSchema.safeParse(raw).success).toBe(true);
   });
@@ -246,6 +246,56 @@ describe("AcpRegistryStore", () => {
     await store.read("settings");
     await loading;
     expect(store.current().agents.map((a) => a.id)).toEqual(["bin-agent"]);
+  });
+
+  // The registry is many vendors' entries in one file: each is read on its
+  // own, so one that doesn't fit drops itself — named, with why — and never
+  // its neighbours (#110).
+  const unreadable = {
+    ...payload,
+    agents: [
+      { id: "no-version", name: "No Version", distribution: {} },
+      ...payload.agents,
+      { name: "No Id", version: "1.0.0", distribution: {} },
+      null,
+    ],
+  };
+
+  it("an entry that doesn't fit is skipped and named; every other entry stays current", async () => {
+    await fresh();
+    vi.stubGlobal("fetch", vi.fn(async () => json(unreadable)));
+    const { log, lines } = warnings();
+    const store = new AcpRegistryStore(dir, () => {}, log);
+    expect(await store.read("manual")).toMatchObject({ ok: true });
+    expect(store.current().agents.map((a) => a.id)).toEqual(["bin-agent"]);
+    expect(lines).toEqual([
+      'ACP registry: skipped the entry "no-version" — version: Invalid input: expected string, received undefined',
+      "ACP registry: skipped entry 3 — id: Invalid input: expected string, received undefined",
+      "ACP registry: skipped entry 4 — Invalid input: expected object, received null",
+    ]);
+  });
+
+  it("the cached copy is read entry by entry too", async () => {
+    await fresh();
+    vi.stubGlobal("fetch", vi.fn(async () => json(unreadable)));
+    await new AcpRegistryStore(dir, () => {}).read("manual");
+    const { log, lines } = warnings();
+    const reader = new AcpRegistryStore(dir, () => {}, log);
+    await reader.load();
+    expect(reader.current().agents.map((a) => a.id)).toEqual(["bin-agent"]);
+    expect(lines).toHaveLength(3);
+  });
+
+  it("a file that isn't a registry at all still fails the read, and the copy it has stays", async () => {
+    await fresh();
+    vi.stubGlobal("fetch", vi.fn(async () => json(payload)));
+    const { log, lines } = warnings();
+    const store = new AcpRegistryStore(dir, () => {}, log);
+    await store.read("manual");
+    vi.stubGlobal("fetch", vi.fn(async () => json({ version: "1.0.0", agents: "none" })));
+    expect(await store.read("manual")).toMatchObject({ ok: false, reason: expect.stringContaining("unexpected shape") });
+    expect(store.current().agents.map((a) => a.id)).toEqual(["bin-agent"]);
+    expect(lines).toHaveLength(1);
   });
 
   it("a cache in an older shape reads as none — the next read fetches the registry whole", async () => {

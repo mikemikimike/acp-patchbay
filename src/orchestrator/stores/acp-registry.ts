@@ -45,9 +45,9 @@ const binaryTargetSchema = z.object({
   cmd: z.string().min(1),
   args: z.array(z.string()).default([]),
   env: envSchema,
-  // The archive's SHA-256, optional per target. Read as any string: one
-  // vendor's malformed digest must not fail the whole registry's parse —
-  // the installer judges the format, and refuses to install on a bad one.
+  // The archive's SHA-256, optional per target. Read as any string: a
+  // malformed digest must not hide its agent — the installer judges the
+  // format, and refuses to install on a bad one.
   sha256: z.string().optional(),
 });
 
@@ -71,10 +71,43 @@ export const registryAgentSchema = z.object({
 });
 export type RegistryAgent = z.infer<typeof registryAgentSchema>;
 
+/** What names an entry that can't be read whole. */
+const entryIdSchema = registryAgentSchema.pick({ id: true });
+
+/** The file's own shape. Its entries are many vendors' writing, each read
+ * on its own by `readRegistry`: one that doesn't fit is one agent gone,
+ * never the registry. */
 const registryFileSchema = z.object({
   version: z.string(),
-  agents: z.array(registryAgentSchema),
+  agents: z.array(z.unknown()),
 });
+
+interface RegistryReading {
+  agents: RegistryAgent[];
+  /** One line per entry left out: which, and why. */
+  skipped: string[];
+}
+
+/** The registry's agents as `raw` lists them, entry by entry; null when
+ * `raw` isn't a registry file at all. */
+function readRegistry(raw: unknown): RegistryReading | null {
+  const file = registryFileSchema.safeParse(raw);
+  if (!file.success) return null;
+  const reading: RegistryReading = { agents: [], skipped: [] };
+  file.data.agents.forEach((entry, i) => {
+    const agent = registryAgentSchema.safeParse(entry);
+    if (agent.success) {
+      reading.agents.push(agent.data);
+      return;
+    }
+    const id = entryIdSchema.safeParse(entry);
+    const which = id.success ? `the entry ${JSON.stringify(id.data.id)}` : `entry ${i + 1}`;
+    const issue = agent.error.issues[0];
+    const where = issue === undefined || issue.path.length === 0 ? "" : `${issue.path.join(".")}: `;
+    reading.skipped.push(`skipped ${which} — ${where}${issue?.message ?? "invalid"}`);
+  });
+  return reading;
+}
 
 export interface AcpRegistryData {
   /** "" = never successfully fetched — cold start with no cache and no network. */
@@ -276,14 +309,14 @@ export class AcpRegistryStore {
         this.onUpdated(); // confirmed current: "last checked" moves with it
         return { ok: true, at };
       }
-      const parsed = registryFileSchema.safeParse(read.value.json);
-      if (!parsed.success) return fail(`unexpected shape (${parsed.error.issues[0]?.message ?? "invalid"})`);
-      this.iconCache = await fetchIcons(parsed.data.agents, this.iconCache, this.log);
+      const reading = readRegistry(read.value.json);
+      if (reading === null) return fail("unexpected shape (not a registry file)");
+      this.iconCache = await fetchIcons(reading.agents, this.iconCache, this.log);
       this.raw = read.value.json;
       this.etag = read.value.etag;
-      this.cache = { fetchedAt: at, agents: parsed.data.agents, icons: iconUris(this.iconCache) };
+      this.adopt(reading, at);
       await this.writeCacheFile();
-      this.log.info(`ACP registry: fetched — ${count(parsed.data.agents.length, "agent")} (${moment})`);
+      this.log.info(`ACP registry: fetched — ${count(reading.agents.length, "agent")} (${moment})`);
       this.onUpdated();
       return { ok: true, at };
     } catch (err) {
@@ -306,8 +339,8 @@ export class AcpRegistryStore {
       return; // no cache yet (a first run, storage cleared) or a torn write
     }
     const file = cacheFileSchema.safeParse(json);
-    const registry = file.success ? registryFileSchema.safeParse(file.data.raw) : null;
-    if (!file.success || registry === null || !registry.success) {
+    const reading = file.success ? readRegistry(file.data.raw) : null;
+    if (!file.success || reading === null) {
       this.log.info("ACP registry: cached copy is in an older shape — fetching it whole");
       return;
     }
@@ -315,7 +348,14 @@ export class AcpRegistryStore {
     this.raw = file.data.raw;
     this.etag = file.data.etag;
     this.iconCache = file.data.icons;
-    this.cache = { fetchedAt: file.data.fetchedAt, agents: registry.data.agents, icons: iconUris(this.iconCache) };
+    this.adopt(reading, file.data.fetchedAt);
+  }
+
+  /** `reading` becomes what the store holds — and what it left out is said,
+   * once per copy taken. */
+  private adopt(reading: RegistryReading, fetchedAt: string): void {
+    this.cache = { fetchedAt, agents: reading.agents, icons: iconUris(this.iconCache) };
+    for (const line of reading.skipped) this.log.warn(`ACP registry: ${line}`);
   }
 
   private async writeCacheFile(): Promise<void> {

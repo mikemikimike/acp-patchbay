@@ -1100,7 +1100,10 @@ mechanism — MCP servers routed to agents:
   confirmed. The disk cache holds
   the registry *as served*, never patchbay's parse of it: a build that
   reads more of the format sees everything, where a parsed copy would keep
-  what an older build dropped. A failed read is logged with its reason and
+  what an older build dropped. Each agent entry is read on its own (many
+  vendors write the file): one that doesn't fit is left out and named in
+  the log with why, its neighbours read as ever; only a file that isn't a
+  registry at all fails the read. A failed read is logged with its reason and
   the store keeps its copy — it never passes a failure off as current.
   Every network read goes through one module (`net.ts`): one outcome
   vocabulary (body, unchanged, or a failure that says whether it was a
