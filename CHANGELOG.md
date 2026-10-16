@@ -28,6 +28,13 @@
   the bubble's color — about 1.2:1 in Light 2026, effectively invisible —
   and a chip in your message could take the page's background. Everything
   in your message now takes the bubble's own colors. (#107)
+- **One bad entry in the ACP registry no longer hides every agent.** The
+  registry was read as one piece, so a single vendor's entry that didn't
+  fit failed the whole read: patchbay kept its last copy, and every other
+  agent's new versions and new agents stayed unseen — on a fresh install,
+  the agent list stayed empty. Each entry is now read on its own; one that
+  can't be read is left out and named in the Output channel with why.
+  (#110)
 - **Permissions is now two pages: Edits and Commands.** Where file writes
   are approved and which commands are allowed are different things that
   grow apart, so each has its own page under Trust. A long command-rules
