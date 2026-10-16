@@ -5,6 +5,7 @@
 // AskUserQuestion into a `oneOf` single-select (plus a free-text "Other"),
 // or an array of `anyOf` options when the question is multi-select.
 import { beforeEach, describe, expect, it } from "vitest";
+import { assertKind } from "./support/assert-kind";
 import { orchestratorHarness } from "./support/orchestrator-harness";
 import { fakeAgent } from "./support/fake-agent";
 import { tempDir } from "./support/teardown";
@@ -419,7 +420,7 @@ describe("url elicitation on the wire", () => {
 
     const card = elicitationCard(h.state().transcripts[patchbaySessionId])!;
     expect(card.resolution).toEqual({ outcome: "withdrawn" });
-    expect(card.kind === "elicitation" && card.linkState).toBeFalsy();
+    expect(assertKind(card, "elicitation").linkState).toBeUndefined();
     const echoed = h.state().transcripts[patchbaySessionId]!.filter((b) => b.kind === "text").at(-1);
     expect(echoed?.kind === "text" && echoed.text).toBe("elicitation: withdrawn -32800");
     // the user's late click is a no-op: nothing opens for a withdrawn question
