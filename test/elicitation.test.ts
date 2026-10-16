@@ -288,6 +288,21 @@ function elicitationCard(blocks: readonly ChatBlock[] | undefined) {
 }
 
 describe("elicitation on the wire", () => {
+  // The spec has two modes; one patchbay can't present is the agent's
+  // mistake to hear about, never a card the user can't answer.
+  it("an elicitation in a mode patchbay doesn't present is answered invalid params, and nothing is shown", async () => {
+    const h = wireHarness();
+    await h.pool.connect(spec({ turn: [{ type: "elicitRaw", params: { mode: "telepathy", message: "Think of a number" } }] }, "e0" as PatchbayAgentId));
+    const patchbaySessionId = await h.sessions.createSession("e0" as PatchbayAgentId, "Fake Agent", dir);
+    await h.gates.prompt(patchbaySessionId, { text: "go" });
+
+    const blocks = h.state().transcripts[patchbaySessionId]!;
+    const said = blocks.filter((b) => b.kind === "text").at(-1);
+    expect(assertKind(said, "text").text).toBe("elicitation: error -32602");
+    expect(elicitationCard(blocks)).toBeUndefined();
+    await h.pool.stop("e0" as PatchbayAgentId);
+  });
+
   it("the agent's question becomes a card, and the user's answer is what the agent receives", async () => {
     const h = wireHarness();
     await h.pool.connect(

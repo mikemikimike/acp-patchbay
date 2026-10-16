@@ -87,6 +87,11 @@ export type TurnStep =
    * finishes before the user answers — reports it done right behind the
    * request, with no pause, so the notice can overtake it; then withdraws. */
   | { type: "elicitUrl"; url: string; elicitationId: string; then?: "complete" | "withdraw" | "finishFirst" }
+  /** Asks an elicitation with `params` exactly as given, beside the
+   * session's id — a request no conforming agent sends, to see what the
+   * client answers: `elicitation: answered <action>` or `elicitation:
+   * error <code>`. */
+  | { type: "elicitRaw"; params: Record<string, unknown> }
   /** Calls `tool` on the session's MCP server named `server` — absent, the
    * first one the session was handed. */
   | { type: "callMcpTool"; tool: string; args?: Record<string, unknown>; server?: string }
@@ -492,6 +497,16 @@ async function runTurn(
             text: `elicitation: ${response.action} ${JSON.stringify((response as { content?: unknown }).content ?? null)}`,
           },
         });
+        break;
+      }
+      case "elicitRaw": {
+        const outcome = await cx
+          .request(acp.methods.client.elicitation.create, { sessionId, ...step.params } as unknown as acp.CreateElicitationRequest)
+          .then(
+            (r) => `answered ${r.action}`,
+            (err: unknown) => `error ${(err as { code?: number }).code ?? "?"}`,
+          );
+        await emitUpdate(cx, sessionId, cwd, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `elicitation: ${outcome}` } });
         break;
       }
       case "elicitUrl": {
