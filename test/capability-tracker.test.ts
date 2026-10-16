@@ -3,7 +3,7 @@
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fakeAgent } from "./support/fake-agent";
+import { fakeAgent, fakeConfig } from "./support/fake-agent";
 import { tempDir } from "./support/teardown";
 import { SETTLE, waitFor } from "./support/wait-for";
 import type { LaunchSpec } from "../src/orchestrator/pool";
@@ -24,7 +24,7 @@ const spec = (script: FakeAgentScript, patchbayAgentId: string): LaunchSpec => f
 const harness = () => {
   const h = orchestratorHarness(cwd);
   const { pool, capabilityTracker: tracker, agents } = h.orchestrator;
-  return { pool, tracker, agents, probes: h.probes, seedAgent: h.seedAgent, state: h.agentView.state, paths: h.paths };
+  return { pool, tracker, agents, probes: h.probes, saveAgent: h.saveAgent, state: h.agentView.state, paths: h.paths };
 };
 
 
@@ -173,10 +173,10 @@ describe("CapabilityTracker", () => {
   });
 
   it("a latched agent's probe waits for the first real session, and the trigger spends once (first-session-mcp-latch)", async () => {
-    const { pool, tracker, agents, probes, seedAgent } = harness();
+    const { pool, tracker, agents, probes, saveAgent } = harness();
     // The latch's curated entry names the registry entry "auggie"; the agent
     // added from it has an id of its own.
-    await seedAgent("latched" as PatchbayAgentId, { registryId: "auggie" });
+    await saveAgent(fakeConfig("latched" as PatchbayAgentId, {}, { registrySource: { registryId: "auggie", distributionKind: "npx", pinnedVersion: "1.0.0" } }));
     // A probe's first step asks for its root, in the same call that decides
     // to run it — so a probe that started is counted where it was decided.
     const started = vi.spyOn(agents, "probeRoot");
@@ -226,8 +226,8 @@ describe("CapabilityTracker", () => {
   });
 
   it("auth_required surfaces as needsAuth on the row, not a check failure", async () => {
-    const { pool, tracker, state, seedAgent } = harness();
-    await seedAgent("needsauth" as PatchbayAgentId);
+    const { pool, tracker, state, saveAgent } = harness();
+    await saveAgent(fakeConfig("needsauth" as PatchbayAgentId, {}));
     await pool.connect(
       spec(
         {
@@ -245,8 +245,8 @@ describe("CapabilityTracker", () => {
   });
 
   it("authenticate() clears needsAuth and marks auth used once the retry succeeds", async () => {
-    const { pool, tracker, state, seedAgent } = harness();
-    await seedAgent("login" as PatchbayAgentId);
+    const { pool, tracker, state, saveAgent } = harness();
+    await saveAgent(fakeConfig("login" as PatchbayAgentId, {}));
     await pool.connect(
       spec(
         {

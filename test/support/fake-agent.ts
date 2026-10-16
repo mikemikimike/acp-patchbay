@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { LaunchSpec } from "../../src/orchestrator/pool";
 import type { PatchbayAgentId } from "../../src/shared/ids";
+import type { AgentConfigView } from "../../src/shared/protocol";
 import type { FakeAgentScript } from "../fake-agent/main";
 import { storeFile } from "../fake-agent/store";
 import type { PackageSource } from "./npm-registry";
@@ -22,6 +23,23 @@ export function fakeAgent(script: FakeAgentScript, patchbayAgentId: string, cwd:
     args: [FAKE_AGENT],
     env: { FAKE_AGENT_SCRIPT: JSON.stringify(script) },
     cwd,
+  };
+}
+
+/** The fake agent as a user saves it — a config playing `script`, under
+ * a fixed id so a test can name it; `over` sets any other field. */
+export function fakeConfig(patchbayAgentId: string, script: FakeAgentScript, over: Partial<AgentConfigView> = {}): AgentConfigView {
+  return {
+    id: patchbayAgentId as PatchbayAgentId,
+    name: `Fake ${patchbayAgentId}`,
+    command: process.execPath,
+    args: [FAKE_AGENT],
+    env: { FAKE_AGENT_SCRIPT: JSON.stringify(script) },
+    autoConnect: false,
+    defaults: {},
+    registrySource: null,
+    lastSeenVersion: null,
+    ...over,
   };
 }
 

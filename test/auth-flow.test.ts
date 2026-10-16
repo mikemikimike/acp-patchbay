@@ -7,7 +7,7 @@
 import { existsSync } from "node:fs";
 import { methods } from "@agentclientprotocol/sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fakeAgent, fakeSessionRecord } from "./support/fake-agent";
+import { fakeAgent, fakeConfig, fakeSessionRecord } from "./support/fake-agent";
 import { tempDir } from "./support/teardown";
 import { SETTLE, waitFor } from "./support/wait-for";
 import { LOGGED_OUT_REASON, type AuthLock } from "../src/orchestrator/auth-evidence";
@@ -68,14 +68,14 @@ function harness() {
   };
   const state = h.agentView.state;
   const row = (patchbayAgentId: PatchbayAgentId) => state().agents.find((a) => a.id === patchbayAgentId);
-  return { pool, tracker, agents, seedAgent: h.seedAgent, state, row, locks, authFlips };
+  return { pool, tracker, agents, saveAgent: h.saveAgent, state, row, locks, authFlips };
 }
 
 
 describe("auth flows on the wire", () => {
   it("strict agent: the probe's -32000 raises a lock carrying session/new; authenticate clears it and marks auth used", async () => {
     const h = harness();
-    await h.seedAgent("strict" as PatchbayAgentId);
+    await h.saveAgent(fakeConfig("strict" as PatchbayAgentId, {}));
     await h.pool.connect(spec(STRICT, "strict" as PatchbayAgentId));
 
     const lock = await waitFor(() => h.locks.get("strict" as PatchbayAgentId));
@@ -95,7 +95,7 @@ describe("auth flows on the wire", () => {
 
   it("a reconnect onto a still-locked-out agent re-witnesses the same fact silently — no resolve, no duplicate raise", async () => {
     const h = harness();
-    await h.seedAgent("relock" as PatchbayAgentId);
+    await h.saveAgent(fakeConfig("relock" as PatchbayAgentId, {}));
     await h.pool.connect(spec(STRICT, "relock" as PatchbayAgentId));
     await waitFor(() => h.locks.get("relock" as PatchbayAgentId));
     await h.pool.stop("relock" as PatchbayAgentId);
@@ -127,7 +127,7 @@ describe("auth flows on the wire", () => {
 
   it("a witnessed logout survives a lazy-auth agent's probe successes; only a completed prompt clears it", async () => {
     const h = harness();
-    await h.seedAgent("lazy" as PatchbayAgentId);
+    await h.saveAgent(fakeConfig("lazy" as PatchbayAgentId, {}));
     // A wire-driven logout can't be produced here — the fixture has no
     // logout handler — so the lock is seeded the way the persisted store
     // restores one across a reload. Every fact below is a real wire fact.
@@ -163,7 +163,7 @@ describe("auth flows on the wire", () => {
   // started under the lock, is real evidence and clears.
   it("a prompt in flight when the lock is raised does not clear it on completion; one started after it does", async () => {
     const h = harness();
-    await h.seedAgent("lazy" as PatchbayAgentId);
+    await h.saveAgent(fakeConfig("lazy" as PatchbayAgentId, {}));
     await h.pool.connect(spec({ ...LAZY, stepDelayMs: 300, turn: [{ type: "chunk", text: "slow" }] }, "lazy" as PatchbayAgentId));
     const { sessionId } = await h.pool.newSession("lazy" as PatchbayAgentId, cwd);
 
@@ -184,7 +184,7 @@ describe("auth flows on the wire", () => {
 
   it("an agent healed out-of-band clears a session/new lock on the reconnect probe — same-method contradiction, by design", async () => {
     const h = harness();
-    await h.seedAgent("healed" as PatchbayAgentId);
+    await h.saveAgent(fakeConfig("healed" as PatchbayAgentId, {}));
     await h.pool.connect(spec(STRICT, "healed" as PatchbayAgentId));
     await waitFor(() => h.locks.get("healed" as PatchbayAgentId));
     await h.pool.stop("healed" as PatchbayAgentId);
@@ -205,7 +205,7 @@ describe("auth flows on the wire", () => {
 
   it("a mid-turn credential failure rejected as an internal error with an auth-classified errorKind locks like -32000 (turn-auth-failure door)", async () => {
     const h = harness();
-    await h.seedAgent("expired" as PatchbayAgentId);
+    await h.saveAgent(fakeConfig("expired" as PatchbayAgentId, {}));
     const EXPIRED = "Failed to authenticate: OAuth session expired and could not be refreshed";
     // The claude-agent-acp shape for an expired OAuth session: lazy auth
     // passes connect, probe and session/new; the prompt is what fails —

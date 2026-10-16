@@ -13,9 +13,7 @@ import { Orchestrator, type OrchestratorPorts } from "../../src/orchestrator/orc
 import { MemoryKV } from "../../src/orchestrator/stores/kv";
 import { MemorySecrets } from "../../src/orchestrator/stores/mcp-server-tokens";
 import type { PatchbayAgentId } from "../../src/shared/ids";
-import type { AgentViewEvent, AgentViewState, HostToView, SettingsEvent, SettingsState } from "../../src/shared/protocol";
-import type { FakeAgentScript } from "../fake-agent/main";
-import { fakeAgent } from "./fake-agent";
+import type { AgentConfigView, AgentViewEvent, AgentViewState, HostToView, SettingsEvent, SettingsState } from "../../src/shared/protocol";
 import { atTestEnd, stopsAtTestEnd } from "./teardown";
 
 /** One view as a webview sees it: every patch it was sent, in order. */
@@ -46,18 +44,10 @@ export interface OrchestratorHarness {
   /** Every free-check probe the orchestrator opened, in order: the
    * session/new each agent was sent in its probe root. */
   probes: { patchbayAgentId: PatchbayAgentId; sessionId: string }[];
-  /** A saved agent — and so a row in the views: the orchestrator acts only
-   * on agents that exist. It launches the fake agent playing `script`, so
-   * a test may connect it through the pool directly or the window's own
-   * Connect. `registryId` saves it as added from that registry entry;
-   * `defaults` are its knobs' saved defaults. */
-  seedAgent(patchbayAgentId: PatchbayAgentId, opts?: SeedAgent): Promise<void>;
-}
-
-export interface SeedAgent {
-  script?: FakeAgentScript;
-  registryId?: string;
-  defaults?: Record<string, string | boolean>;
+  /** Saves an agent as the user's Settings save does — its config, its
+   * env in secret storage — and so a row in the views: the orchestrator
+   * acts only on agents that exist. */
+  saveAgent(config: AgentConfigView): Promise<void>;
 }
 
 export interface OrchestratorHarnessOptions {
@@ -185,20 +175,19 @@ export function orchestratorHarness(cwd: string, opts: OrchestratorHarnessOption
     if (sessionCwd.startsWith(probeRoot)) probes.push({ patchbayAgentId, sessionId: opened.sessionId });
     return opened;
   };
-  const seedAgent = async (patchbayAgentId: PatchbayAgentId, { script = {}, registryId, defaults }: SeedAgent = {}) => {
-    const launch = fakeAgent(script, patchbayAgentId, cwd);
-    await orchestrator.agentEnv.set(patchbayAgentId, launch.env!);
+  const saveAgent = async (config: AgentConfigView) => {
+    await orchestrator.agentEnv.set(config.id, { ...config.env });
     await orchestrator.agentConfigs.upsert({
-      id: patchbayAgentId,
-      name: patchbayAgentId,
-      command: launch.command,
-      args: [...launch.args],
-      autoConnect: false,
-      defaults: defaults === undefined ? {} : { options: defaults },
-      registrySource: registryId === undefined ? null : { registryId, distributionKind: "npx", pinnedVersion: "1.0.0" },
-      lastSeenVersion: null,
+      id: config.id,
+      name: config.name,
+      command: config.command,
+      args: [...config.args],
+      autoConnect: config.autoConnect,
+      defaults: { options: { ...config.defaults } },
+      registrySource: config.registrySource,
+      lastSeenVersion: config.lastSeenVersion,
     });
-    orchestrator.agents.publish(patchbayAgentId);
+    orchestrator.agents.publish(config.id);
   };
   return {
     orchestrator,
@@ -210,6 +199,6 @@ export function orchestratorHarness(cwd: string, opts: OrchestratorHarnessOption
     pinned,
     paths,
     probes,
-    seedAgent,
+    saveAgent,
   };
 }

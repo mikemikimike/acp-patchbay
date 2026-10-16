@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { orchestratorHarness } from "./support/orchestrator-harness";
 import { SETTLE, waitFor } from "./support/wait-for";
-import { fakeAgent } from "./support/fake-agent";
+import { fakeAgent, fakeConfig } from "./support/fake-agent";
 import { tempDir } from "./support/teardown";
 import { type LaunchSpec } from "../src/orchestrator/pool";
 import type { KnobSeed } from "../src/shared/protocol";
@@ -65,9 +65,9 @@ async function harness(opts: { defaults?: Record<string, KnobSeed>; latched?: st
   const h = orchestratorHarness(cwd);
   const o = h.orchestrator;
   for (const [patchbayAgentId, seed] of Object.entries(opts.defaults ?? {})) {
-    await h.seedAgent(patchbayAgentId as PatchbayAgentId, { defaults: seed });
+    await h.saveAgent(fakeConfig(patchbayAgentId as PatchbayAgentId, {}, { defaults: seed }));
   }
-  if (opts.latched !== undefined) await h.seedAgent(opts.latched as PatchbayAgentId, { registryId: "auggie" });
+  if (opts.latched !== undefined) await h.saveAgent(fakeConfig(opts.latched as PatchbayAgentId, {}, { registrySource: { registryId: "auggie", distributionKind: "npx", pinnedVersion: "1.0.0" } }));
   const events = h.settings.events;
   /** The latest surface published for an agent. */
   const lastView = (patchbayAgentId: PatchbayAgentId) => {

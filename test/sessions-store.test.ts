@@ -8,7 +8,7 @@ import { basename, join, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { echoed } from "./support/transcript";
-import { fakeAgent, fakeSessionRecord, heldFakeSession } from "./support/fake-agent";
+import { fakeAgent, fakeConfig, fakeSessionRecord, heldFakeSession } from "./support/fake-agent";
 import { atTestEnd, tempDir } from "./support/teardown";
 import { SETTLE } from "./support/wait-for";
 import { assertKind } from "./support/assert-kind";
@@ -80,7 +80,7 @@ function harness(opts: Pick<OrchestratorHarnessOptions, "machineKV" | "workspace
     state: h.agentView.state,
     settings: h.settings,
     workspaceRoots: h.workspaceRoots,
-    seedAgent: h.seedAgent,
+    saveAgent: h.saveAgent,
     pinned: h.pinned,
     /** The free-check probes the window opened — sessions of its own. */
     probes: h.probes,
@@ -409,7 +409,7 @@ describe("SessionsStore", () => {
   // logged-out agent fabricated a phantom "Hi" plus an error turn.
   it("a prompt into a locked agent holds at the door and fires on release", async () => {
     const h = harness();
-    await h.seedAgent("smq3" as PatchbayAgentId);
+    await h.saveAgent(fakeConfig("smq3" as PatchbayAgentId, {}));
     logOut(h, "smq3");
     await h.connect(spec({ turn: [{ type: "chunk", text: "served" }] }, "smq3"));
     const patchbaySessionId = await h.sessions.createSession("smq3" as PatchbayAgentId, "Fake Agent", cwd);
@@ -428,7 +428,7 @@ describe("SessionsStore", () => {
 
   it("the turn-end drain holds queued words under a lock that landed mid-turn", async () => {
     const h = harness();
-    await h.seedAgent("smq4" as PatchbayAgentId);
+    await h.saveAgent(fakeConfig("smq4" as PatchbayAgentId, {}));
     await h.connect(
       spec(
         { turn: [{ type: "chunk", text: "a" }, { type: "chunk", text: "b" }], stepDelayMs: 150 },
@@ -2028,7 +2028,7 @@ describe("SessionsStore", () => {
       turn: [{ type: "chunk", text: "x" }],
     };
     const h1 = harness({ machineKV: kv });
-    await h1.seedAgent("smq6" as PatchbayAgentId);
+    await h1.saveAgent(fakeConfig("smq6" as PatchbayAgentId, {}));
     await h1.connect(spec(script, "smq6"));
     const patchbaySessionId = await h1.sessions.createSession("smq6" as PatchbayAgentId, "Fake Agent", cwd);
     await h1.gates.prompt(patchbaySessionId, { text: "real turn" }); // persists agent-side
@@ -2121,7 +2121,7 @@ describe("SessionsStore", () => {
       };
 
       for (const [patchbayAgentId, list] of [["c29-nolist" as PatchbayAgentId, false], ["c29-list" as PatchbayAgentId, true]] as const) {
-        await h.seedAgent(patchbayAgentId);
+        await h.saveAgent(fakeConfig(patchbayAgentId, {}));
         await h.connect(spec(script(list), patchbayAgentId));
         const patchbaySessionId = await stage(patchbayAgentId);
         expect(store.read(patchbayAgentId, h.sessions.sessionIdOf(patchbaySessionId)!)).toMatchObject({
@@ -2833,7 +2833,7 @@ describe("session history (list / resume / delete)", () => {
 
   it("the reaper spares a session holding words — held prompts are unfinished user work", async () => {
     const h = await reaperHarness();
-    await h.seedAgent("smq5" as PatchbayAgentId);
+    await h.saveAgent(fakeConfig("smq5" as PatchbayAgentId, {}));
     await h.connect(
       spec(
         { declare: { loadSession: true, sessionCapabilities: { close: {} } }, turn: [{ type: "chunk", text: "x" }] },
@@ -3483,7 +3483,7 @@ describe("open — one ceremony for every entrance", () => {
 
   it("pinned open hydrates the session without moving the pointer, and asks for its agent", async () => {
     const h = harness();
-    await h.seedAgent("op1" as PatchbayAgentId, { script: LOAD });
+    await h.saveAgent(fakeConfig("op1" as PatchbayAgentId, LOAD));
     await h.connect(spec(LOAD, "op1"));
     const older = await h.sessions.createSession("op1" as PatchbayAgentId, "Fake Agent", cwd);
     await h.gates.prompt(older, { text: "first" });
@@ -3502,7 +3502,7 @@ describe("open — one ceremony for every entrance", () => {
 
   it("plain open is a click: pointer, ladder, and the connect ask", async () => {
     const h = harness();
-    await h.seedAgent("op2" as PatchbayAgentId, { script: LOAD });
+    await h.saveAgent(fakeConfig("op2" as PatchbayAgentId, LOAD));
     await h.connect(spec(LOAD, "op2"));
     const patchbaySessionId = await h.sessions.createSession("op2" as PatchbayAgentId, "Fake Agent", cwd);
     await h.gates.prompt(patchbaySessionId, { text: "first" });
