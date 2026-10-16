@@ -14,6 +14,7 @@ import { NamedRecordStore } from "./global-record-store";
 import type { KV } from "./kv";
 import type { PatchbayAgentId, PatchbayMcpServerId } from "../../shared/ids";
 import { savedId } from "./saved-id";
+import { STORAGE_KEYS } from "./storage-keys";
 
 export const mcpServerSourceSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -84,7 +85,7 @@ export const mcpServerConfigSchema = z.object({
 export type McpServerConfig = z.infer<typeof mcpServerConfigSchema>;
 
 /** Under the name the records were first stored by. */
-const KEY = "acpPatchbay.integrations";
+const KEY = STORAGE_KEYS.mcpServers;
 
 /** A server's name is the key it goes to agents under: cut to what agents
  * keep, never the built-in editor server's, and never two of one. */

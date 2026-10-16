@@ -14,6 +14,7 @@ import { USED_MAY_OUTRUN_CLAIM } from "../capabilities";
 import { GlobalRecordStore } from "./global-record-store";
 import type { KV } from "./kv";
 import type { PatchbayAgentId } from "../../shared/ids";
+import { STORAGE_KEYS } from "./storage-keys";
 
 const capabilityCellSchema = z.object({
   declared: z.boolean(),
@@ -28,7 +29,7 @@ export const usedCacheEntrySchema = z.object({
 });
 export type UsedCacheEntry = z.infer<typeof usedCacheEntrySchema>;
 
-const KEY = "acpPatchbay.usedCapabilities";
+const KEY = STORAGE_KEYS.usedCapabilities;
 
 export class UsedCapabilityStore extends GlobalRecordStore<UsedCacheEntry> {
   constructor(kv: KV) {

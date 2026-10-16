@@ -9,6 +9,7 @@ import { z } from "zod";
 import { FileKV, type EnumerableKV } from "../src/orchestrator/stores/file-kv";
 import { GlobalRecordStore } from "../src/orchestrator/stores/global-record-store";
 import { MemoryKV } from "../src/orchestrator/stores/kv";
+import { STORAGE_KEYS } from "../src/orchestrator/stores/storage-keys";
 
 class EnumerableMemoryKV extends MemoryKV implements EnumerableKV {
   private known = new Set<string>();
@@ -52,9 +53,9 @@ describe("FileKV", () => {
 
   it("persists updates across instances", async () => {
     const kv = new FileKV(file);
-    await kv.update("acpPatchbay.agents", [{ id: "a1" }]);
+    await kv.update(STORAGE_KEYS.agents, [{ id: "a1" }]);
     const reloaded = new FileKV(file);
-    expect(reloaded.get("acpPatchbay.agents")).toEqual([{ id: "a1" }]);
+    expect(reloaded.get(STORAGE_KEYS.agents)).toEqual([{ id: "a1" }]);
   });
 
   it("deletes a key on update(key, undefined)", async () => {
@@ -67,21 +68,21 @@ describe("FileKV", () => {
 
   it("migrates all keys out of the source on first load, and only then", async () => {
     const source = new EnumerableMemoryKV();
-    await source.update("acpPatchbay.agents", [{ id: "a1" }]);
-    await source.update("acpPatchbay.preferences", { soundOnDone: true });
+    await source.update(STORAGE_KEYS.agents, [{ id: "a1" }]);
+    await source.update(STORAGE_KEYS.preferences, { soundOnDone: true });
 
     const kv = new FileKV(file, source);
-    expect(kv.get("acpPatchbay.agents")).toEqual([{ id: "a1" }]);
-    expect(kv.get("acpPatchbay.preferences")).toEqual({ soundOnDone: true });
+    expect(kv.get(STORAGE_KEYS.agents)).toEqual([{ id: "a1" }]);
+    expect(kv.get(STORAGE_KEYS.preferences)).toEqual({ soundOnDone: true });
     // Drained: the old home is empty afterwards — one truth.
     expect(source.keys()).toEqual([]);
-    expect(source.get("acpPatchbay.agents")).toBeUndefined();
+    expect(source.get(STORAGE_KEYS.agents)).toBeUndefined();
 
     // A repopulated source is ignored once the file exists.
-    await source.update("acpPatchbay.agents", [{ id: "stale" }]);
+    await source.update(STORAGE_KEYS.agents, [{ id: "stale" }]);
     const reloaded = new FileKV(file, source);
-    expect(reloaded.get("acpPatchbay.agents")).toEqual([{ id: "a1" }]);
-    expect(source.keys()).toEqual(["acpPatchbay.agents"]);
+    expect(reloaded.get(STORAGE_KEYS.agents)).toEqual([{ id: "a1" }]);
+    expect(source.keys()).toEqual([STORAGE_KEYS.agents]);
   });
 
   it("quarantines a corrupt file and starts fresh", async () => {

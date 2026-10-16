@@ -22,6 +22,7 @@ import type { McpImportReviewView, McpServerConnectView, McpServerWork, Settings
 import type { OAuthUserAgent } from "../src/orchestrator/mcp-oauth";
 import { FakeOAuthProvider, fakeUserAgent } from "./support/fake-oauth-provider";
 import type { PatchbayAgentId, PatchbayMcpServerId } from "../src/shared/ids";
+import { SECRET_FAMILIES, STORAGE_KEYS } from "../src/orchestrator/stores/storage-keys";
 
 let provider: FakeOAuthProvider;
 
@@ -72,7 +73,7 @@ function harness(catalog: CatalogEntry[], opts: { userAgent?: OAuthUserAgent } =
   const store = secrets.store.bind(secrets);
   secrets.store = (key, value) => (storedKeys.push(key), store(key, value));
   const tokens = new McpServerTokenStore(secrets);
-  const envStore = new SecretEnvStore(secrets, "acpPatchbay.integration");
+  const envStore = new SecretEnvStore(secrets, SECRET_FAMILIES.mcpServer);
   // Probes are faked — the real one does network/spawn (mcp-probe.ts).
   const probed: ProbeTarget[] = [];
   let probeFn: ProbeFn = async (target) => {
@@ -151,7 +152,7 @@ function failure(key: string, reason: RegExp) {
 describe("McpServerConfigStore — saved records", () => {
   it("a server stored from the catalog under its old name reads as a catalog server — nothing dropped", async () => {
     const kv = new MemoryKV();
-    await kv.update("acpPatchbay.integrations", [
+    await kv.update(STORAGE_KEYS.mcpServers, [
       { id: "old", name: "GitHub", source: { kind: "registry", registryId: "github", authMode: "oauth" } },
       { id: "own", name: "Mine", source: { kind: "custom-stdio", command: "srv", args: [] } },
     ]);
@@ -161,13 +162,13 @@ describe("McpServerConfigStore — saved records", () => {
       { kind: "custom-stdio", command: "srv", args: [] },
     ]);
     // rewritten on disk, so the next read has nothing left to fold
-    expect(JSON.stringify(kv.get("acpPatchbay.integrations"))).not.toContain("registry");
+    expect(JSON.stringify(kv.get(STORAGE_KEYS.mcpServers))).not.toContain("registry");
   });
 
   it("a name stored before names were cut to what agents keep is rewritten once, as agents already read it; one that then collides, or is the built-in's, gets a number", async () => {
     const kv = new MemoryKV();
     const stdio = { kind: "custom-stdio", command: "srv", args: [] };
-    await kv.update("acpPatchbay.integrations", [
+    await kv.update(STORAGE_KEYS.mcpServers, [
       { id: "a", name: "GitHub 2", source: stdio },
       { id: "b", name: "My Files", source: stdio },
       { id: "c", name: "My_Files", source: stdio },

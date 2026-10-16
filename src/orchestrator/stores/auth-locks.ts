@@ -20,6 +20,7 @@ import type { AuthLock } from "../auth-evidence";
 import { GlobalRecordStore } from "./global-record-store";
 import type { KV } from "./kv";
 import type { PatchbayAgentId } from "../../shared/ids";
+import { STORAGE_KEYS } from "./storage-keys";
 
 const authLockSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("loggedOut"), reason: z.string(), at: z.string() }),
@@ -37,7 +38,7 @@ const authLockEntrySchema = z.object({
 });
 export type AuthLockEntry = z.infer<typeof authLockEntrySchema>;
 
-const KEY = "acpPatchbay.authLocks";
+const KEY = STORAGE_KEYS.authLocks;
 
 export class AuthLockStore extends GlobalRecordStore<AuthLockEntry> {
   constructor(kv: KV) {

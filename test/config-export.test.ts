@@ -1,13 +1,11 @@
 // Export: the picked parts of the machine store, read from the real stores
 // over one in-memory KV, beside the secrets their records name.
-import { readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "./support/teardown";
 import {
   exportConfiguration,
-  STORED_KEYS,
   writeConfigurationFile,
   type ExportSources,
 } from "../src/orchestrator/config-export";
@@ -24,6 +22,7 @@ import { SecretEnvStore } from "../src/orchestrator/stores/secret-env";
 import { PRODUCT } from "../src/shared/product";
 import type { ExportPart } from "../src/shared/protocol";
 import type { PatchbayAgentId, PatchbayMcpServerId } from "../src/shared/ids";
+import { SECRET_FAMILIES, STORAGE_KEYS } from "../src/orchestrator/stores/storage-keys";
 
 async function machine() {
   const kv = new MemoryKV();
@@ -36,8 +35,8 @@ async function machine() {
   const machineRoots = new SavedRootsStore(kv, "machine");
   const machineWriteScope = new MachineWriteScopeStore(kv);
   const workspaceRoots = new SavedRootsStore(new MemoryKV(), "workspace");
-  const agentEnv = new SecretEnvStore(secrets, "acpPatchbay.agent");
-  const mcpServerEnv = new SecretEnvStore(secrets, "acpPatchbay.integration");
+  const agentEnv = new SecretEnvStore(secrets, SECRET_FAMILIES.agent);
+  const mcpServerEnv = new SecretEnvStore(secrets, SECRET_FAMILIES.mcpServer);
   const keys: Record<string, string> = { keyed: "secret-abc", context7: "ctx-key" };
 
   // An id from before patchbay minted them, on a registry agent.
@@ -149,13 +148,13 @@ describe("configuration export", () => {
     expect(file.patchbayVersion).toBe(PRODUCT.version);
     expect(file.exportedAt).toBe("2026-10-13T12:00:00.000Z");
     expect(file.state).toEqual({
-      "acpPatchbay.agents": kv.get("acpPatchbay.agents"),
-      "acpPatchbay.lastKnobs": kv.get("acpPatchbay.lastKnobs"),
-      "acpPatchbay.integrations": kv.get("acpPatchbay.integrations"),
-      "acpPatchbay.preferences": kv.get("acpPatchbay.preferences"),
-      "acpPatchbay.machineCommandRules": kv.get("acpPatchbay.machineCommandRules"),
-      "acpPatchbay.machineWriteScope": kv.get("acpPatchbay.machineWriteScope"),
-      "acpPatchbay.machineSavedRoots": kv.get("acpPatchbay.machineSavedRoots"),
+      [STORAGE_KEYS.agents]: kv.get(STORAGE_KEYS.agents),
+      [STORAGE_KEYS.lastKnobs]: kv.get(STORAGE_KEYS.lastKnobs),
+      [STORAGE_KEYS.mcpServers]: kv.get(STORAGE_KEYS.mcpServers),
+      [STORAGE_KEYS.preferences]: kv.get(STORAGE_KEYS.preferences),
+      [STORAGE_KEYS.machineCommandRules]: kv.get(STORAGE_KEYS.machineCommandRules),
+      [STORAGE_KEYS.machineWriteScope]: kv.get(STORAGE_KEYS.machineWriteScope),
+      [STORAGE_KEYS.machineSavedRoots]: kv.get(STORAGE_KEYS.machineSavedRoots),
     });
     // A record with nothing secret stored has no row.
     expect(file.secrets).toEqual({
@@ -166,19 +165,19 @@ describe("configuration export", () => {
 
   it("carries only the parts picked — no other part's entries or secrets", async () => {
     const agents = await exported("agents");
-    expect(Object.keys(agents.state)).toEqual(["acpPatchbay.agents", "acpPatchbay.lastKnobs"]);
+    expect(Object.keys(agents.state)).toEqual([STORAGE_KEYS.agents, STORAGE_KEYS.lastKnobs]);
     expect(Object.keys(agents.secrets)).toEqual(["agents"]);
 
     const servers = await exported("mcpServers");
-    expect(Object.keys(servers.state)).toEqual(["acpPatchbay.integrations"]);
+    expect(Object.keys(servers.state)).toEqual([STORAGE_KEYS.mcpServers]);
     expect(Object.keys(servers.secrets)).toEqual(["mcpServers"]);
 
     const settings = await exported("settings");
     expect(Object.keys(settings.state)).toEqual([
-      "acpPatchbay.preferences",
-      "acpPatchbay.machineCommandRules",
-      "acpPatchbay.machineWriteScope",
-      "acpPatchbay.machineSavedRoots",
+      STORAGE_KEYS.preferences,
+      STORAGE_KEYS.machineCommandRules,
+      STORAGE_KEYS.machineWriteScope,
+      STORAGE_KEYS.machineSavedRoots,
     ]);
     expect(settings.secrets).toEqual({});
   });
@@ -204,24 +203,10 @@ describe("configuration export", () => {
 
   it("a carried key with no store to read it from fails the export — never a file missing it", async () => {
     const { sources } = await machine();
-    const withoutKnobs = { ...sources, entries: sources.entries.filter((e) => e.key !== "acpPatchbay.lastKnobs") };
+    const withoutKnobs = { ...sources, entries: sources.entries.filter((e) => e.key !== STORAGE_KEYS.lastKnobs) };
     await expect(exportConfiguration(new Set<ExportPart>(["agents"]), withoutKnobs, at)).rejects.toThrow(
-      "no store was given for acpPatchbay.lastKnobs",
+      `no store was given for ${STORAGE_KEYS.lastKnobs}`,
     );
-  });
-
-  it("every key a store names is classified — carried by a part, or never with its reason — and every row names a real key", async () => {
-    const dir = fileURLToPath(new URL("../src/orchestrator/stores/", import.meta.url));
-    const named = new Set<string>();
-    for (const name of await readdir(dir)) {
-      for (const line of (await readFile(join(dir, name), "utf8")).split("\n")) {
-        if (/^\s*(\/\/|\*|\/\*)/.test(line)) continue;
-        for (const m of line.matchAll(/"(acpPatchbay\.[A-Za-z]+)"/g)) named.add(m[1]!);
-      }
-    }
-    expect(named.size).toBeGreaterThan(10);
-    expect([...named].filter((key) => !(key in STORED_KEYS))).toEqual([]);
-    expect(Object.keys(STORED_KEYS).filter((key) => !named.has(key))).toEqual([]);
   });
 
   it.skipIf(process.platform === "win32")("the file is written readable by its owner only — an existing one too", async () => {

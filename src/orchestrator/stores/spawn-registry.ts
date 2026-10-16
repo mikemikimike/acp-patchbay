@@ -13,6 +13,7 @@
 import { z } from "zod";
 import { GlobalRecordStore } from "./global-record-store";
 import type { KV } from "./kv";
+import { STORAGE_KEYS } from "./storage-keys";
 
 export const spawnRecordSchema = z.object({
   id: z.string().min(1), // String(pid) — one machine, one live pid at a time
@@ -26,7 +27,7 @@ export const spawnRecordSchema = z.object({
 });
 export type SpawnRecord = z.infer<typeof spawnRecordSchema>;
 
-const KEY = "acpPatchbay.spawnRegistry";
+const KEY = STORAGE_KEYS.spawnRegistry;
 
 export class SpawnRegistryStore extends GlobalRecordStore<SpawnRecord> {
   constructor(kv: KV) {

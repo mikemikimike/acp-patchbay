@@ -9,10 +9,11 @@
 // nothing stored here ever reaches a live session.
 import type { SavedRootScope } from "../../shared/protocol";
 import type { KV, StoredEntry } from "./kv";
+import { STORAGE_KEYS } from "./storage-keys";
 
 const KEYS: Record<SavedRootScope, string> = {
-  workspace: "acpPatchbay.savedRoots",
-  machine: "acpPatchbay.machineSavedRoots",
+  workspace: STORAGE_KEYS.savedRoots,
+  machine: STORAGE_KEYS.machineSavedRoots,
 };
 
 export class SavedRootsStore implements StoredEntry {

@@ -13,9 +13,9 @@ import { tempDir } from "./support/teardown";
 import { FileKV } from "../src/orchestrator/stores/file-kv";
 import {
   LEGACY_EXTENSION_ID,
-  RECOVERY_MARKER_KEY,
   recoverLegacyGlobalState,
 } from "../src/orchestrator/stores/vscdb-recovery";
+import { STORAGE_KEYS } from "../src/orchestrator/stores/storage-keys";
 
 let sqlite: {
   DatabaseSync: new (path: string) => {
@@ -45,9 +45,9 @@ describe.skipIf(sqlite === null)("recoverLegacyGlobalState", () => {
   let kv: FileKV;
 
   const MEMENTO = {
-    "acpPatchbay.agents": [{ id: "claude", name: "Claude Code" }],
-    "acpPatchbay.integrations": [{ id: "github", name: "GitHub" }],
-    "acpPatchbay.preferences": { soundOnDone: true },
+    [STORAGE_KEYS.agents]: [{ id: "claude", name: "Claude Code" }],
+    [STORAGE_KEYS.mcpServers]: [{ id: "github", name: "GitHub" }],
+    [STORAGE_KEYS.preferences]: { soundOnDone: true },
     somethingForeign: { planted: true },
   };
 
@@ -61,40 +61,40 @@ describe.skipIf(sqlite === null)("recoverLegacyGlobalState", () => {
   it("recovers only acpPatchbay.* keys from the legacy row and stamps the marker", async () => {
     writeVscdb(vscdbPath, {
       [LEGACY_EXTENSION_ID]: JSON.stringify(MEMENTO),
-      "other.extension": JSON.stringify({ "acpPatchbay.agents": [{ id: "impostor" }] }),
+      "other.extension": JSON.stringify({ [STORAGE_KEYS.agents]: [{ id: "impostor" }] }),
     });
     const result = await recoverLegacyGlobalState({ kv, vscdbPath });
     expect(result).toEqual({ outcome: "recovered", recoveredKeys: 3 });
-    expect(kv.get("acpPatchbay.agents")).toEqual([{ id: "claude", name: "Claude Code" }]);
-    expect(kv.get("acpPatchbay.integrations")).toEqual([{ id: "github", name: "GitHub" }]);
-    expect(kv.get("acpPatchbay.preferences")).toEqual({ soundOnDone: true });
+    expect(kv.get(STORAGE_KEYS.agents)).toEqual([{ id: "claude", name: "Claude Code" }]);
+    expect(kv.get(STORAGE_KEYS.mcpServers)).toEqual([{ id: "github", name: "GitHub" }]);
+    expect(kv.get(STORAGE_KEYS.preferences)).toEqual({ soundOnDone: true });
     expect(kv.get("somethingForeign")).toBeUndefined();
-    expect(kv.get(RECOVERY_MARKER_KEY)).toMatchObject({ outcome: "recovered", recoveredKeys: 3 });
+    expect(kv.get(STORAGE_KEYS.legacyStateRecovery)).toMatchObject({ outcome: "recovered", recoveredKeys: 3 });
   });
 
   it("never clobbers a key the file already holds — the file wins", async () => {
-    await kv.update("acpPatchbay.agents", [{ id: "readded-since" }]);
+    await kv.update(STORAGE_KEYS.agents, [{ id: "readded-since" }]);
     writeVscdb(vscdbPath, { [LEGACY_EXTENSION_ID]: JSON.stringify(MEMENTO) });
     const result = await recoverLegacyGlobalState({ kv, vscdbPath });
     expect(result.recoveredKeys).toBe(2); // MCP servers + preferences only
-    expect(kv.get("acpPatchbay.agents")).toEqual([{ id: "readded-since" }]);
+    expect(kv.get(STORAGE_KEYS.agents)).toEqual([{ id: "readded-since" }]);
   });
 
   it("attempts exactly once — the marker blocks a re-run even after keys are deleted", async () => {
     writeVscdb(vscdbPath, { [LEGACY_EXTENSION_ID]: JSON.stringify(MEMENTO) });
     await recoverLegacyGlobalState({ kv, vscdbPath });
     // The erase-all shape: records removed, marker (not a wipeable store) stays.
-    await kv.update("acpPatchbay.agents", undefined);
+    await kv.update(STORAGE_KEYS.agents, undefined);
     const second = await recoverLegacyGlobalState({ kv, vscdbPath });
     expect(second).toEqual({ outcome: "already-attempted", recoveredKeys: 0 });
-    expect(kv.get("acpPatchbay.agents")).toBeUndefined(); // nothing resurrected
+    expect(kv.get(STORAGE_KEYS.agents)).toBeUndefined(); // nothing resurrected
   });
 
   it("marks a row-less db as attempted", async () => {
     writeVscdb(vscdbPath, { "other.extension": "{}" });
     const result = await recoverLegacyGlobalState({ kv, vscdbPath });
     expect(result).toEqual({ outcome: "no-row", recoveredKeys: 0 });
-    expect(kv.get(RECOVERY_MARKER_KEY)).toMatchObject({ outcome: "no-row" });
+    expect(kv.get(STORAGE_KEYS.legacyStateRecovery)).toMatchObject({ outcome: "no-row" });
   });
 
   it("marks an absent or truncated db as attempted without throwing", async () => {
@@ -105,6 +105,6 @@ describe.skipIf(sqlite === null)("recoverLegacyGlobalState", () => {
     writeFileSync(vscdbPath, ""); // the observed zero-byte truncation shape
     const truncated = await recoverLegacyGlobalState({ kv: kv2, vscdbPath });
     expect(truncated.outcome).toBe("unreadable");
-    expect(kv2.get(RECOVERY_MARKER_KEY)).toMatchObject({ outcome: "unreadable" });
+    expect(kv2.get(STORAGE_KEYS.legacyStateRecovery)).toMatchObject({ outcome: "unreadable" });
   });
 });

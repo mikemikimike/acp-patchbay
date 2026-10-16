@@ -26,10 +26,10 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { KV } from "./kv";
+import { STORAGE_KEYS } from "./storage-keys";
 
 /** The pre-0.82.6 extension id — the Memento row the data lives under. */
 export const LEGACY_EXTENSION_ID = "solutionsunity.acp-patchbay";
-export const RECOVERY_MARKER_KEY = "acpPatchbay.legacyStateRecovery";
 
 /** Only this namespace crosses over — the row is ours alone, but a prefix
  * gate keeps a malformed row from planting foreign keys in the store. */
@@ -69,11 +69,11 @@ export async function recoverLegacyGlobalState(opts: {
   log?: (message: string) => void;
 }): Promise<RecoveryOutcome> {
   const log = opts.log ?? (() => {});
-  if (opts.kv.get(RECOVERY_MARKER_KEY) !== undefined) {
+  if (opts.kv.get(STORAGE_KEYS.legacyStateRecovery) !== undefined) {
     return { outcome: "already-attempted", recoveredKeys: 0 };
   }
   const mark = async (outcome: RecoveryOutcome["outcome"], recoveredKeys: number): Promise<RecoveryOutcome> => {
-    await opts.kv.update(RECOVERY_MARKER_KEY, { at: new Date().toISOString(), outcome, recoveredKeys });
+    await opts.kv.update(STORAGE_KEYS.legacyStateRecovery, { at: new Date().toISOString(), outcome, recoveredKeys });
     return { outcome, recoveredKeys };
   };
 

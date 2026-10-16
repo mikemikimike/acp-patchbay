@@ -8,8 +8,9 @@
 // user who then switches that agent's auto-connect off keeps it off.
 // Machine store: the flag it set lives there too.
 import type { KV } from "./kv";
+import { STORAGE_KEYS } from "./storage-keys";
 
-const KEY = "acpPatchbay.defaultAgentFolded";
+const KEY = STORAGE_KEYS.defaultAgentFolded;
 
 export class DefaultAgentFoldStore {
   constructor(private readonly kv: KV) {}

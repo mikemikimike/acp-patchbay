@@ -16,6 +16,7 @@
 // are cwd-bound), machine-local, non-sensitive — agent ids only.
 import type { KV } from "./kv";
 import type { PatchbayAgentId } from "../../shared/ids";
+import { STORAGE_KEYS } from "./storage-keys";
 
 export interface LastConnectedStamp {
   patchbayAgentIds: PatchbayAgentId[];
@@ -23,7 +24,7 @@ export interface LastConnectedStamp {
   at: string;
 }
 
-const KEY = "acpPatchbay.lastConnected";
+const KEY = STORAGE_KEYS.lastConnected;
 
 /** A reload lands well inside a minute; a human "reopening later" doesn't.
  * Same grace-window idea as a keeper-daemon's reconnect budget would be —

@@ -31,6 +31,7 @@ import { orchestratorHarness, type OrchestratorHarnessOptions } from "./support/
 import { methods } from "@agentclientprotocol/sdk";
 import type { PatchbayAgentId, PatchbayMcpServerId, PatchbaySessionId } from "../src/shared/ids";
 import { deriveTranscript } from "../src/webview/agent-view/chat/view-model";
+import { STORAGE_KEYS } from "../src/orchestrator/stores/storage-keys";
 
 
 // A fresh cwd per test: the fake agent's session ids restart at "fake-1" on
@@ -2080,7 +2081,7 @@ describe("SessionsStore", () => {
   // is the one home of what the user staged, so every session has one; it
   // leaves when nothing can name its session again.
   describe("a continuity row per session, gone when nothing can name it again (issue #29)", () => {
-    const CONTINUITY_KEY = "acpPatchbay.sessionContinuity";
+    const CONTINUITY_KEY = STORAGE_KEYS.sessionContinuity;
     const MODEL_KNOB = [
       {
         id: "model",

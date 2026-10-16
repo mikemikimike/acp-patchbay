@@ -30,6 +30,7 @@ import { SavedRootsStore } from "../src/orchestrator/stores/saved-roots";
 import { matrixFromDeclared } from "../src/orchestrator/capabilities";
 import type { PatchbayAgentId } from "../src/shared/ids";
 import type { PatchbayMcpServerId } from "../src/shared/ids";
+import { SECRET_FAMILIES } from "../src/orchestrator/stores/storage-keys";
 
 let dir: string;
 beforeEach(async () => {
@@ -47,8 +48,8 @@ describe("eraseAllData", () => {
     const usedCapabilities = new UsedCapabilityStore(globalKv);
     const authLocks = new AuthLockStore(globalKv);
     const spawnRegistry = new SpawnRegistryStore(globalKv);
-    const agentEnv = new SecretEnvStore(secrets, "acpPatchbay.agent");
-    const mcpServerEnv = new SecretEnvStore(secrets, "acpPatchbay.integration");
+    const agentEnv = new SecretEnvStore(secrets, SECRET_FAMILIES.agent);
+    const mcpServerEnv = new SecretEnvStore(secrets, SECRET_FAMILIES.mcpServer);
     const mcpServerTokens = new McpServerTokenStore(secrets);
     const permissionRules = new PermissionRulesStore(workspaceKv);
     const machineRules = new MachineRulesStore(globalKv);

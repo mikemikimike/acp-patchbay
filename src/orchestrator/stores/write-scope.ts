@@ -17,6 +17,7 @@ import { isAbsolute } from "node:path";
 import { z } from "zod";
 import { sameWriteLocation, type WriteEntry, type WriteLocation, type WriteScopeRowView } from "../../shared/protocol";
 import type { KV, StoredEntry } from "./kv";
+import { STORAGE_KEYS } from "./storage-keys";
 
 const locationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("alwaysAsk") }),
@@ -65,7 +66,7 @@ export function writeScopeRows(machine: readonly WriteEntry[], workspace: readon
   });
 }
 
-const KEY = "acpPatchbay.machineWriteScope";
+const KEY = STORAGE_KEYS.machineWriteScope;
 
 /** The machine layer — the machine store, every workspace on this
  * machine. Holds only what the user set: defaults are filled in by

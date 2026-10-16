@@ -29,6 +29,7 @@ import { RecordStore } from "./global-record-store";
 import type { KV } from "./kv";
 import type { PatchbayAgentId } from "../../shared/ids";
 import { savedId } from "./saved-id";
+import { STORAGE_KEYS } from "./storage-keys";
 
 const knobSeedSchema = z.record(z.string(), z.union([z.string(), z.boolean()]));
 
@@ -95,7 +96,7 @@ const sessionContinuityEntrySchema = z.object({
 });
 export type SessionContinuityEntry = z.infer<typeof sessionContinuityEntrySchema>;
 
-const KEY = "acpPatchbay.sessionContinuity";
+const KEY = STORAGE_KEYS.sessionContinuity;
 
 /** Every field a row saves — keyed by the type, so a field added to
  * `SessionContinuity` and missing here fails the build instead of being

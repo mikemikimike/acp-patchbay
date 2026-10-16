@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { isNewer, readConfiguration, type ConfigurationRead } from "../src/orchestrator/config-import";
 import { MODE_KNOB_ID } from "../src/orchestrator/knobs";
 import { PRODUCT } from "../src/shared/product";
+import { STORAGE_KEYS } from "../src/orchestrator/stores/storage-keys";
 
 const read = (file: unknown): ConfigurationRead => {
   const outcome = readConfiguration(JSON.stringify(file));
@@ -81,13 +82,13 @@ describe("reading a configuration file", () => {
 
   it("carries only the parts the file holds — an export of agents with none still carries the part", () => {
     expect([...read({ patchbay: "configuration", state: {}, secrets: { agents: {} } }).parts]).toEqual(["agents"]);
-    expect([...read({ patchbay: "configuration", state: { "acpPatchbay.preferences": { soundOnDone: true } }, secrets: {} }).parts]).toEqual([
+    expect([...read({ patchbay: "configuration", state: { [STORAGE_KEYS.preferences]: { soundOnDone: true } }, secrets: {} }).parts]).toEqual([
       "settings",
     ]);
   });
 
   it("a file from a newer patchbay reads, marked newer; one naming no version is never newer", () => {
-    const base = { patchbay: "configuration", state: { "acpPatchbay.machineSavedRoots": ["/a"] } };
+    const base = { patchbay: "configuration", state: { [STORAGE_KEYS.machineSavedRoots]: ["/a"] } };
     expect(read({ ...base, patchbayVersion: "99.0.0" }).newer).toBe(true);
     expect(read({ ...base, patchbayVersion: PRODUCT.version }).newer).toBe(false);
     expect(read({ ...base, patchbayVersion: "0.1.0" }).newer).toBe(false);
@@ -99,11 +100,11 @@ describe("reading a configuration file", () => {
     const r = read({
       patchbay: "configuration",
       state: {
-        "acpPatchbay.agents": [agent("a", { defaults: { mode: "plan" }, processPolicy: "per-session" })],
-        "acpPatchbay.integrations": [
+        [STORAGE_KEYS.agents]: [agent("a", { defaults: { mode: "plan" }, processPolicy: "per-session" })],
+        [STORAGE_KEYS.mcpServers]: [
           { id: "s", name: "GitHub", source: { kind: "registry", registryId: "github", authMode: "oauth" }, routing: "auto", active: true, transport: "auto" },
         ],
-        "acpPatchbay.preferences": { composerStats: false },
+        [STORAGE_KEYS.preferences]: { composerStats: false },
       },
     });
     expect(r.unread).toEqual([]);
@@ -117,14 +118,14 @@ describe("reading a configuration file", () => {
     const r = read({
       patchbay: "configuration",
       state: {
-        "acpPatchbay.agents": [agent("a"), { id: "b" }, "c"],
-        "acpPatchbay.lastKnobs": { a: { mode: "plan" }, b: "plan" },
-        "acpPatchbay.preferences": { soundOnDone: true, knobSource: "sometimes", laterPreference: 1 },
-        "acpPatchbay.machineCommandRules": [{ pattern: "ls", verdict: "allow" }, { pattern: "x", verdict: "maybe" }],
-        "acpPatchbay.machineWriteScope": [{ location: { kind: "temp" }, on: true }, { location: { kind: "path", path: "rel" }, on: true }],
-        "acpPatchbay.machineSavedRoots": ["/a", 7],
+        [STORAGE_KEYS.agents]: [agent("a"), { id: "b" }, "c"],
+        [STORAGE_KEYS.lastKnobs]: { a: { mode: "plan" }, b: "plan" },
+        [STORAGE_KEYS.preferences]: { soundOnDone: true, knobSource: "sometimes", laterPreference: 1 },
+        [STORAGE_KEYS.machineCommandRules]: [{ pattern: "ls", verdict: "allow" }, { pattern: "x", verdict: "maybe" }],
+        [STORAGE_KEYS.machineWriteScope]: [{ location: { kind: "temp" }, on: true }, { location: { kind: "path", path: "rel" }, on: true }],
+        [STORAGE_KEYS.machineSavedRoots]: ["/a", 7],
         "acpPatchbay.laterThing": { x: 1 },
-        "acpPatchbay.usedCapabilities": [],
+        [STORAGE_KEYS.usedCapabilities]: [],
       },
       secrets: {
         agents: { a: { env: { K: "v" } }, b: { env: { K: "v" } }, z: "nope" },
@@ -140,7 +141,7 @@ describe("reading a configuration file", () => {
     expect(r.secrets).toEqual({ agents: { a: { K: "v" } }, mcpServers: {} });
     expect(r.unread).toEqual([
       "an entry this version doesn't carry (acpPatchbay.laterThing)",
-      "an entry this version doesn't carry (acpPatchbay.usedCapabilities)",
+      `an entry this version doesn't carry (${STORAGE_KEYS.usedCapabilities})`,
       "2 agents",
       "composer choices for 1 agent",
       "2 preferences",

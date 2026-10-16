@@ -17,6 +17,7 @@ import { SavedRootsStore } from "../src/orchestrator/stores/saved-roots";
 import { MachineWriteScopeStore } from "../src/orchestrator/stores/write-scope";
 import { SecretEnvStore } from "../src/orchestrator/stores/secret-env";
 import type { PatchbayAgentId, PatchbayMcpServerId } from "../src/shared/ids";
+import { SECRET_FAMILIES } from "../src/orchestrator/stores/storage-keys";
 
 async function golden(): Promise<ConfigurationRead> {
   const text = await readFile(fileURLToPath(new URL("./goldens/configuration.2026-10-13.json", import.meta.url)), "utf8");
@@ -32,10 +33,10 @@ function machine(resolves = true) {
   const resolved: string[] = [];
   const stores = {
     agentConfigs: new AgentConfigStore(kv),
-    agentEnv: new SecretEnvStore(secrets, "acpPatchbay.agent"),
+    agentEnv: new SecretEnvStore(secrets, SECRET_FAMILIES.agent),
     composerKnobs: new ComposerKnobsStore(kv),
     mcpServerConfigs: new McpServerConfigStore(kv),
-    mcpServerEnv: new SecretEnvStore(secrets, "acpPatchbay.integration"),
+    mcpServerEnv: new SecretEnvStore(secrets, SECRET_FAMILIES.mcpServer),
     mcpServerTokens: new McpServerTokenStore(secrets),
     preferences: new PreferencesStore(kv),
     machineRules: new MachineRulesStore(kv),

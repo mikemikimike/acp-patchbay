@@ -84,6 +84,7 @@ import { DefaultAgentFoldStore } from "./stores/default-agent-fold";
 import { MachineRulesStore, PermissionRulesStore } from "./stores/permission-rules";
 import { MachineWriteScopeStore, withWriteEntry, writeScopeRows } from "./stores/write-scope";
 import { SavedRootsStore } from "./stores/saved-roots";
+import { SECRET_FAMILIES } from "./stores/storage-keys";
 import { loadCatalog } from "./stores/mcp-catalog";
 import { SpawnRegistryStore } from "./stores/spawn-registry";
 import { AuthLockStore } from "./stores/auth-locks";
@@ -273,8 +274,8 @@ export class Orchestrator {
     this.usedCapabilities = new UsedCapabilityStore(machineKV);
     this.authLocks = new AuthLockStore(machineKV);
     this.spawnRegistry = new SpawnRegistryStore(machineKV);
-    this.agentEnv = new SecretEnvStore(place.secrets, "acpPatchbay.agent", (m) => log.warn(`agent env: ${m}`));
-    this.mcpServerEnv = new SecretEnvStore(place.secrets, "acpPatchbay.integration", (m) =>
+    this.agentEnv = new SecretEnvStore(place.secrets, SECRET_FAMILIES.agent, (m) => log.warn(`agent env: ${m}`));
+    this.mcpServerEnv = new SecretEnvStore(place.secrets, SECRET_FAMILIES.mcpServer, (m) =>
       log.warn(`MCP server env: ${m}`),
     );
     this.mcpServerTokens = new McpServerTokenStore(place.secrets);

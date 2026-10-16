@@ -15,6 +15,7 @@ import { z } from "zod";
 import type { WriteEntry } from "../../shared/protocol";
 import type { KV, StoredEntry } from "./kv";
 import { readWriteEntries } from "./write-scope";
+import { STORAGE_KEYS } from "./storage-keys";
 
 const ruleVerdictSchema = z.enum(["allow", "ask", "deny"]);
 export type RuleVerdict = z.infer<typeof ruleVerdictSchema>;
@@ -50,7 +51,7 @@ export const DEFAULT_PERMISSION_RULES: PermissionRules = {
   writeScope: [],
 };
 
-const KEY = "acpPatchbay.permissionRules";
+const KEY = STORAGE_KEYS.permissionRules;
 
 /** The scope a released version stored as one choice per workspace, as
  * this workspace's answers over the machine's defaults: "workspace" was
@@ -89,7 +90,7 @@ export class PermissionRulesStore {
   }
 }
 
-const MACHINE_KEY = "acpPatchbay.machineCommandRules";
+const MACHINE_KEY = STORAGE_KEYS.machineCommandRules;
 
 /** Machine-layer command rules — machine store (developer-owned, every
  * workspace on this machine), consulted only after the workspace layer

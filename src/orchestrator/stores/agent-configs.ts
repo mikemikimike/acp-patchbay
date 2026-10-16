@@ -13,6 +13,7 @@ import type { PatchbayAgentId } from "../../shared/ids";
 import { savedId } from "./saved-id";
 import { NamedRecordStore } from "./global-record-store";
 import type { KV } from "./kv";
+import { STORAGE_KEYS } from "./storage-keys";
 
 /** `options` is keyed by knob id (the agent's own config-option id, or
  * knobs.ts's MODE_KNOB_ID on the modes-fallback surface), never by semantic
@@ -68,7 +69,7 @@ export const agentConfigSchema = z.object({
 });
 export type AgentConfig = z.infer<typeof agentConfigSchema>;
 
-const KEY = "acpPatchbay.agents";
+const KEY = STORAGE_KEYS.agents;
 
 /** Two agents from one executable or one registry entry are told apart by
  * name: no two agents hold one. */

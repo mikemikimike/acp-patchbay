@@ -13,30 +13,32 @@ import { chmod, writeFile } from "node:fs/promises";
 import { PRODUCT } from "../shared/product";
 import type { ExportPart } from "../shared/protocol";
 import type { StoredEntry } from "./stores/kv";
+import { STORAGE_KEYS, type StorageKey } from "./stores/storage-keys";
 
 type Env = Record<string, string>;
 
 /** Every key patchbay stores in a KV, and its fate in an export: the part
- * that carries it, or why it never leaves. A key a store names without a
- * row here is a failing test, so nothing new is left out unannounced. */
-export const STORED_KEYS: Readonly<Record<string, ExportPart | { never: string }>> = {
-  "acpPatchbay.agents": "agents",
-  "acpPatchbay.lastKnobs": "agents",
-  "acpPatchbay.integrations": "mcpServers",
-  "acpPatchbay.preferences": "settings",
-  "acpPatchbay.machineCommandRules": "settings",
-  "acpPatchbay.machineWriteScope": "settings",
-  "acpPatchbay.machineSavedRoots": "settings",
-  "acpPatchbay.usedCapabilities": { never: "what an agent proved on this machine — earned again by use on the next" },
-  "acpPatchbay.authLocks": { never: "a sign-out witnessed on this machine — the next one's agents sign in for themselves" },
-  "acpPatchbay.sessionContinuity": { never: "sessions held by this machine's agents" },
-  "acpPatchbay.spawnRegistry": { never: "processes running on this machine" },
-  "acpPatchbay.defaultAgentFolded": { never: "marks this machine's old default-agent setting as folded in" },
-  "acpPatchbay.legacyStateRecovery": { never: "marks this machine's one-time recovery as done" },
-  "acpPatchbay.permissionRules": { never: "this workspace's own" },
-  "acpPatchbay.savedRoots": { never: "this workspace's own" },
-  "acpPatchbay.lastConnected": { never: "this workspace's agents at its last close" },
-  "acpPatchbay.lastActiveSession": { never: "this workspace's last open session" },
+ * that carries it, or why it never leaves. Typed over the key table, so a
+ * key added there without a row here does not build — nothing new is left
+ * out unannounced. */
+export const STORED_KEYS: Readonly<Record<StorageKey, ExportPart | { never: string }>> = {
+  [STORAGE_KEYS.agents]: "agents",
+  [STORAGE_KEYS.lastKnobs]: "agents",
+  [STORAGE_KEYS.mcpServers]: "mcpServers",
+  [STORAGE_KEYS.preferences]: "settings",
+  [STORAGE_KEYS.machineCommandRules]: "settings",
+  [STORAGE_KEYS.machineWriteScope]: "settings",
+  [STORAGE_KEYS.machineSavedRoots]: "settings",
+  [STORAGE_KEYS.usedCapabilities]: { never: "what an agent proved on this machine — earned again by use on the next" },
+  [STORAGE_KEYS.authLocks]: { never: "a sign-out witnessed on this machine — the next one's agents sign in for themselves" },
+  [STORAGE_KEYS.sessionContinuity]: { never: "sessions held by this machine's agents" },
+  [STORAGE_KEYS.spawnRegistry]: { never: "processes running on this machine" },
+  [STORAGE_KEYS.defaultAgentFolded]: { never: "marks this machine's old default-agent setting as folded in" },
+  [STORAGE_KEYS.legacyStateRecovery]: { never: "marks this machine's one-time recovery as done" },
+  [STORAGE_KEYS.permissionRules]: { never: "this workspace's own" },
+  [STORAGE_KEYS.savedRoots]: { never: "this workspace's own" },
+  [STORAGE_KEYS.lastConnected]: { never: "this workspace's agents at its last close" },
+  [STORAGE_KEYS.lastActiveSession]: { never: "this workspace's last open session" },
 };
 
 /** Where an export reads from: the stores that hold a carried key, and

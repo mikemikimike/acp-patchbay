@@ -17,10 +17,11 @@ import { z } from "zod";
 import type { KnobSeed } from "../../shared/protocol";
 import type { KV, StoredEntry } from "./kv";
 import type { PatchbayAgentId } from "../../shared/ids";
+import { STORAGE_KEYS } from "./storage-keys";
 
 // Historical key (this store began as "last-used knobs") — kept so existing
 // installs carry their combinations across the rename.
-const KEY = "acpPatchbay.lastKnobs";
+const KEY = STORAGE_KEYS.lastKnobs;
 
 type ComposerKnobsRecord = Readonly<Record<string, KnobSeed>>;
 

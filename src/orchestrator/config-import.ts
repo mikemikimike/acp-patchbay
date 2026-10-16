@@ -13,6 +13,7 @@ import { count } from "../shared/count";
 import { PRODUCT } from "../shared/product";
 import type { ExportPart, KnobSeed, PreferencesView, WriteEntry } from "../shared/protocol";
 import { STORED_KEYS } from "./config-export";
+import { STORAGE_KEYS, type StorageKey } from "./stores/storage-keys";
 import { AgentConfigStore, type AgentConfig } from "./stores/agent-configs";
 import { ComposerKnobsStore } from "./stores/composer-knobs";
 import { MemoryKV } from "./stores/kv";
@@ -77,7 +78,7 @@ export function readConfiguration(text: string): ReadOutcome {
   const kv = new MemoryKV();
   const parts = new Set<ExportPart>();
   for (const [key, value] of Object.entries(state)) {
-    const fate = STORED_KEYS[key];
+    const fate = Object.hasOwn(STORED_KEYS, key) ? STORED_KEYS[key as StorageKey] : undefined;
     if (typeof fate !== "string") {
       unread.push(`an entry this version doesn't carry (${key})`);
       continue;
@@ -106,13 +107,13 @@ export function readConfiguration(text: string): ReadOutcome {
     const held = Array.isArray(raw) ? raw.length : raw === undefined ? 0 : Object.keys(record(raw) ?? { raw }).length;
     if (held > read) unread.push(said(held - read));
   };
-  short("acpPatchbay.agents", agents.length, (n) => count(n, "agent"));
-  short("acpPatchbay.lastKnobs", Object.keys(knobs).length, (n) => `composer choices for ${count(n, "agent")}`);
-  short("acpPatchbay.integrations", mcpServers.length, (n) => count(n, "MCP server"));
-  short("acpPatchbay.preferences", Object.keys(preferences).length, (n) => count(n, "preference"));
-  short("acpPatchbay.machineCommandRules", machineCommandRules.length, (n) => count(n, "command rule"));
-  short("acpPatchbay.machineWriteScope", machineWriteScope.length, (n) => count(n, "file-write place"));
-  short("acpPatchbay.machineSavedRoots", machineSavedRoots.length, (n) => count(n, "saved root"));
+  short(STORAGE_KEYS.agents, agents.length, (n) => count(n, "agent"));
+  short(STORAGE_KEYS.lastKnobs, Object.keys(knobs).length, (n) => `composer choices for ${count(n, "agent")}`);
+  short(STORAGE_KEYS.mcpServers, mcpServers.length, (n) => count(n, "MCP server"));
+  short(STORAGE_KEYS.preferences, Object.keys(preferences).length, (n) => count(n, "preference"));
+  short(STORAGE_KEYS.machineCommandRules, machineCommandRules.length, (n) => count(n, "command rule"));
+  short(STORAGE_KEYS.machineWriteScope, machineWriteScope.length, (n) => count(n, "file-write place"));
+  short(STORAGE_KEYS.machineSavedRoots, machineSavedRoots.length, (n) => count(n, "saved root"));
 
   const agentSecrets: Record<string, Env> = {};
   for (const [id, row] of Object.entries(record(secrets.agents) ?? {})) {

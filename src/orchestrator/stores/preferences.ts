@@ -12,8 +12,9 @@ import { z } from "zod";
 import { DEFAULT_PREFERENCES, type PreferencesView, type ToolCallDisplay } from "../../shared/protocol";
 import { DISPLAY_LADDER } from "../../shared/tool-display";
 import type { KV, StoredEntry } from "./kv";
+import { STORAGE_KEYS } from "./storage-keys";
 
-const KEY = "acpPatchbay.preferences";
+const KEY = STORAGE_KEYS.preferences;
 
 /** Every knob source — a source added to the view is a missing key here. */
 const KNOB_SOURCES: Readonly<Record<PreferencesView["knobSource"], true>> = { "agent-default": true, "last-session": true };

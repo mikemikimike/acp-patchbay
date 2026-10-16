@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { tempDir } from "./support/teardown";
 import { FileKV } from "../src/orchestrator/stores/file-kv";
+import { STORAGE_KEYS } from "../src/orchestrator/stores/storage-keys";
 
 const failing = vi.hoisted(() => new Map<string, string>());
 
@@ -37,11 +38,11 @@ describe("FileKV — a file it can't read", () => {
   });
 
   it("refuses to open over it, rather than starting empty", () => {
-    writeFileSync(file, JSON.stringify({ "acpPatchbay.agents": [{ id: "a1" }] }));
+    writeFileSync(file, JSON.stringify({ [STORAGE_KEYS.agents]: [{ id: "a1" }] }));
     failing.set(file, "EACCES");
     expect(() => new FileKV(file)).toThrow(/can't be read.*EACCES/);
     failing.clear();
-    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ "acpPatchbay.agents": [{ id: "a1" }] });
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ [STORAGE_KEYS.agents]: [{ id: "a1" }] });
   });
 
   it("refuses to open over a directory in its place", () => {

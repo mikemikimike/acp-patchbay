@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AgentConfigStore } from "../src/orchestrator/stores/agent-configs";
 import { MemoryKV } from "../src/orchestrator/stores/kv";
 import type { PatchbayAgentId } from "../src/shared/ids";
+import { STORAGE_KEYS } from "../src/orchestrator/stores/storage-keys";
 
 const base = {
   name: "Kimi CLI",
@@ -65,7 +66,7 @@ describe("agent config store — registry binary facts", () => {
 });
 
 describe("agent config store — the retired process policy", () => {
-  const KEY = "acpPatchbay.agents";
+  const KEY = STORAGE_KEYS.agents;
 
   it("drops the field from every stored record at load, and touches nothing else", async () => {
     const kv = new MemoryKV();
@@ -95,7 +96,7 @@ describe("agent config store — the retired process policy", () => {
 });
 
 describe("agent config store — a mode saved as its own field", () => {
-  const KEY = "acpPatchbay.agents";
+  const KEY = STORAGE_KEYS.agents;
   const record = (id: string, defaults: unknown) => ({ id, name: id, command: "agent", args: [], defaults });
 
   it("is rewritten under the mode knob's id at load — an option set for that id still wins, nothing else moves", async () => {
@@ -136,7 +137,7 @@ describe("agent config store — names", () => {
 describe("agent config store — names shared before the rule held", () => {
   it("are told apart once at load — the first keeps its name, the next gets a number", async () => {
     const kv = new MemoryKV();
-    await kv.update("acpPatchbay.agents", [
+    await kv.update(STORAGE_KEYS.agents, [
       { id: "a", ...base, name: "Claude", registrySource: null },
       { id: "b", ...base, name: "Claude", registrySource: null },
       { id: "c", ...base, name: "Claude 2", registrySource: null },

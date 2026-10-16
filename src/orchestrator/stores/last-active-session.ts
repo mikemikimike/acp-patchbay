@@ -16,8 +16,9 @@
 // workspaceState: sessions are cwd-bound, machine-local, non-sensitive.
 import type { KV } from "./kv";
 import type { PatchbayAgentId } from "../../shared/ids";
+import { STORAGE_KEYS } from "./storage-keys";
 
-const KEY = "acpPatchbay.lastActiveSession";
+const KEY = STORAGE_KEYS.lastActiveSession;
 
 export interface SessionPointer {
   patchbayAgentId: PatchbayAgentId;

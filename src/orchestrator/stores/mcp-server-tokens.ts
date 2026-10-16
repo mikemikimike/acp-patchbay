@@ -6,6 +6,7 @@
 // Structural subset of vscode.SecretStorage so this store, like the others,
 // is vscode-free and fakeable in tests.
 import type { PatchbayMcpServerId } from "../../shared/ids";
+import { SECRET_FAMILIES } from "./storage-keys";
 
 export interface SecretsLike {
   get(key: string): Thenable<string | undefined>;
@@ -46,7 +47,7 @@ export class McpServerTokenStore {
 
   /** Under the name the credentials were first stored by. */
   private key(patchbayMcpServerId: PatchbayMcpServerId): string {
-    return `acpPatchbay.integration.${patchbayMcpServerId}.token`;
+    return `${SECRET_FAMILIES.mcpServer}.${patchbayMcpServerId}.token`;
   }
 
   async get(patchbayMcpServerId: PatchbayMcpServerId): Promise<StoredToken | null> {

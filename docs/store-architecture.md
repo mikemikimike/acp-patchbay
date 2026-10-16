@@ -426,9 +426,12 @@ trusted blind: disk is a trust boundary, and an imported file more so.
 **An exported file is a saved shape too.** Export carries the machine
 store's entries as stored, under their keys, so the migration that moves a
 store also moves every file already exported: an import reads the file
-through the same stores. Every key a store names has its fate in one table
+through the same stores. Every key is spelled once, in the key table
+(`stores/storage-keys.ts` — the state keys and the secret families), which
+every store reads its own from; a test pins the spellings, since a renamed
+key reads as nothing. Each key has its fate in one table
 (`config-export.ts` `STORED_KEYS`) — the part that carries it, or why it never
-leaves — and a key without a row fails the gate. The first exported file (2026-10-13) is kept
+leaves — typed over the key table, so a key without a row does not build. The first exported file (2026-10-13) is kept
 in the tests as written; a change that stops today's stores reading it whole
 fails the gate. The file names the version that wrote it, so an older
 patchbay importing a newer file can say it may hold what it doesn't know.

@@ -30,6 +30,7 @@ import { SpawnRegistryStore } from "../src/orchestrator/stores/spawn-registry";
 import { SavedRootsStore } from "../src/orchestrator/stores/saved-roots";
 import { MachineWriteScopeStore, withWriteEntry, writeScopeRows } from "../src/orchestrator/stores/write-scope";
 import type { PatchbayAgentId } from "../src/shared/ids";
+import { STORAGE_KEYS, SECRET_FAMILIES } from "../src/orchestrator/stores/storage-keys";
 
 describe("SpawnRegistryStore", () => {
   it("records spawns keyed by pid and clears them on observed exit", async () => {
@@ -72,9 +73,9 @@ describe("LastConnectedStore — reload-continuation stamp", () => {
     const kv = new MemoryKV();
     const store = new LastConnectedStore(kv);
     expect(await store.consume()).toEqual([]);
-    await kv.update("acpPatchbay.lastConnected", { patchbayAgentIds: "not-an-array", at: new Date().toISOString() });
+    await kv.update(STORAGE_KEYS.lastConnected, { patchbayAgentIds: "not-an-array", at: new Date().toISOString() });
     expect(await store.consume()).toEqual([]);
-    await kv.update("acpPatchbay.lastConnected", { patchbayAgentIds: ["ok", 42], at: "not-a-date" });
+    await kv.update(STORAGE_KEYS.lastConnected, { patchbayAgentIds: ["ok", 42], at: "not-a-date" });
     expect(await store.consume()).toEqual([]);
   });
 
@@ -87,9 +88,9 @@ describe("LastConnectedStore — reload-continuation stamp", () => {
 
   it("a stamp written under the old field name still restores what ran — the reload that installs this version", async () => {
     const kv = new MemoryKV();
-    await kv.update("acpPatchbay.lastConnected", { agentIds: ["claude"], at: new Date().toISOString() });
+    await kv.update(STORAGE_KEYS.lastConnected, { agentIds: ["claude"], at: new Date().toISOString() });
     const store = new LastConnectedStore(kv);
-    expect(kv.get("acpPatchbay.lastConnected")).not.toHaveProperty("agentIds");
+    expect(kv.get(STORAGE_KEYS.lastConnected)).not.toHaveProperty("agentIds");
     expect(await store.consume()).toEqual(["claude"]);
   });
 });
@@ -114,14 +115,14 @@ describe("LastActiveSessionStore — the last-open-session pointer", () => {
 
   it("a pointer written under the old field name still points — the window that installs this version returns", async () => {
     const kv = new MemoryKV();
-    await kv.update("acpPatchbay.lastActiveSession", { agentId: "a", sessionId: "s1" });
+    await kv.update(STORAGE_KEYS.lastActiveSession, { agentId: "a", sessionId: "s1" });
     expect(new LastActiveSessionStore(kv).get()).toEqual({ patchbayAgentId: "a", sessionId: "s1" });
-    expect(kv.get("acpPatchbay.lastActiveSession")).not.toHaveProperty("agentId");
+    expect(kv.get(STORAGE_KEYS.lastActiveSession)).not.toHaveProperty("agentId");
   });
 
   it("a value of another shape — the bare id an older version stored — is no pointer", async () => {
     const kv = new MemoryKV();
-    await kv.update("acpPatchbay.lastActiveSession", "s1");
+    await kv.update(STORAGE_KEYS.lastActiveSession, "s1");
     expect(new LastActiveSessionStore(kv).get()).toBeUndefined();
   });
 
@@ -130,16 +131,16 @@ describe("LastActiveSessionStore — the last-open-session pointer", () => {
 
     it("one session answering to it becomes the pointer, kept as the pair", async () => {
       const kv = new MemoryKV();
-      await kv.update("acpPatchbay.lastActiveSession", "s1");
+      await kv.update(STORAGE_KEYS.lastActiveSession, "s1");
       const store = new LastActiveSessionStore(kv);
       expect(store.stored()).toBe(true);
       expect(await store.resolve(() => [pair("claude", "s1")])).toEqual(pair("claude", "s1"));
-      expect(kv.get("acpPatchbay.lastActiveSession")).toEqual({ patchbayAgentId: "claude", sessionId: "s1" });
+      expect(kv.get(STORAGE_KEYS.lastActiveSession)).toEqual({ patchbayAgentId: "claude", sessionId: "s1" });
     });
 
     it("several are ambiguous for good — the pointer goes", async () => {
       const kv = new MemoryKV();
-      await kv.update("acpPatchbay.lastActiveSession", "s1");
+      await kv.update(STORAGE_KEYS.lastActiveSession, "s1");
       const store = new LastActiveSessionStore(kv);
       expect(await store.resolve(() => [pair("claude", "s1"), pair("auggie", "s1")])).toBeUndefined();
       expect(store.stored()).toBe(false);
@@ -147,10 +148,10 @@ describe("LastActiveSessionStore — the last-open-session pointer", () => {
 
     it("none may be an agent that hasn't connected yet — the id stays for a later window", async () => {
       const kv = new MemoryKV();
-      await kv.update("acpPatchbay.lastActiveSession", "s1");
+      await kv.update(STORAGE_KEYS.lastActiveSession, "s1");
       const store = new LastActiveSessionStore(kv);
       expect(await store.resolve(() => [])).toBeUndefined();
-      expect(kv.get("acpPatchbay.lastActiveSession")).toBe("s1");
+      expect(kv.get(STORAGE_KEYS.lastActiveSession)).toBe("s1");
     });
   });
 });
@@ -185,15 +186,15 @@ describe("PermissionRulesStore", () => {
     for (const [fileWriteScope, writeScope] of cases) {
       const kv = new MemoryKV();
       const commandRules = [{ pattern: "npm test", verdict: "allow" }];
-      void kv.update("acpPatchbay.permissionRules", { commandRules, fileWriteScope });
+      void kv.update(STORAGE_KEYS.permissionRules, { commandRules, fileWriteScope });
       expect(new PermissionRulesStore(kv).get()).toEqual({ commandRules, writeScope });
-      expect(kv.get("acpPatchbay.permissionRules")).toEqual({ commandRules, writeScope });
+      expect(kv.get(STORAGE_KEYS.permissionRules)).toEqual({ commandRules, writeScope });
     }
   });
 
   it("each half stored in a shape this version doesn't take reads as its default; a stray rule is skipped", () => {
     const kv = new MemoryKV();
-    void kv.update("acpPatchbay.permissionRules", {
+    void kv.update(STORAGE_KEYS.permissionRules, {
       commandRules: [{ pattern: "npm test", verdict: "allow" }, { pattern: "x", verdict: "maybe" }],
       writeScope: "anywhere",
     });
@@ -201,7 +202,7 @@ describe("PermissionRulesStore", () => {
       commandRules: [{ pattern: "npm test", verdict: "allow" }],
       writeScope: DEFAULT_PERMISSION_RULES.writeScope,
     });
-    void kv.update("acpPatchbay.permissionRules", "always-ask");
+    void kv.update(STORAGE_KEYS.permissionRules, "always-ask");
     expect(new PermissionRulesStore(kv).get()).toEqual(DEFAULT_PERMISSION_RULES);
   });
 });
@@ -211,7 +212,7 @@ describe("PermissionRulesStore", () => {
 describe("MachineRulesStore", () => {
   it("a stored rule that isn't one is skipped; the rest hold", () => {
     const kv = new MemoryKV();
-    void kv.update("acpPatchbay.machineCommandRules", [
+    void kv.update(STORAGE_KEYS.machineCommandRules, [
       { pattern: "git status", verdict: "allow" },
       { pattern: "", verdict: "allow" },
       { pattern: "rm *", verdict: "maybe" },
@@ -224,7 +225,7 @@ describe("MachineRulesStore", () => {
   it("a stored value that isn't a list holds no rules", () => {
     for (const junk of ["git status", 42, { pattern: "x", verdict: "allow" }, null]) {
       const kv = new MemoryKV();
-      void kv.update("acpPatchbay.machineCommandRules", junk);
+      void kv.update(STORAGE_KEYS.machineCommandRules, junk);
       expect(new MachineRulesStore(kv).get().commandRules).toEqual([]);
     }
   });
@@ -233,7 +234,7 @@ describe("MachineRulesStore", () => {
 describe("MachineWriteScopeStore", () => {
   it("a stored entry that isn't one is skipped — a relative folder too — and a place held twice keeps its first", () => {
     const kv = new MemoryKV();
-    void kv.update("acpPatchbay.machineWriteScope", [
+    void kv.update(STORAGE_KEYS.machineWriteScope, [
       { location: { kind: "temp" }, on: true },
       { location: { kind: "path", path: "/home/me/.hermes" }, on: true },
       { location: { kind: "path", path: "relative/dir" }, on: true },
@@ -248,7 +249,7 @@ describe("MachineWriteScopeStore", () => {
       { location: { kind: "temp" }, on: true },
       { location: { kind: "path", path: "/home/me/.hermes" }, on: true },
     ]);
-    void kv.update("acpPatchbay.machineWriteScope", { temp: true });
+    void kv.update(STORAGE_KEYS.machineWriteScope, { temp: true });
     expect(new MachineWriteScopeStore(kv).get()).toEqual([]);
   });
 });
@@ -292,20 +293,20 @@ describe("writeScopeRows", () => {
 describe("ComposerKnobsStore", () => {
   it("an agent's stored combination that isn't one reads as none; the others hold", async () => {
     const kv = new MemoryKV();
-    void kv.update("acpPatchbay.lastKnobs", { a: { mode: "plan", thinking: true }, b: "plan", c: { mode: 3 }, d: null });
+    void kv.update(STORAGE_KEYS.lastKnobs, { a: { mode: "plan", thinking: true }, b: "plan", c: { mode: 3 }, d: null });
     const store = new ComposerKnobsStore(kv);
     expect(store.get("a" as PatchbayAgentId)).toEqual({ mode: "plan", thinking: true });
     expect(["b", "c", "d"].map((id) => store.get(id as PatchbayAgentId))).toEqual([undefined, undefined, undefined]);
     expect(store.count()).toBe(1);
     // The next write keeps only what read as a combination.
     await store.record("e" as PatchbayAgentId, { model: "opus" });
-    expect(kv.get("acpPatchbay.lastKnobs")).toEqual({ a: { mode: "plan", thinking: true }, e: { model: "opus" } });
+    expect(kv.get(STORAGE_KEYS.lastKnobs)).toEqual({ a: { mode: "plan", thinking: true }, e: { model: "opus" } });
   });
 
   it("a stored value that isn't a record holds no combinations", () => {
     for (const junk of ["plan", 42, [{ mode: "plan" }], null]) {
       const kv = new MemoryKV();
-      void kv.update("acpPatchbay.lastKnobs", junk);
+      void kv.update(STORAGE_KEYS.lastKnobs, junk);
       expect(new ComposerKnobsStore(kv).count()).toBe(0);
     }
   });
@@ -341,10 +342,10 @@ describe("SavedRootsStore — the roots every new session starts with", () => {
 
   it("a stored entry that isn't a path is skipped; a stored value that isn't a list holds none", () => {
     const kv = new MemoryKV();
-    void kv.update("acpPatchbay.machineSavedRoots", ["/a", 3, "", null, "/b"]);
+    void kv.update(STORAGE_KEYS.machineSavedRoots, ["/a", 3, "", null, "/b"]);
     expect(new SavedRootsStore(kv, "machine").list()).toEqual(["/a", "/b"]);
     for (const junk of ["/a", 42, { path: "/a" }, null]) {
-      void kv.update("acpPatchbay.machineSavedRoots", junk);
+      void kv.update(STORAGE_KEYS.machineSavedRoots, junk);
       expect(new SavedRootsStore(kv, "machine").list()).toEqual([]);
     }
   });
@@ -422,19 +423,19 @@ describe("GlobalRecordStore", () => {
 describe("SecretEnvStore — env values live in SecretStorage, never globalState", () => {
   it("round-trips a record per id and deletes on empty set", async () => {
     const secrets = new MemorySecrets();
-    const store = new SecretEnvStore(secrets, "acpPatchbay.agent");
+    const store = new SecretEnvStore(secrets, SECRET_FAMILIES.agent);
     await store.set("a1", { FOO_API_KEY: "sk-123", DEBUG: "1" });
     expect(await store.get("a1")).toEqual({ FOO_API_KEY: "sk-123", DEBUG: "1" });
     expect(await store.get("other")).toEqual({});
 
     await store.set("a1", {}); // writing empty is a delete, not an empty blob
-    expect(await secrets.get("acpPatchbay.agent.a1.env")).toBeUndefined();
+    expect(await secrets.get(`${SECRET_FAMILIES.agent}.a1.env`)).toBeUndefined();
   });
 
   it("two prefixes over one SecretStorage never collide", async () => {
     const secrets = new MemorySecrets();
-    const agents = new SecretEnvStore(secrets, "acpPatchbay.agent");
-    const mcpServers = new SecretEnvStore(secrets, "acpPatchbay.integration");
+    const agents = new SecretEnvStore(secrets, SECRET_FAMILIES.agent);
+    const mcpServers = new SecretEnvStore(secrets, SECRET_FAMILIES.mcpServer);
     await agents.set("x", { A: "1" });
     await mcpServers.set("x", { B: "2" });
     expect(await agents.get("x")).toEqual({ A: "1" });
@@ -443,7 +444,7 @@ describe("SecretEnvStore — env values live in SecretStorage, never globalState
 
   it("remove purges the record", async () => {
     const secrets = new MemorySecrets();
-    const store = new SecretEnvStore(secrets, "acpPatchbay.agent");
+    const store = new SecretEnvStore(secrets, SECRET_FAMILIES.agent);
     await store.set("a1", { K: "v" });
     await store.remove("a1");
     expect(await store.get("a1")).toEqual({});
@@ -452,10 +453,10 @@ describe("SecretEnvStore — env values live in SecretStorage, never globalState
   it("a malformed stored record reads as empty and is logged by its id — never with its value", async () => {
     const secrets = new MemorySecrets();
     const logged: string[] = [];
-    const store = new SecretEnvStore(secrets, "acpPatchbay.agent", (message) => logged.push(message));
-    await secrets.store("acpPatchbay.agent.bad.env", "{not json sk-secret");
-    await secrets.store("acpPatchbay.agent.list.env", '["sk-secret"]');
-    await secrets.store("acpPatchbay.agent.num.env", '{"K": 1}');
+    const store = new SecretEnvStore(secrets, SECRET_FAMILIES.agent, (message) => logged.push(message));
+    await secrets.store(`${SECRET_FAMILIES.agent}.bad.env`, "{not json sk-secret");
+    await secrets.store(`${SECRET_FAMILIES.agent}.list.env`, '["sk-secret"]');
+    await secrets.store(`${SECRET_FAMILIES.agent}.num.env`, '{"K": 1}');
     expect(await store.get("bad")).toEqual({});
     expect(await store.get("list")).toEqual({});
     expect(await store.get("num")).toEqual({});
@@ -480,14 +481,14 @@ describe("PreferencesStore — machine-scoped behavior defaults", () => {
 
   it("an older stored object missing newer keys reads as defaults for them", () => {
     const kv = new MemoryKV();
-    void kv.update("acpPatchbay.preferences", { soundOnDone: true });
+    void kv.update(STORAGE_KEYS.preferences, { soundOnDone: true });
     const store = new PreferencesStore(kv);
     expect(store.get()).toEqual({ ...DEFAULT_PREFERENCES, soundOnDone: true });
   });
 
   it("a stored one-switch composerStats splits into a switch per read-out, then is gone", () => {
     const hidden = new MemoryKV();
-    void hidden.update("acpPatchbay.preferences", { composerStats: false, soundOnDone: true });
+    void hidden.update(STORAGE_KEYS.preferences, { composerStats: false, soundOnDone: true });
     expect(new PreferencesStore(hidden).get()).toEqual({
       ...DEFAULT_PREFERENCES,
       soundOnDone: true,
@@ -495,35 +496,35 @@ describe("PreferencesStore — machine-scoped behavior defaults", () => {
       statsContext: false,
       statsPlanUsage: false,
     });
-    expect(hidden.get("acpPatchbay.preferences")).not.toHaveProperty("composerStats");
+    expect(hidden.get(STORAGE_KEYS.preferences)).not.toHaveProperty("composerStats");
 
-    expect(hidden.get("acpPatchbay.preferences")).not.toHaveProperty("statsPrompts");
+    expect(hidden.get(STORAGE_KEYS.preferences)).not.toHaveProperty("statsPrompts");
 
     // "shown" was the default — it maps to nothing but the key's removal.
     const shown = new MemoryKV();
-    void shown.update("acpPatchbay.preferences", { composerStats: true });
+    void shown.update(STORAGE_KEYS.preferences, { composerStats: true });
     expect(new PreferencesStore(shown).get()).toEqual(DEFAULT_PREFERENCES);
-    expect(shown.get("acpPatchbay.preferences")).toEqual({});
+    expect(shown.get(STORAGE_KEYS.preferences)).toEqual({});
   });
 
   it("a stored statsPrompts is retired — the prompt count moved to the prompts chip", () => {
     const kv = new MemoryKV();
-    void kv.update("acpPatchbay.preferences", { statsPrompts: false, statsContext: false });
+    void kv.update(STORAGE_KEYS.preferences, { statsPrompts: false, statsContext: false });
     expect(new PreferencesStore(kv).get()).toEqual({ ...DEFAULT_PREFERENCES, statsContext: false });
-    expect(kv.get("acpPatchbay.preferences")).toEqual({ statsContext: false });
+    expect(kv.get(STORAGE_KEYS.preferences)).toEqual({ statsContext: false });
   });
 
   it("a stored value that isn't an object never throws, and reads as the defaults", () => {
     for (const junk of ["composerStats", 42, null]) {
       const kv = new MemoryKV();
-      void kv.update("acpPatchbay.preferences", junk);
+      void kv.update(STORAGE_KEYS.preferences, junk);
       expect(new PreferencesStore(kv).get()).toEqual(DEFAULT_PREFERENCES);
     }
   });
 
   it("a stored preference in a shape this version doesn't take reads as its default; the others keep theirs", () => {
     const kv = new MemoryKV();
-    void kv.update("acpPatchbay.preferences", {
+    void kv.update(STORAGE_KEYS.preferences, {
       soundOnDone: "yes",
       knobSource: "sometimes",
       idleCloseMinutes: "5",
@@ -613,19 +614,19 @@ describe("UsedCapabilityStore.seed — the fresh claim outranks the cache", () =
 describe("SessionContinuityStore", () => {
   it("a row stored under one composite id reads by its pair — nothing dropped, nothing left to fold", async () => {
     const kv = new MemoryKV();
-    await kv.update("acpPatchbay.sessionContinuity", [
+    await kv.update(STORAGE_KEYS.sessionContinuity, [
       { id: "claude\u0000s1", agentId: "claude", cwd: "/ws", draft: "kept words" },
       { patchbayAgentId: "auggie", sessionId: "s2", draft: "already paired" },
     ]);
     const store = new SessionContinuityStore(kv);
     expect(store.read("claude" as PatchbayAgentId, "s1")).toEqual({ draft: "kept words" });
     expect(store.read("auggie" as PatchbayAgentId, "s2")).toEqual({ draft: "already paired" });
-    expect(JSON.stringify(kv.get("acpPatchbay.sessionContinuity"))).not.toContain("agentId\"");
+    expect(JSON.stringify(kv.get(STORAGE_KEYS.sessionContinuity))).not.toContain("agentId\"");
   });
 
   it("an image chip stored by its name in the temp stash reads by that file's path — nothing dropped, nothing left to fold", async () => {
     const kv = new MemoryKV();
-    await kv.update("acpPatchbay.sessionContinuity", [
+    await kv.update(STORAGE_KEYS.sessionContinuity, [
       {
         patchbayAgentId: "claude",
         sessionId: "s1",
@@ -646,13 +647,13 @@ describe("SessionContinuityStore", () => {
     expect(store.read("auggie" as PatchbayAgentId, "s2")?.chips).toEqual([
       { kind: "image", id: "chip-3", label: "Image", mimeType: "image/png", path: join(ATTACHMENTS_DIR, "chip-3.png") },
     ]);
-    expect(JSON.stringify(kv.get("acpPatchbay.sessionContinuity"))).not.toContain("\"file\"");
+    expect(JSON.stringify(kv.get(STORAGE_KEYS.sessionContinuity))).not.toContain("\"file\"");
   });
 
   it("an attached file stored without its own name takes it from its label — staged or held, nothing dropped", async () => {
     const kv = new MemoryKV();
     const unnamed = (id: string, label: string, path: string) => ({ kind: "attachment", id, label, path });
-    await kv.update("acpPatchbay.sessionContinuity", [
+    await kv.update(STORAGE_KEYS.sessionContinuity, [
       {
         patchbayAgentId: "claude",
         sessionId: "s1",
@@ -746,8 +747,8 @@ describe("SessionContinuityStore", () => {
     await store.patch("claude" as PatchbayAgentId, "elsewhere", "/ws/b", { draft: "c" });
     await store.patch("auggie" as PatchbayAgentId, "other-agent", ws, { draft: "d" });
     // rows written before the cwd field existed
-    const raw = kv.get<unknown[]>("acpPatchbay.sessionContinuity") ?? [];
-    await kv.update("acpPatchbay.sessionContinuity", [
+    const raw = kv.get<unknown[]>(STORAGE_KEYS.sessionContinuity) ?? [];
+    await kv.update(STORAGE_KEYS.sessionContinuity, [
       ...raw,
       { patchbayAgentId: "claude", sessionId: "legacy-kept", draft: "e" },
       { patchbayAgentId: "claude", sessionId: "legacy-gone", draft: "f" },
