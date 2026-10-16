@@ -11,6 +11,16 @@
 // it is unit-testable against real spawned processes.
 import { type ChildProcess, execFile, type SpawnOptions } from "node:child_process";
 
+export interface ProcessOwner {
+  pid: number;
+  /** OS process start time; null when the host cannot read it safely. */
+  startedAt: number | null;
+}
+
+export async function currentProcessOwner(): Promise<ProcessOwner> {
+  return { pid: process.pid, startedAt: await processStartedAt(process.pid) };
+}
+
 /** Spread into `spawn` options: POSIX children lead their own process
  * group (that's what makes `kill(-pid)` reach the whole tree). stdio stays
  * piped, so `detached` changes group membership only — nothing else. */
@@ -94,10 +104,105 @@ export function commandOf(pid: number): Promise<string> {
   });
 }
 
+/** OS start time for a live process. This distinguishes a still-running
+ * extension host from a later process that reused its pid. */
+export function processStartedAt(pid: number): Promise<number | null> {
+  return new Promise((resolve) => {
+    if (process.platform === "win32") {
+      const script = `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CreationDate.ToUniversalTime().ToString('o')`;
+      execFile("powershell", ["-NoProfile", "-Command", script], (err, stdout) => {
+        const startedAt = err ? Number.NaN : Date.parse(stdout.trim());
+        resolve(Number.isFinite(startedAt) ? startedAt : null);
+      });
+      return;
+    }
+    execFile(
+      "ps",
+      ["-o", "lstart=", "-p", String(pid)],
+      { env: { ...process.env, LC_ALL: "C", TZ: "UTC" } },
+      (err, stdout) => {
+        const startedAt = err ? Number.NaN : Date.parse(`${stdout.trim()} UTC`);
+        resolve(Number.isFinite(startedAt) ? startedAt : null);
+      },
+    );
+  });
+}
+
+function parentPidOf(pid: number): Promise<number | null> {
+  return new Promise((resolve) => {
+    if (process.platform === "win32") {
+      const script = `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").ParentProcessId`;
+      execFile("powershell", ["-NoProfile", "-Command", script], (err, stdout) => {
+        const parent = err ? Number.NaN : Number(stdout.trim());
+        resolve(Number.isInteger(parent) && parent > 0 ? parent : null);
+      });
+      return;
+    }
+    execFile("ps", ["-o", "ppid=", "-p", String(pid)], (err, stdout) => {
+      const parent = err ? Number.NaN : Number(stdout.trim());
+      resolve(Number.isInteger(parent) && parent > 0 ? parent : null);
+    });
+  });
+}
+
+/** Old registry records have no owner identity. Their live process ancestry
+ * is the only safe way to tell an active extension host from an orphan. */
+async function hasLiveExtensionHostAncestor(pid: number): Promise<boolean | null> {
+  let child = pid;
+  for (let depth = 0; depth < 10; depth += 1) {
+    const parent = await parentPidOf(child);
+    if (parent === null) return null;
+    if (parent <= 1 || !isAlive(parent)) return false;
+    const command = await commandOf(parent);
+    if (command === "") return null;
+    if (/(?:--type=extensionHost\b|bootstrap-fork.{0,200}extensionHost)/i.test(command)) return true;
+    child = parent;
+  }
+  return null;
+}
+
 export interface OrphanRecord {
   pid: number;
   /** As `commandOf` reported it right after spawn. */
   command: string;
+  owner?: ProcessOwner;
+}
+
+/** Keeps processes whose owning extension host is still alive. A missing
+ * owner is a pre-upgrade record, so use process ancestry and preserve it when
+ * that ancestry cannot be read safely. */
+export async function partitionOwnedProcesses<T extends OrphanRecord>(
+  records: readonly T[],
+): Promise<{ active: T[]; orphaned: T[] }> {
+  const active: T[] = [];
+  const orphaned: T[] = [];
+  const ownerStartTimes = new Map<number, Promise<number | null>>();
+  for (const record of records) {
+    if (record.owner === undefined) {
+      const owned = await hasLiveExtensionHostAncestor(record.pid);
+      if (owned !== false) active.push(record);
+      else orphaned.push(record);
+      continue;
+    }
+
+    if (!isAlive(record.owner.pid)) {
+      orphaned.push(record);
+      continue;
+    }
+    if (record.owner.startedAt === null) {
+      active.push(record);
+      continue;
+    }
+    let ownerStartedAt = ownerStartTimes.get(record.owner.pid);
+    if (ownerStartedAt === undefined) {
+      ownerStartedAt = processStartedAt(record.owner.pid);
+      ownerStartTimes.set(record.owner.pid, ownerStartedAt);
+    }
+    const startedAt = await ownerStartedAt;
+    if (startedAt === null || Math.abs(startedAt - record.owner.startedAt) < 2000) active.push(record);
+    else orphaned.push(record);
+  }
+  return { active, orphaned };
 }
 
 /** Reaps leftovers from a session that never ran its cleanup:

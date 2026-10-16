@@ -35,10 +35,13 @@ import { STORAGE_KEYS, SECRET_FAMILIES } from "../src/orchestrator/stores/storag
 describe("SpawnRegistryStore", () => {
   it("records spawns keyed by pid and clears them on observed exit", async () => {
     const store = new SpawnRegistryStore(new MemoryKV());
-    await store.add(1234, "node agent.js", "agent");
+    const owner = { pid: 900, startedAt: 1_800_000_000_000 };
+    await store.add(1234, "node agent.js", "agent", owner);
     await store.add(5678, "npm test", "terminal");
     expect(store.list().map((r) => r.pid)).toEqual([1234, 5678]);
     expect(store.get("1234")?.kind).toBe("agent");
+    expect(store.get("1234")?.owner).toEqual(owner);
+    expect(store.get("5678")).not.toHaveProperty("owner");
 
     await store.removePid(1234);
     expect(store.list().map((r) => r.pid)).toEqual([5678]);

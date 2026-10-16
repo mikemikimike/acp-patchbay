@@ -59,7 +59,7 @@ import { OAuthCallbackRegistry } from "./oauth-callback";
 import { elicitationResponseOf, formFieldsOf, type ElicitationScope } from "./readers/elicitation";
 import { AgentPool } from "./pool";
 import { agentErrorText, authRequiredReasonOf } from "./readers/agent-error";
-import { commandOf, reapOrphans } from "./process-tree";
+import { commandOf, currentProcessOwner, partitionOwnedProcesses, reapOrphans } from "./process-tree";
 import { Cancelled, Queue } from "./queue";
 import type { McpServerWork } from "../shared/protocol";
 import { type AttachWork, SessionGates } from "./session-gates";
@@ -220,6 +220,7 @@ export class Orchestrator {
    * constant; every consumer reads this field, none re-derives it. */
   readonly workspaceCwd: string;
   private readonly binaryCacheDir: string;
+  private readonly processOwner = currentProcessOwner();
   readonly clientHost: ClientHost;
   /** The socket the subprocesses an agent spawns from a session's
    * mcpServers entries ask through. */
@@ -428,9 +429,11 @@ export class Orchestrator {
         this.agents.noteAuthWireFact(patchbayAgentId, method, settled, startedAt, reason),
       wireLogActive: () => this.wireLog.active,
       onWireFrame: (patchbayAgentId, direction, line) => this.wireLog.frame(patchbayAgentId, direction, line),
-      // Spawn registry: records persist machine-scoped so an abnormal
-      // end (crash, OS kill) leaves exactly what the next activate reaps.
-      onProcessSpawned: (pid, command) => void this.spawnRegistry.add(pid, command, "agent"),
+      // The machine-wide registry survives an abnormal end; owner identity
+      // lets a later activation reap this window without disturbing others.
+      onProcessSpawned: (pid, command) => {
+        void this.processOwner.then((owner) => this.spawnRegistry.add(pid, command, "agent", owner));
+      },
       onProcessEnded: (pid) => void this.spawnRegistry.removePid(pid),
       onElicitation: async (patchbayAgentId, reading, signal) => {
         if (reading.kind === "invalid") throw RequestError.invalidParams({ reason: reading.why });
@@ -739,10 +742,10 @@ export class Orchestrator {
       trackProcess: (handle) => {
         if (handle.pid === null) return;
         const pid = handle.pid;
-        void commandOf(pid).then((cmd) => {
+        void Promise.all([commandOf(pid), this.processOwner]).then(([cmd, owner]) => {
           // Already exited (fast command) → the record would only be stale.
           if (cmd !== "" && handle.exitStatus() === null) {
-            void this.spawnRegistry.add(pid, cmd, "terminal");
+            void this.spawnRegistry.add(pid, cmd, "terminal", owner);
           }
         });
         handle.onExit(() => void this.spawnRegistry.removePid(pid));
@@ -780,20 +783,23 @@ export class Orchestrator {
       .finally(() => this.agentView.emit({ kind: "startupSettled" }));
   }
 
-  /** Sweeps spawn-registry records left by a session that never ran its
-   * cleanup (crash, OS kill, host death). Kill only what still matches the
-   * recorded command line — a mismatch is a reused pid and is spared, always
-   * the safe direction (process-tree.ts). Every record is spent either way. */
+  /** Sweeps records whose owning extension host has ended. The machine-wide
+   * registry is shared by windows, so live owners and unreadable legacy
+   * records stay in place for their own window to stop or reap. */
   private async reapLeftoverProcesses(): Promise<void> {
     const records = this.spawnRegistry.list();
     if (records.length === 0) return;
-    const { killed, spared } = await reapOrphans(records);
-    for (const record of records) await this.spawnRegistry.removePid(record.pid);
+    const { active, orphaned } = await partitionOwnedProcesses(records);
+    const { killed, spared } = await reapOrphans(orphaned);
+    for (const record of orphaned) await this.spawnRegistry.removePid(record.pid);
     for (const record of killed) {
       this.log.info(`reaped orphan ${record.kind} process (pid ${record.pid}) from a previous session`);
     }
     for (const record of spared) {
       this.log.debug(`spared pid ${record.pid} — command line changed, pid was reused`);
+    }
+    for (const record of active) {
+      this.log.debug(`left ${record.kind} process (pid ${record.pid}) with its active window`);
     }
   }
 

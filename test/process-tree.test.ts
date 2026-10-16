@@ -10,7 +10,15 @@ import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { describe, expect, it, vi } from "vitest";
 import { stopsAtTestEnd } from "./support/teardown";
 import { SETTLE } from "./support/wait-for";
-import { commandOf, isAlive, killTree, reapOrphans, treeSpawnOptions } from "../src/orchestrator/process-tree";
+import {
+  commandOf,
+  isAlive,
+  killTree,
+  partitionOwnedProcesses,
+  processStartedAt,
+  reapOrphans,
+  treeSpawnOptions,
+} from "../src/orchestrator/process-tree";
 import { AgentPool } from "../src/orchestrator/pool";
 import { stubFsTerminalHooks } from "./support/stub-hooks";
 import type { PatchbayAgentId } from "../src/shared/ids";
@@ -124,6 +132,101 @@ describe("reapOrphans", () => {
     await waitUntil(() => !isAlive(orphan.pid!), "orphan death");
     expect(isAlive(bystander.pid!)).toBe(true); // never kill what we can't match
     killTree(bystander, "SIGKILL");
+  });
+});
+
+describe("partitionOwnedProcesses", () => {
+  it("keeps another window's agent while its host lives, then reaps it after the host exits", async () => {
+    const source = `const { spawn } = require("node:child_process"); const child = spawn(process.execPath, ["-e", ${JSON.stringify(IDLE)}, "patchbay-owned-window-agent"], { stdio: "ignore", detached: true }); console.log(child.pid); ${IDLE};`;
+    const host = spawn(process.execPath, ["-e", source, "--", "--type=extensionHost"], {
+      stdio: ["ignore", "pipe", "ignore"],
+      ...treeSpawnOptions,
+    });
+    host.stdout.setEncoding("utf8");
+    let agentPid = 0;
+    try {
+      agentPid = await new Promise<number>((resolve, reject) => {
+        host.once("error", reject);
+        let output = "";
+        host.stdout.on("data", (chunk: string) => {
+          output += chunk;
+          const line = output.split("\n")[0]?.trim();
+          if (line) resolve(Number(line));
+        });
+      });
+      const ownerStartedAt = await processStartedAt(host.pid!);
+      expect(ownerStartedAt).not.toBeNull();
+      const record = {
+        pid: agentPid,
+        command: await commandOf(agentPid),
+        owner: { pid: host.pid!, startedAt: ownerStartedAt! },
+      };
+
+      const live = await partitionOwnedProcesses([record]);
+
+      expect(live).toEqual({ active: [record], orphaned: [] });
+      expect(isAlive(agentPid)).toBe(true);
+
+      const reusedOwner = { ...record, owner: { ...record.owner, startedAt: record.owner.startedAt + 10_000 } };
+      const reused = await partitionOwnedProcesses([reusedOwner]);
+      expect(reused).toEqual({ active: [], orphaned: [reusedOwner] });
+      expect(isAlive(agentPid)).toBe(true);
+
+      const unknownOwner = { ...record, owner: { ...record.owner, startedAt: null } };
+      const unknown = await partitionOwnedProcesses([unknownOwner]);
+      expect(unknown).toEqual({ active: [unknownOwner], orphaned: [] });
+      expect(isAlive(agentPid)).toBe(true);
+
+      const hostExited = new Promise<void>((resolve) => host.once("exit", () => resolve()));
+      host.kill("SIGKILL");
+      await hostExited;
+      expect(isAlive(agentPid)).toBe(true);
+
+      const afterExit = await partitionOwnedProcesses([record]);
+      expect(afterExit).toEqual({ active: [], orphaned: [record] });
+      const reaped = await reapOrphans(afterExit.orphaned);
+      expect(reaped.killed).toEqual([record]);
+      await waitUntil(() => !isAlive(agentPid), "orphaned window agent cleanup");
+    } finally {
+      if (host.exitCode === null && host.signalCode === null) host.kill("SIGKILL");
+      if (agentPid > 0 && isAlive(agentPid)) {
+        try {
+          process.kill(agentPid, "SIGKILL");
+        } catch {
+          // The child may exit between the liveness check and the signal.
+        }
+      }
+    }
+  });
+
+  it("keeps a legacy record under another live extension host", async () => {
+    const source = `const { spawn } = require("node:child_process"); const child = spawn(process.execPath, ["-e", ${JSON.stringify(IDLE)}, "patchbay-legacy-window-agent"], { stdio: "ignore" }); console.log(child.pid); ${IDLE};`;
+    const host = spawn(process.execPath, ["-e", source, "--", "--type=extensionHost"], {
+      stdio: ["ignore", "pipe", "ignore"],
+      ...treeSpawnOptions,
+    });
+    host.stdout.setEncoding("utf8");
+    const agentPid = await new Promise<number>((resolve, reject) => {
+      host.once("error", reject);
+      let output = "";
+      host.stdout.on("data", (chunk: string) => {
+        output += chunk;
+        const line = output.split("\n")[0]?.trim();
+        if (line) resolve(Number(line));
+      });
+    });
+    const record = { pid: agentPid, command: await commandOf(agentPid) };
+
+    try {
+      const { active, orphaned } = await partitionOwnedProcesses([record]);
+
+      expect(active).toEqual([record]);
+      expect(orphaned).toEqual([]);
+      expect(isAlive(agentPid)).toBe(true);
+    } finally {
+      killTree(host, "SIGKILL");
+      await waitUntil(() => !isAlive(agentPid), "owned agent cleanup");
+    }
   });
 });
 

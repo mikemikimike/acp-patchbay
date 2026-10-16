@@ -7,13 +7,14 @@
 // self-exit). Written at spawn with the command line read back from the OS
 // (record what reality says, compare with what reality says later), cleared
 // on observed exit — whatever survives an abnormal end (crash, OS kill,
-// host death before cleanup ran) is exactly what the next activate's orphan
-// reap looks at. Machine store: a machine fact, not a workspace fact —
-// and file-backed, so Settings Sync can never carry it anywhere.
+// host death before cleanup ran) is what a later activation checks against
+// its owning extension host. Machine store: a machine fact, not a workspace
+// fact — and file-backed, so Settings Sync can never carry it anywhere.
 import { z } from "zod";
 import { GlobalRecordStore } from "./global-record-store";
 import type { KV } from "./kv";
 import { STORAGE_KEYS } from "./storage-keys";
+import type { ProcessOwner } from "../process-tree";
 
 export const spawnRecordSchema = z.object({
   id: z.string().min(1), // String(pid) — one machine, one live pid at a time
@@ -24,6 +25,8 @@ export const spawnRecordSchema = z.object({
   kind: z.enum(["agent", "terminal"]),
   /** ISO spawn time — display/debug only, never the reuse guard. */
   at: z.string(),
+  /** The extension host that owns this process; absent on older records. */
+  owner: z.object({ pid: z.number().int().positive(), startedAt: z.number().nullable() }).optional(),
 });
 export type SpawnRecord = z.infer<typeof spawnRecordSchema>;
 
@@ -34,8 +37,8 @@ export class SpawnRegistryStore extends GlobalRecordStore<SpawnRecord> {
     super(kv, KEY, spawnRecordSchema);
   }
 
-  async add(pid: number, command: string, kind: SpawnRecord["kind"]): Promise<void> {
-    await this.upsert({ id: String(pid), pid, command, kind, at: new Date().toISOString() });
+  async add(pid: number, command: string, kind: SpawnRecord["kind"], owner?: ProcessOwner): Promise<void> {
+    await this.upsert({ id: String(pid), pid, command, kind, at: new Date().toISOString(), ...(owner ? { owner } : {}) });
   }
 
   async removePid(pid: number): Promise<void> {
