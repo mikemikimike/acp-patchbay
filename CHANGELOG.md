@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Stopping an agent never ends someone else's process.** A stop ended
+  with one more kill of the agent's process tree by its process id, even
+  after the agent had already exited. Windows hands a freed id to the
+  next process at once, so on Windows that kill could land on an
+  unrelated program and everything it started — another window's agent,
+  or anything else running. A kill now goes only to a process patchbay
+  still holds; once one has exited, what it left behind is ended only
+  where that is safe. Terminals an agent runs are stopped the same way.
+  (#115)
 - **On Windows, an env value you set wins whatever its case.** Windows
   reads env names without regard to case, and an agent's process got both
   spellings when yours differed from the editor's (`path` beside `Path`,
