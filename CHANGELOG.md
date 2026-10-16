@@ -23,6 +23,11 @@
   2026 and High Contrast Light that was dark text on blue. The text now
   takes the badge's own text color, the pair the theme defines together.
   Thanks to @maple367. (#106)
+- **A snapshot you sent reads inside your message too.** Opening the
+  embedded file under a sent message showed it in the page's dim text on
+  the bubble's color — about 1.2:1 in Light 2026, effectively invisible —
+  and a chip in your message could take the page's background. Everything
+  in your message now takes the bubble's own colors. (#107)
 - **Permissions is now two pages: Edits and Commands.** Where file writes
   are approved and which commands are allowed are different things that
   grow apart, so each has its own page under Trust. A long command-rules
