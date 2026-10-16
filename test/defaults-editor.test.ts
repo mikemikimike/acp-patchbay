@@ -145,6 +145,26 @@ describe("DefaultsEditor", () => {
     await h.pool.stop("edit" as PatchbayAgentId);
   });
 
+  // A mode set answers nothing: the editor hears the agent took it only
+  // from the agent's own current_mode_update on the editing session. A
+  // missed update reads as the agent still on the old mode, so a later
+  // default back to it would skip its set and leave the agent where it is.
+  it("the agent's own update on the editing session reaches the editor — a default set back is sent, not skipped", async () => {
+    const h = await harness({ defaults: { modal: { mode: "ask" } } });
+    const modes = { currentModeId: "ask", availableModes: [{ id: "ask", name: "Ask" }, { id: "code", name: "Code" }] };
+    await h.connected({ declare: { sessionCapabilities: { close: {}, delete: {}, list: {} } }, modes }, "modal" as PatchbayAgentId);
+    await h.editor.open("modal" as PatchbayAgentId);
+    const sent = vi.spyOn(h.pool, "setSessionMode");
+    const modesSent = () => sent.mock.calls.map(([, , modeId]) => modeId);
+
+    await h.saveDefaults("modal" as PatchbayAgentId, { mode: "code" });
+    await vi.waitFor(() => expect(modesSent()).toEqual(["code"]), SETTLE);
+    await sent.mock.results[0]!.value; // answered — the agent's update came before its answer
+    await h.saveDefaults("modal" as PatchbayAgentId, { mode: "ask" });
+    await vi.waitFor(() => expect(modesSent()).toEqual(["code", "ask"]), SETTLE);
+    await h.pool.stop("modal" as PatchbayAgentId);
+  });
+
   it("clearing a default has no wire form — the session is recomputed from the store", async () => {
     const h = await harness({ defaults: { clear: { model: "pro", effort: "high" } } });
     await h.connected(DEPENDENT_SCRIPT, "clear" as PatchbayAgentId);
