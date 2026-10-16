@@ -155,6 +155,20 @@ describe("reading a configuration file", () => {
   });
 });
 
+describe("a file's keys are data, never names to look up", () => {
+  // JSON text, not an object literal: only parsed text makes `__proto__`
+  // a key of its own, as a file can.
+  it("a key named like an object's own machinery is an entry this version doesn't carry", () => {
+    const keys = ["__proto__", "constructor", "toString", "hasOwnProperty"];
+    const state = `{${keys.map((k) => `"${k}": { "polluted": true }`).join(", ")}, "${STORAGE_KEYS.preferences}": { "soundOnDone": true }}`;
+    const outcome = readConfiguration(`{"patchbay": "configuration", "state": ${state}}`);
+    if (!outcome.ok) throw new Error(outcome.reason);
+    expect(outcome.read.unread).toEqual(keys.map((k) => `an entry this version doesn't carry (${k})`));
+    expect(outcome.read.preferences).toEqual({ soundOnDone: true });
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+});
+
 describe("isNewer", () => {
   it("orders by numbered parts; what doesn't read as a version is never newer", () => {
     expect(isNewer("0.88.0", "0.86.0")).toBe(true);
