@@ -3,9 +3,10 @@
 // re-resolves the already-resolved snapshot), and the detect-first /
 // sandbox-fallback composition. Gate tests run real --version round-trips:
 // the gate's whole point is that presence proves nothing, only a spawn
-// does, so the tests spawn. POSIX-only fakes are skipped on win32 (a fake
-// .cmd can't be spawned shell-less there — the same CVE guard production
-// hits); the pure Windows behavior is covered via injected platform/base.
+// does, so the tests spawn — stand-in runtimes in the platform's own form
+// (a .cmd shim on Windows, run through the same shell path production
+// takes); the pure Windows behavior is also covered via injected
+// platform/base.
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { describe, expect, it, beforeAll } from "vitest";

@@ -15,11 +15,12 @@ import type { Action, AgentConfigView, AgentSummary, AgentViewState, ChatBlock, 
 import { answeringYes } from "./modal";
 import { WINDOW_SETTLE, waitFor } from "../support/wait-for";
 
-/** A block of a session's transcript. */
-export type Block = ChatBlock;
-
 /** A block the user answers — asked, then resolved. */
-export type Card = Extract<ChatBlock, { resolution: unknown }>;
+type Card = Extract<ChatBlock, { resolution: unknown }>;
+
+/** What the agent answers through VS Code — a connect, a turn, its blocks —
+ * given longer than the window's own moves. */
+const AGENT_SETTLE = 15_000;
 
 /** This extension, found by the id its manifest gives it. */
 export function extension(): vscode.Extension<unknown> {
@@ -89,7 +90,7 @@ export class Patchbay {
     this.act({ kind: "connectAgent", source: { patchbayAgentId } });
     await waitFor(
       () => this.agent(patchbayAgentId)?.status === "running",
-      15000,
+      AGENT_SETTLE,
       () => `${patchbayAgentId} running (status: ${this.agent(patchbayAgentId)?.status})`,
     );
   }
@@ -131,7 +132,7 @@ export class Patchbay {
         const id = this.view.activePatchbaySessionId;
         return id !== null && !known.has(id) ? id : undefined;
       },
-      15000,
+      AGENT_SETTLE,
       `a new session for ${patchbayAgentId}`,
     );
   }
@@ -143,7 +144,7 @@ export class Patchbay {
     this.act({ kind: "sendPrompt", patchbaySessionId, text });
     await waitFor(
       () => this.turnsEnded(patchbaySessionId) > before && !this.busy(patchbaySessionId).includes("prompt"),
-      15000,
+      AGENT_SETTLE,
       `a turn ended in ${patchbaySessionId}`,
     );
   }
@@ -170,10 +171,10 @@ export class Patchbay {
   }
 
   /** The `index`-th block of `kind` in a session's transcript, once there. */
-  block(patchbaySessionId: PatchbaySessionId, kind: string, index = 0): Promise<Block> {
+  block(patchbaySessionId: PatchbaySessionId, kind: string, index = 0): Promise<ChatBlock> {
     return waitFor(
       () => (this.view.transcripts[patchbaySessionId] ?? []).filter((b) => b.kind === kind)[index],
-      15000,
+      AGENT_SETTLE,
       `${kind} block ${index} in ${patchbaySessionId}`,
     );
   }
@@ -183,7 +184,7 @@ export class Patchbay {
   openCard(patchbaySessionId: PatchbaySessionId, kind: Card["kind"]): Promise<Card> {
     return waitFor(
       () => (this.view.transcripts[patchbaySessionId] ?? []).find((b): b is Card => b.kind === kind && "resolution" in b && b.resolution === null),
-      15000,
+      AGENT_SETTLE,
       `an open ${kind} card in ${patchbaySessionId}`,
     );
   }
