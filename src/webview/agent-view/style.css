@@ -604,7 +604,14 @@ body {
 }
 
 /* ── chat blocks ────────────────────────────────────────────────────── */
+/* The sent bubble wears the theme's badge pair, and everything inside it
+ * draws from that pair, never the page's: its text the badge foreground,
+ * its rules a tint of it (on a strong badge — Light 2026's blue — a page
+ * color reads as nothing). The pair holds normal text's 4.5:1 with little
+ * to spare, so nothing behind text is tinted and no text is dimmed: a
+ * chip is its outline, a quieter piece told apart by size and face. */
 .msg-user {
+  --pb-bubble-rule: color-mix(in srgb, currentColor 40%, transparent);
   align-self: flex-end;
   max-width: 85%;
   background: var(--vscode-badge-background, var(--pb-panel-2));
@@ -1079,12 +1086,17 @@ body {
   border-color: var(--pb-accent-dim);
 }
 
-/* Tokens inside a sent bubble: a hair of breathing room, so a replay that
- * glued a mention to the next word still reads as two things (agents have
- * been observed dropping the separating space). */
+/* Tokens inside a sent bubble: outlined in the bubble's own rule — a
+ * mention told apart by its @ and its button, not by the page's accent —
+ * with a hair of breathing room, so a replay that glued a mention to the
+ * next word still reads as two things (agents have been observed dropping
+ * the separating space). */
 .msg-user .prompt-token {
   margin: 0 2px;
   white-space: nowrap;
+  color: inherit;
+  background: transparent;
+  border-color: var(--pb-bubble-rule);
 }
 
 /* Image part: inline preview off the attachments stash — bounded, its own
@@ -1095,17 +1107,16 @@ body {
   max-height: 220px;
   margin: 4px 0;
   border-radius: 4px;
-  border: 1px solid var(--pb-border);
+  border: 1px solid var(--pb-bubble-rule);
 }
 
 /* Context part body: the bounded snapshot, monospace, scrolling past its
- * own cap — same look as the injected-envelope body. */
+ * own cap — the injected-envelope body's shape, in the bubble's pair. */
 .msg-user .user-context-body {
   display: block;
   margin: 4px 0 2px;
   padding: 6px 8px;
-  border-left: 2px solid var(--pb-border);
-  color: var(--pb-text-dim);
+  border-left: 2px solid var(--pb-bubble-rule);
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 11px;
   white-space: pre-wrap;

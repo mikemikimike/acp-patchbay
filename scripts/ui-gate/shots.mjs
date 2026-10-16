@@ -286,6 +286,59 @@ for (const theme of Object.keys(THEMES)) {
   const userTokens = await p.$$eval(".msg-user .prompt-token", (els) => els.map((el) => el.textContent.trim()));
   check(`[${theme}] user bubble renders the mention part as a token`, userTokens.includes("@api.ts"));
   check(`[${theme}] user bubble renders the attachment part as a chip`, userTokens.some((t) => t.includes("notes.md")));
+  // the sent bubble wears the theme's badge pair: every text in it — the
+  // snapshot body opened under a sent selection included — reads on that
+  // background, at the 4.5:1 normal text needs. Colors resolve through a
+  // canvas, so any CSS color syntax compares as the sRGB painted.
+  await p.locator(".msg-user .user-context button[aria-expanded]").first().click();
+  await p.waitForSelector(".msg-user .user-context-body");
+  const unreadable = await p.$$eval(".msg-user", (bubbles) => {
+    const ctx = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
+    const rgba = (css) => {
+      ctx.clearRect(0, 0, 1, 1);
+      ctx.fillStyle = css;
+      ctx.fillRect(0, 0, 1, 1);
+      const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+      return [r, g, b, a / 255];
+    };
+    const over = (top, under) => [0, 1, 2].map((i) => top[i] * top[3] + under[i] * (1 - top[3])).concat(1);
+    const lum = (c) =>
+      [0, 1, 2]
+        .map((i) => c[i] / 255)
+        .map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4))
+        .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
+    // what is painted behind `el`: its own and its ancestors' backgrounds,
+    // stacked from the first opaque one down
+    const backdrop = (el) => {
+      const layers = [];
+      for (let n = el; n !== null; n = n.parentElement) {
+        const bg = rgba(getComputedStyle(n).backgroundColor);
+        if (bg[3] > 0) layers.push(bg);
+        if (bg[3] === 1) break;
+      }
+      return layers.reverse().reduce((under, top) => over(top, under), [255, 255, 255, 1]);
+    };
+    const found = [];
+    for (const bubble of bubbles) {
+      for (const el of [bubble, ...bubble.querySelectorAll("*")]) {
+        const text = [...el.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE).map((n) => n.textContent.trim()).join("");
+        if (text === "" || el.getClientRects().length === 0) continue;
+        let opacity = 1;
+        for (let n = el; n !== bubble.parentElement; n = n.parentElement) opacity *= Number(getComputedStyle(n).opacity);
+        const fg = rgba(getComputedStyle(el).color);
+        const bg = backdrop(el);
+        const shown = over([fg[0], fg[1], fg[2], fg[3] * opacity], bg);
+        const [hi, lo] = [lum(shown), lum(bg)].sort((a, b) => b - a);
+        const ratio = (hi + 0.05) / (lo + 0.05);
+        if (ratio < 4.5) found.push(`${el.className || el.tagName} "${text.slice(0, 16)}" ${ratio.toFixed(2)}:1`);
+      }
+    }
+    return found;
+  });
+  check(`[${theme}] every text in a sent bubble reads on it (${unreadable.join("; ") || "all at 4.5:1 or more"})`, unreadable.length === 0);
+  await p.mouse.move(0, 0);
+  await p.locator(".msg-user", { hasText: "keep going" }).screenshot({ path: `${OUT}/user-snapshot-${theme}.png` });
+  await p.locator(".msg-user", { hasText: "find foo" }).screenshot({ path: `${OUT}/user-tokens-${theme}.png` });
 
   // ── composer stats strip: whole-session counts (6 tool calls in the
   // fixture) — read-outs only; the prompt count and the files chip live in
@@ -391,7 +444,7 @@ for (const theme of Object.keys(THEMES)) {
   );
   check(
     `[${theme}] prompts list newest first, numbered as asked (${JSON.stringify(promptRows)})`,
-    JSON.stringify(promptRows) === JSON.stringify([["2", "keep going"], ["1", "find foo in @api.ts and fix it@notes.md"]]),
+    JSON.stringify(promptRows) === JSON.stringify([["2", "keep going[api.ts:12-14]"], ["1", "find foo in @api.ts and fix it@notes.md"]]),
   );
   check(`[${theme}] a prompt shows a few lines at most`, (await p.$eval(".prompts-panel .prompt-row .words", (el) => getComputedStyle(el).webkitLineClamp)) === "3");
   await settled(p);

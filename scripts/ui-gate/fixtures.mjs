@@ -61,7 +61,9 @@ export const chatTranscript = [
   { kind: "text", id: "xp0", text: "Attached the notes I used:" },
   { kind: "agentPart", id: "ap1", part: { kind: "context", label: "file:///ws/notes.md", text: "- foo() is called from 3 places\n- b.ts returns it" }, thought: false },
   { kind: "agentPart", id: "ap2", part: { kind: "unrendered", type: "audio" }, thought: false },
-  { kind: "user", id: "u2", parts: [{ kind: "text", text: "keep going" }] },
+  // a sent selection: its snapshot opens inside the bubble, and must read
+  // on the bubble's own colors
+  { kind: "user", id: "u2", parts: [{ kind: "text", text: "keep going" }, { kind: "context", label: "api.ts:12-14", text: "export function foo() {\n  return bar();\n}" }] },
   // a call running in a client terminal: the terminal renders inside its
   // card (ACP embedded terminal), not as a separate block in the stream
   tool("x9", { title: "Run tests", toolKind: "execute", status: "completed", input: '{\n  "command": "npm test"\n}', content: [{ kind: "terminal", terminalId: "term-9" }] }),

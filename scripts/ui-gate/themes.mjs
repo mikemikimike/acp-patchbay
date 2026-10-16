@@ -1,6 +1,9 @@
 // The theme variable sets the ui-gate renders under. `dark`/`light` are VS
-// Code's Modern defaults; `purple` is a hostile custom-theme approximation
-// (the set that caught the unmapped-token and UA-ButtonText regressions).
+// Code's Modern defaults; `light2026` is its Light 2026, whose badge is a
+// strong blue (the set that shows a piece of the user bubble left on the
+// page's colors); `purple` is a hostile custom-theme approximation (the set
+// that caught the unmapped-token and UA-ButtonText regressions). The VS
+// Code values are its shipped theme files', 1.142.
 // Every var the theme bridge or hand CSS reads should appear here — a var
 // consumed but absent from these sets is exactly the kind of gap the gate
 // exists to catch. The --vscode-acpPatchbay-* contributed colors
@@ -22,6 +25,7 @@ export const THEMES = {
     --vscode-input-background:#313131; --vscode-input-border:#3c3c3c;
     --vscode-errorForeground:#f85149; --vscode-dropdown-background:#252526;
     --vscode-dropdown-foreground:#cccccc; --vscode-textLink-foreground:#4daafc;
+    --vscode-badge-background:#616161; --vscode-badge-foreground:#f8f8f8;
     --vscode-acpPatchbay-brand:#5b9bd5; --vscode-acpPatchbay-ok:#4ec9a0;
     --vscode-acpPatchbay-warn:#e5a830; --vscode-acpPatchbay-err:#e06c75;
     --vscode-acpPatchbay-consumed:#56b6c2;
@@ -36,6 +40,22 @@ export const THEMES = {
     --vscode-input-background:#ffffff; --vscode-input-border:#cecece;
     --vscode-errorForeground:#f85149; --vscode-dropdown-background:#ffffff;
     --vscode-dropdown-foreground:#3b3b3b; --vscode-textLink-foreground:#005fb8;
+    --vscode-badge-background:#cccccc; --vscode-badge-foreground:#3b3b3b;
+    --vscode-acpPatchbay-brand:#2e6da4; --vscode-acpPatchbay-ok:#177245;
+    --vscode-acpPatchbay-warn:#8a5d00; --vscode-acpPatchbay-err:#b3444f;
+    --vscode-acpPatchbay-consumed:#0f6674;
+    color-scheme:light;`,
+  light2026: `${SHARED}
+    --vscode-sideBar-background:#fafafd; --vscode-editor-background:#ffffff;
+    --vscode-foreground:#202020; --vscode-editorWidget-background:#fafafd;
+    --vscode-editorWidget-border:#e4e5e6; --vscode-panel-border:#f0f1f2;
+    --vscode-list-hoverBackground:#00000014; --vscode-descriptionForeground:#606060;
+    --vscode-disabledForeground:#bbbbbb; --vscode-button-background:#0069cc;
+    --vscode-button-foreground:#ffffff; --vscode-focusBorder:#0069cc;
+    --vscode-input-background:#ffffff; --vscode-input-border:#d8d8d866;
+    --vscode-errorForeground:#ad0707; --vscode-dropdown-background:#ffffff;
+    --vscode-dropdown-foreground:#202020; --vscode-textLink-foreground:#0069cc;
+    --vscode-badge-background:#0069cc; --vscode-badge-foreground:#ffffff;
     --vscode-acpPatchbay-brand:#2e6da4; --vscode-acpPatchbay-ok:#177245;
     --vscode-acpPatchbay-warn:#8a5d00; --vscode-acpPatchbay-err:#b3444f;
     --vscode-acpPatchbay-consumed:#0f6674;
@@ -50,10 +70,11 @@ export const THEMES = {
     --vscode-input-background:#211d31; --vscode-input-border:#3a3452;
     --vscode-errorForeground:#f2637e; --vscode-dropdown-background:#241f36;
     --vscode-dropdown-foreground:#d5d0e6; --vscode-textLink-foreground:#b9a5ec;
+    --vscode-badge-background:#a389e0; --vscode-badge-foreground:#1a1526;
     color-scheme:dark;`,
 };
 
 /** dark-class body attribute per theme (theme-dark-sync mirrors this). */
 export function bodyClass(name) {
-  return name === "light" ? "vscode-light" : "vscode-dark";
+  return name.startsWith("light") ? "vscode-light" : "vscode-dark";
 }
