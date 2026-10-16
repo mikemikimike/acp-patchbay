@@ -65,7 +65,10 @@ function schemaReads(): string[] {
 }
 
 describe("the wire boundary", () => {
+  // No time budget: a compile always ends, and a synchronous test can't be
+  // cut short anyway — a budget would only judge how busy the machine was
+  // (seconds alone, a minute among the other suites' processes on Windows).
   it("nothing outside the reader layer reads a field of a protocol message", () => {
     expect(schemaReads(), "read the message in its reader (src/orchestrator/readers/) and hand on the fact").toEqual([]);
-  }, 60_000);
+  }, 0);
 });
