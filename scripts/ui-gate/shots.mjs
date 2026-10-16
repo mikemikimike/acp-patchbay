@@ -767,11 +767,15 @@ for (const theme of Object.keys(THEMES)) {
   p = await page(browser, theme, { width: 420, height: 600 });
   await renderView(p, "agent-view", agentViewState({ live: true }));
   await p.waitForSelector(".chat .msg-user");
-  // The live view's spinner can render after the user message, not with
-  // it — wait for it rather than read once.
+  // The ticker is the live turn line's own spinner — not any spinner in the
+  // chat: a code fence shows one too, only until its highlighting lands.
   check(
     `[${theme}] live ticker spins`,
-    await p.waitForSelector(".chat .codicon-loading.codicon-modifier-spin", { timeout: 3000 }).then(() => true, () => false),
+    await p
+      .waitForFunction(() =>
+        document.querySelector(`.chat button[title="Show the turn's breakdown"] .spin`)?.getAnimations().some((a) => a.playState === "running"),
+      )
+      .then(() => true, () => false),
   );
   await p.screenshot({ path: `${OUT}/chat-live-${theme}.png` });
   // A thought streaming in stays one row by default (#92): "Thinking…" and
