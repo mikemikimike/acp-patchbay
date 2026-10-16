@@ -59,7 +59,7 @@ import { OAuthCallbackRegistry } from "./oauth-callback";
 import { elicitationResponseOf, formFieldsOf, type ElicitationScope } from "./readers/elicitation";
 import { AgentPool } from "./pool";
 import { agentErrorText, authRequiredReasonOf } from "./readers/agent-error";
-import { commandOf, killTree, reapOrphans } from "./process-tree";
+import { commandOf, reapOrphans } from "./process-tree";
 import { Cancelled, Queue } from "./queue";
 import type { McpServerWork } from "../shared/protocol";
 import { type AttachWork, SessionGates } from "./session-gates";
@@ -942,7 +942,7 @@ export class Orchestrator {
    * or replaces. The views see each session close and any pending connect
    * or import review end — a review was read against the stores now moving. */
   private async stopEverything(): Promise<void> {
-    for (const pid of this.clientHost.runningPids()) killTree(pid, "SIGKILL");
+    this.clientHost.killAll();
     this.clientHost.clear();
     await this.endAllWork();
     this.sessions.reset();
@@ -989,7 +989,7 @@ export class Orchestrator {
     // restores (if it comes soon enough to be a reload; last-connected.ts).
     // A Memento write is milliseconds; it must land inside the budget.
     await this.agents.stampRunning();
-    for (const pid of this.clientHost.runningPids()) killTree(pid, "SIGKILL");
+    this.clientHost.killAll();
     await Promise.race([this.endAllWork(), new Promise<void>((resolve) => setTimeout(resolve, 2_000).unref())]);
   }
 

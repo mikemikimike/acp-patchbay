@@ -5,7 +5,7 @@
 // each platform's own arm runs: process groups and signals on POSIX,
 // taskkill /T and the CIM command line on Windows (where the ladder's
 // polite rung is already the forced one).
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { describe, expect, it, vi } from "vitest";
 import { stopsAtTestEnd } from "./support/teardown";
@@ -16,9 +16,10 @@ import { stubFsTerminalHooks } from "./support/stub-hooks";
 import type { PatchbayAgentId } from "../src/shared/ids";
 
 /** A process of this Node that idles until killed; `marker` rides its
- * command line, so a read of that line can tell it from any other. */
-function idler(marker: string) {
-  return spawn(process.execPath, ["-e", IDLE, marker], { stdio: "ignore", ...treeSpawnOptions });
+ * command line, so a read of that line can tell it from any other. A tree
+ * leader unless told otherwise — as everything patchbay spawns is. */
+function idler(marker: string, { treeLeader = true } = {}) {
+  return spawn(process.execPath, ["-e", IDLE, marker], { stdio: "ignore", ...(treeLeader ? treeSpawnOptions : {}) });
 }
 const IDLE = "setInterval(() => {}, 1 << 30)";
 
@@ -40,7 +41,7 @@ const SURVIVING_CHILD = JSON.stringify({ stdio: "ignore", detached: process.plat
 
 /** A leader that reports its idling grandchild's pid on stdout, then
  * idles too — a real two-level tree. */
-function spawnTree(): Promise<{ leaderPid: number; grandchildPid: number }> {
+function spawnTree(): Promise<{ leader: ChildProcess; grandchildPid: number }> {
   return new Promise((resolve, reject) => {
     const leader = spawn(
       process.execPath,
@@ -54,7 +55,7 @@ function spawnTree(): Promise<{ leaderPid: number; grandchildPid: number }> {
       out += chunk;
       const line = out.split("\n")[0];
       if (line !== undefined && line.trim() !== "") {
-        resolve({ leaderPid: leader.pid!, grandchildPid: Number(line.trim()) });
+        resolve({ leader, grandchildPid: Number(line.trim()) });
       }
     });
   });
@@ -62,27 +63,46 @@ function spawnTree(): Promise<{ leaderPid: number; grandchildPid: number }> {
 
 describe("killTree", () => {
   it("ends the whole tree, grandchild included", async () => {
-    const { leaderPid, grandchildPid } = await spawnTree();
-    expect(isAlive(leaderPid)).toBe(true);
+    const { leader, grandchildPid } = await spawnTree();
+    expect(isAlive(leader.pid!)).toBe(true);
     expect(isAlive(grandchildPid)).toBe(true);
 
-    killTree(leaderPid, "SIGKILL");
-    await waitUntil(() => !isAlive(leaderPid) && !isAlive(grandchildPid), "tree death");
+    killTree(leader, "SIGKILL");
+    await waitUntil(() => !isAlive(leader.pid!) && !isAlive(grandchildPid), "tree death");
   });
 
-  it("is a no-op on an already-dead tree — ESRCH is success", () => {
-    expect(() => killTree(99_999_999, "SIGKILL")).not.toThrow();
+  // An exited process's pid is no longer ours: the system may give it to
+  // another process at once (Windows does). That handover is played here —
+  // the exited child's pid made a live bystander's — since no test can
+  // make the system reuse one on cue.
+  it("a process gone past its exit is never killed by its pid — whoever holds the pid now lives on", async () => {
+    const gone = idler("patchbay-gone");
+    const bystander = idler("patchbay-bystander", { treeLeader: false });
+    const control = idler("patchbay-control");
+    await waitUntil(() => gone.pid !== undefined && bystander.pid !== undefined && control.pid !== undefined, "spawn");
+    killTree(gone, "SIGKILL");
+    await new Promise((exited) => gone.once("exit", exited));
+    Object.defineProperty(gone, "pid", { value: bystander.pid });
+
+    killTree(gone, "SIGKILL");
+    // A held process's kill, asked after: once it has landed, so would
+    // have any kill asked before it (taskkill is a subprocess on Windows).
+    killTree(control, "SIGKILL");
+    await waitUntil(() => !isAlive(control.pid!), "the control's death");
+    expect(isAlive(bystander.pid!)).toBe(true);
+    killTree(bystander, "SIGKILL");
   });
 });
 
 describe("commandOf", () => {
-  it("reads a live command line, and \"\" for a gone pid", async () => {
+  // "Gone" is a pid no process holds: a pid just freed may be another
+  // process's already.
+  it("reads a live command line, and \"\" for a pid no process holds", async () => {
     const child = idler("patchbay-idler");
     await waitUntil(() => child.pid !== undefined, "spawn");
     expect(await commandOf(child.pid!)).toContain("patchbay-idler");
-    killTree(child.pid!, "SIGKILL");
-    await waitUntil(() => !isAlive(child.pid!), "death");
-    expect(await commandOf(child.pid!)).toBe("");
+    killTree(child, "SIGKILL");
+    expect(await commandOf(99_999_999)).toBe("");
   });
 });
 
@@ -103,7 +123,7 @@ describe("reapOrphans", () => {
     expect(spared.map((r) => r.pid)).toEqual([bystander.pid]);
     await waitUntil(() => !isAlive(orphan.pid!), "orphan death");
     expect(isAlive(bystander.pid!)).toBe(true); // never kill what we can't match
-    killTree(bystander.pid!, "SIGKILL");
+    killTree(bystander, "SIGKILL");
   });
 });
 

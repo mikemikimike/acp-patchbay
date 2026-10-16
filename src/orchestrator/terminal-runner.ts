@@ -16,13 +16,17 @@ export interface ExitStatus {
 
 export interface TerminalHandle {
   /** The spawned root's pid (null when spawn itself failed) — what the
-   * spawn registry records and what shutdown's sweep tree-kills. */
+   * spawn registry records. A kill goes through the handle, never by it. */
   pid: number | null;
   /** Output captured so far (stdout+stderr interleaved, ACP doesn't distinguish). */
   currentOutput(): { output: string; truncated: boolean };
   exitStatus(): ExitStatus | null;
   waitForExit(): Promise<ExitStatus>;
+  /** Asks the command's tree to stop, then forces it if it hasn't. */
   kill(): void;
+  /** Forces the command's tree down at once — for a teardown that can't
+   * wait. */
+  killNow(): void;
   /** Fired as new bytes arrive — the orchestrator mirrors these into the
    * transcript live, independent of whether/when the agent polls output. */
   onData(listener: (chunk: string) => void): () => void;
@@ -109,13 +113,13 @@ export class NodeTerminalRunner implements TerminalRunner {
       waitForExit: () =>
         exited !== null ? Promise.resolve(exited) : new Promise((resolve) => exitWaiters.push(resolve)),
       kill: () => {
-        if (child.pid === undefined) return;
-        const pid = child.pid;
-        killTree(pid, "SIGTERM");
+        killTree(child, "SIGTERM");
         // Escalation for trees that ignore SIGTERM; unref'd — never holds
-        // the host open, and SIGKILL on an already-dead tree is a no-op.
-        setTimeout(() => killTree(pid, "SIGKILL"), 2_000).unref();
+        // the host open. A tree that ended meanwhile is no longer this
+        // host's to kill by its pid; killTree reaches only what is.
+        setTimeout(() => killTree(child, "SIGKILL"), 2_000).unref();
       },
+      killNow: () => killTree(child, "SIGKILL"),
       onData: (listener) => {
         dataListeners.add(listener);
         return () => dataListeners.delete(listener);

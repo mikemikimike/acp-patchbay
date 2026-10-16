@@ -71,7 +71,7 @@ async function main(): Promise<void> {
     while (!(await exists(join(entry, "node_modules", ...pkgName.split("/"), "package.json")))) {
       await new Promise((r) => setTimeout(r, 25));
     }
-    killTree(install.pid!, "SIGKILL");
+    killTree(install, "SIGKILL");
     await new Promise((r) => install.once("exit", r));
     console.log(`poisoned — entry reads ${await npxEntryState(entry)}`);
   }

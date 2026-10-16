@@ -56,7 +56,7 @@ export function runToExit(
     child.stdout?.on("data", (chunk: string) => (stdout += chunk));
     child.stderr?.on("data", (chunk: string) => (stderr += chunk));
     const abort = () => {
-      if (child.pid !== undefined) killTree(child.pid, "SIGKILL");
+      killTree(child, "SIGKILL");
       reject(signal!.reason);
     };
     signal?.addEventListener("abort", abort, { once: true });

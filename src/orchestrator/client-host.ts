@@ -149,10 +149,10 @@ export class ClientHost {
     return {};
   }
 
-  /** Every command still running, for teardown paths that must stop
-   * reality before anything else. */
-  runningPids(): number[] {
-    return [...this.terminals.values()].flatMap(({ handle: h }) => (h.pid !== null && h.exitStatus() === null ? [h.pid] : []));
+  /** Forces every command still running down at once — for teardown paths
+   * that must stop reality before anything else. */
+  killAll(): void {
+    for (const { handle } of this.terminals.values()) if (handle.exitStatus() === null) handle.killNow();
   }
 
   /** Forget every terminal — after the teardown killed them. */

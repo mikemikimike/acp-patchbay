@@ -266,7 +266,7 @@ function spawnOptions(spec: LaunchSpec, shell: boolean) {
 /** A launch that failed — its process has nothing to wind down, so its
  * whole tree (npx → node → …) goes at once. */
 function killFailedLaunch(child: ChildProcess): void {
-  if (child.pid !== undefined) killTree(child.pid, "SIGKILL");
+  killTree(child, "SIGKILL");
 }
 
 export class AgentPool {
@@ -666,14 +666,15 @@ export class AgentPool {
       proc.stdin?.once("error", () => {});
       proc.stdin?.end();
       if (!(await exitedWithin(budget.eofMs))) {
-        killTree(proc.pid, "SIGTERM");
+        killTree(proc, "SIGTERM");
         if (!(await exitedWithin(budget.termMs))) {
-          killTree(proc.pid, "SIGKILL");
+          killTree(proc, "SIGKILL");
           await exitedWithin(budget.killMs);
         }
       }
     }
-    if (proc.pid !== undefined) killTree(proc.pid, "SIGKILL"); // group sweep — ESRCH is success
+    // What the process left behind: its group, where one survives it.
+    killTree(proc, "SIGKILL");
     entry.sessions.clear();
     this.setStatus(entry, "stopped");
   }
