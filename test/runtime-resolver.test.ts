@@ -6,7 +6,7 @@
 // does, so the tests spawn. POSIX-only fakes are skipped on win32 (a fake
 // .cmd can't be spawned shell-less there — the same CVE guard production
 // hits); the pure Windows behavior is covered via injected platform/base.
-import { chmod, mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { describe, expect, it, beforeAll } from "vitest";
 import { fileTempDir, tempDir } from "./support/teardown";
@@ -28,22 +28,12 @@ import {
   type DownloadAsk,
 } from "../src/orchestrator/runtime-resolver";
 import type { PatchbayAgentId } from "../src/shared/ids";
-
-// POSIX-only guard for tests that need fake shell-script runtimes.
-const onPosix = process.platform !== "win32";
+import { answering, standIn } from "./support/stand-in";
 
 let tmp: string;
 beforeAll(async () => {
   tmp = await fileTempDir("patchbay-runtime-");
 });
-
-/** A fake runtime: an executable that answers --version with `output`. */
-async function fakeExe(dir: string, name: string, output: string): Promise<string> {
-  const path = join(dir, name);
-  await writeFile(path, `#!/bin/sh\necho "${output}"\n`);
-  await chmod(path, 0o755);
-  return path;
-}
 
 function spec(command: string, env: Record<string, string> = {}): LaunchSpec {
   return { patchbayAgentId: "a1" as PatchbayAgentId, name: "Agent", command, args: ["-y", "pkg"], env, cwd: tmp };
@@ -157,15 +147,11 @@ describe("probeVersion", () => {
   // A runtime slow to answer is still a runtime: no clock reads it as
   // missing (which would download one over it) — only a stop ends the wait,
   // and it ends it as a stop, never as "no runtime".
-  it.skipIf(process.platform === "win32")("waits for a slow answer; a stop kills the probe and rejects", async () => {
+  it("waits for a slow answer; a stop kills the probe and rejects", async () => {
     const dir = await tempDir("patchbay-probe-");
-    const slow = join(dir, "slow-runtime");
-    await writeFile(slow, `#!${process.execPath}\nsetTimeout(() => console.log("v22.1.0"), 400);\n`);
-    await chmod(slow, 0o755);
+    const slow = await standIn(dir, "slow-runtime", `setTimeout(() => console.log("v22.1.0"), 400);\n`);
     expect(await probeVersion(slow, process.env)).toBe("v22.1.0");
-    const hung = join(dir, "hung-runtime");
-    await writeFile(hung, `#!${process.execPath}\nsetTimeout(() => {}, 30000);\n`);
-    await chmod(hung, 0o755);
+    const hung = await standIn(dir, "hung-runtime", "setTimeout(() => {}, 30000);\n");
     const controller = new AbortController();
     const probing = probeVersion(hung, process.env, controller.signal);
     controller.abort(new Error("stopped by test"));
@@ -193,16 +179,16 @@ describe("gateRuntime", () => {
     expect(gate.failed).toBe("launcher");
   });
 
-  it.skipIf(!onPosix)("fails a node below the floor — presence is not the gate", async () => {
-    const old = await fakeExe(tmp, "old-node", `v${NODE_FLOOR_MAJOR - 2}.0.0`);
+  it("fails a node below the floor — presence is not the gate", async () => {
+    const old = await answering(tmp, "old-node", `v${NODE_FLOOR_MAJOR - 2}.0.0`);
     const gate = await gateRuntime("node", process.env, { interpreter: old, launcher: process.execPath });
     expect(gate.ok).toBe(false);
     expect(gate.detail).toMatch(/below the v\d+ floor/);
     expect(gate.failed).toBe("interpreter");
   });
 
-  it.skipIf(!onPosix)("uv gates on uvx alone", async () => {
-    const uvx = await fakeExe(tmp, "fake-uvx", "uv 0.7.3");
+  it("uv gates on uvx alone", async () => {
+    const uvx = await answering(tmp, "fake-uvx", "uv 0.7.3");
     expect((await gateRuntime("uv", process.env, { launcher: uvx })).ok).toBe(true);
     expect((await gateRuntime("uv", process.env, { launcher: "patchbay-no-uvx" })).ok).toBe(false);
   });
@@ -229,7 +215,7 @@ describe("resolveRuntime", () => {
     expect(resolved.env).toEqual({ KEEP: "me" }); // no PATH injected
   });
 
-  it.skipIf(!onPosix)(
+  it(
     "a failed gate provisions the managed runtime and PATH-prepends its dir",
     async () => {
       // Bare names that only resolve once the managed dir is on PATH:
@@ -238,8 +224,8 @@ describe("resolveRuntime", () => {
       const confirms: string[] = [];
       const install = async (): Promise<InstalledBinary> => {
         await mkdir(managed, { recursive: true });
-        await fakeExe(managed, "pb-fake-node", "v22.0.0");
-        await fakeExe(managed, "pb-fake-npx", "10.0.0");
+        await answering(managed, "pb-fake-node", "v22.0.0");
+        await answering(managed, "pb-fake-npx", "10.0.0");
         return { command: join(managed, "pb-fake-node"), args: [], env: {}, cwd: managed };
       };
       const resolved = await resolveRuntime(spec("npx", { KEEP: "me" }), {
@@ -257,7 +243,7 @@ describe("resolveRuntime", () => {
     },
   );
 
-  it.skipIf(!onPosix)("a runtime download is checked against its publisher's digest — a second mismatch fails, nothing installed (issue #54)", async () => {
+  it("a runtime download is checked against its publisher's digest — a second mismatch fails, nothing installed (issue #54)", async () => {
     const asks: DownloadAsk[] = [];
     const held: (string | null)[] = [];
     await expect(
@@ -276,7 +262,7 @@ describe("resolveRuntime", () => {
     expect(held[0]).toBe(held[1]);
   });
 
-  it.skipIf(!onPosix)("a declined download fails the connect honestly", async () => {
+  it("a declined download fails the connect honestly", async () => {
     await expect(
       resolveRuntime(spec("npx"), {
         ...deps,
@@ -286,12 +272,12 @@ describe("resolveRuntime", () => {
     ).rejects.toThrow(/download declined/);
   });
 
-  it.skipIf(!onPosix)("gates the configured command — an absolute-path launcher that works passes", async () => {
+  it("gates the configured command — an absolute-path launcher that works passes", async () => {
     // The launch runs spec.command; a hardcoded bare-name probe would fail
     // this setup (bare npx absent) and download a runtime nobody needs.
     const absDir = join(tmp, "abs-launcher");
     await mkdir(absDir, { recursive: true });
-    const absNpx = await fakeExe(absDir, "npx", "10.0.0");
+    const absNpx = await answering(absDir, "npx", "10.0.0");
     const s = spec(absNpx);
     const resolved = await resolveRuntime(s, {
       ...deps,
@@ -300,7 +286,7 @@ describe("resolveRuntime", () => {
     expect(resolved).toBe(s);
   });
 
-  it.skipIf(!onPosix)("a managed runtime that fails its own gate is purged, then throws", async () => {
+  it("a managed runtime that fails its own gate is purged, then throws", async () => {
     let installedDir = "";
     const install = async (
       root: string,
@@ -308,8 +294,8 @@ describe("resolveRuntime", () => {
     ): Promise<InstalledBinary> => {
       installedDir = join(root, cat.distribution, cat.version);
       await mkdir(installedDir, { recursive: true });
-      await fakeExe(installedDir, "pb-bad-node", "v16.0.0"); // below floor
-      await fakeExe(installedDir, "pb-bad-npx", "8.0.0");
+      await answering(installedDir, "pb-bad-node", "v16.0.0"); // below floor
+      await answering(installedDir, "pb-bad-npx", "8.0.0");
       return { command: join(installedDir, "pb-bad-node"), args: [], env: {}, cwd: installedDir };
     };
     await expect(
@@ -325,7 +311,7 @@ describe("resolveRuntime", () => {
     await expect(stat(installedDir)).rejects.toThrow();
   });
 
-  it.skipIf(!onPosix)("an absolute-path launcher failing post-install blames the command, keeps the cache", async () => {
+  it("an absolute-path launcher failing post-install blames the command, keeps the cache", async () => {
     const missingAbsNpx = join(tmp, "nowhere", "npx"); // basename npx → kind node; a path → not managed's fault
     let installedDir = "";
     const install = async (
@@ -334,7 +320,7 @@ describe("resolveRuntime", () => {
     ): Promise<InstalledBinary> => {
       installedDir = join(root, cat.distribution, cat.version);
       await mkdir(installedDir, { recursive: true });
-      await fakeExe(installedDir, "pb-ok-node", "v22.0.0");
+      await answering(installedDir, "pb-ok-node", "v22.0.0");
       return { command: join(installedDir, "pb-ok-node"), args: [], env: {}, cwd: installedDir };
     };
     await expect(
@@ -348,7 +334,7 @@ describe("resolveRuntime", () => {
     await expect(stat(installedDir)).resolves.toBeDefined(); // cache survives
   });
 
-  it.skipIf(!onPosix)("concurrent connects single-flight the download — one confirm, one install", async () => {
+  it("concurrent connects single-flight the download — one confirm, one install", async () => {
     const root = join(tmp, "bin-cache-flight");
     let confirms = 0;
     let installs = 0;
@@ -356,8 +342,8 @@ describe("resolveRuntime", () => {
     const install = async (): Promise<InstalledBinary> => {
       installs++;
       await mkdir(managed, { recursive: true });
-      await fakeExe(managed, "pb-sf-node", "v22.0.0");
-      await fakeExe(managed, "pb-sf-npx", "10.0.0");
+      await answering(managed, "pb-sf-node", "v22.0.0");
+      await answering(managed, "pb-sf-npx", "10.0.0");
       return { command: join(managed, "pb-sf-node"), args: [], env: {}, cwd: managed };
     };
     // The flight is held at its ask until both connects have reached it:

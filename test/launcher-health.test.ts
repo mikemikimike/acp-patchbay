@@ -3,7 +3,7 @@
 // layouts and ask the real npm where its cache is — deleting inside npm's
 // cache is safe only because the entry is the one npm itself names and its
 // state is read by the marker npm writes last.
-import { chmod, mkdir, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { npmRegistry, type LocalNpmRegistry } from "./support/npm-registry";
@@ -24,6 +24,7 @@ import {
 import { nullLogger } from "../src/orchestrator/logger";
 import { runToExit } from "../src/orchestrator/run-to-exit";
 import { mergeEnv } from "../src/orchestrator/spawn-resolve";
+import { answering, standIn } from "./support/stand-in";
 
 describe("launcherKind", () => {
   it("normalizes paths and Windows shims — the one spelling warmupSpawn shares", () => {
@@ -153,13 +154,12 @@ describe("the npx entry", () => {
   // x64 node under Rosetta or on Windows ARM. A stand-in node on the
   // launch's PATH answers for the other arch: this machine's binary is then
   // not npm's to install, and is not missing.
-  it.skipIf(process.platform === "win32")("judges by the platform npm installs for, not patchbay's", async () => {
+  it("judges by the platform npm installs for, not patchbay's", async () => {
     const dir = await shortEntry();
     const bin = join(root, "bin");
     await mkdir(bin);
-    await writeFile(join(bin, "node"), `#!/bin/sh\necho "${process.platform} ${process.arch === "arm64" ? "x64" : "arm64"}"\n`);
-    await chmod(join(bin, "node"), 0o755);
-    expect(await droppedOptionals(dir, { PATH: bin })).toEqual([]);
+    await answering(bin, "node", `${process.platform} ${process.arch === "arm64" ? "x64" : "arm64"}`);
+    expect(await droppedOptionals(dir, mergeEnv(process.env, { PATH: bin }))).toEqual([]);
   });
 
   it("names nothing for a complete install, or one that never finished", async () => {
@@ -250,18 +250,15 @@ describe("the npx entry", () => {
   });
 });
 
-// A stand-in launcher on a PATH holding nothing else: it records its pid and
-// args, then does what its script says. POSIX shebang scripts.
-describe.skipIf(process.platform === "win32")("prepareLauncher", () => {
+// A stand-in launcher on a PATH holding nothing else: it records its pid,
+// then does what its script says.
+describe("prepareLauncher", () => {
   let bin: string;
   const pidFile = () => join(bin, "pid");
+  const onlyBin = () => mergeEnv(process.env, { PATH: bin });
 
-  async function standIn(body: string): Promise<void> {
-    await writeFile(
-      join(bin, "npx"),
-      `#!${process.execPath}\nrequire("fs").writeFileSync(${JSON.stringify(pidFile())}, String(process.pid));\n${body}\n`,
-    );
-    await chmod(join(bin, "npx"), 0o755);
+  async function launcher(body: string): Promise<void> {
+    await standIn(bin, "npx", `require("fs").writeFileSync(${JSON.stringify(pidFile())}, String(process.pid));\n${body}\n`);
   }
   const launch = () => ({ command: join(bin, "npx"), args: ["-y", "fake-pkg@1.0.0"], cwd: bin });
 
@@ -270,16 +267,16 @@ describe.skipIf(process.platform === "win32")("prepareLauncher", () => {
   });
 
   it("installs the package to its exit, labeled while nothing can say it's installed", async () => {
-    await standIn(`setTimeout(() => process.stdout.write("v22.0.0\\n"), 300);`);
+    await launcher(`setTimeout(() => process.stdout.write("v22.0.0\\n"), 300);`);
     const phases: string[] = [];
-    await prepareLauncher(launch(), { PATH: bin }, { log: nullLogger, who: "test", onPhase: (l) => phases.push(l) });
+    await prepareLauncher(launch(), onlyBin(), { log: nullLogger, who: "test", onPhase: (l) => phases.push(l) });
     // No npm on this PATH to read the cache: the label claims no download.
     expect(phases).toEqual(["preparing the agent package…"]);
   });
 
   it("a failed install is a LauncherFailure in the launcher's own words", async () => {
-    await standIn(`process.stderr.write("npm error code E404\\nnpm error 404 Not Found - GET https://registry.npmjs.org/fake-pkg\\n"); process.exitCode = 1;`);
-    const failure = await prepareLauncher(launch(), { PATH: bin }, { log: nullLogger, who: "test" }).catch((e: unknown) => e);
+    await launcher(`process.stderr.write("npm error code E404\\nnpm error 404 Not Found - GET https://registry.npmjs.org/fake-pkg\\n"); process.exitCode = 1;`);
+    const failure = await prepareLauncher(launch(), onlyBin(), { log: nullLogger, who: "test" }).catch((e: unknown) => e);
     expect(failure).toBeInstanceOf(LauncherFailure);
     expect((failure as LauncherFailure).detail).toBe("npx couldn't install the package (exit 1)");
     expect((failure as LauncherFailure).output).toEqual([
@@ -289,11 +286,14 @@ describe.skipIf(process.platform === "win32")("prepareLauncher", () => {
   });
 
   it("no clock cuts a slow install; a stop kills it and says so", async () => {
-    await standIn("setTimeout(() => {}, 30000);");
+    await launcher("setTimeout(() => {}, 30000);");
     const controller = new AbortController();
-    const preparing = prepareLauncher(launch(), { PATH: bin }, { log: nullLogger, who: "test", signal: controller.signal });
-    let pid = "";
-    while (pid === "") pid = await readFile(pidFile(), "utf8").catch(() => "");
+    const preparing = prepareLauncher(launch(), onlyBin(), { log: nullLogger, who: "test", signal: controller.signal });
+    const pid = await vi.waitFor(async () => {
+      const text = await readFile(pidFile(), "utf8");
+      expect(text).not.toBe("");
+      return text;
+    }, SETTLE);
     controller.abort(new Error("stopped by test"));
     await expect(preparing).rejects.toThrow("stopped by test");
     await vi.waitFor(() => expect(() => process.kill(Number(pid), 0)).toThrow(), SETTLE);

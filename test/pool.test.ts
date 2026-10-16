@@ -1,7 +1,7 @@
 // P2 gate: pool against the fake agent — connect, capture declared,
 // crash → visible → one-action restart, two concurrent sessions on one connection.
 import { existsSync } from "node:fs";
-import { chmod, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { SessionUpdateFact } from "../src/orchestrator/readers/session-update";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -14,6 +14,7 @@ import type { FakeAgentScript } from "./fake-agent/main";
 import { stubFsTerminalHooks } from "./support/stub-hooks";
 import type { PatchbayAgentId } from "../src/shared/ids";
 import { name as packageName, version as packageVersion } from "../package.json";
+import { standIn } from "./support/stand-in";
 
 
 let cwd: string;
@@ -371,17 +372,13 @@ describe("AgentPool — stopping", () => {
 
   // A launcher shaped like the registry's npx launch, so the connect warms
   // it first: the stand-in sleeps where a real one would download, and
-  // records its pid. A shebang script — POSIX only.
-  it.skipIf(process.platform === "win32")(
+  // records its pid.
+  it(
     "a signal during the launcher warmup kills the warmup, and nothing spawns",
     async () => {
       const bin = await tempDir("patchbay-warm-");
       const pidFile = join(bin, "pid");
-      await writeFile(
-        join(bin, "npx"),
-        `#!${process.execPath}\nrequire("fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\nsetTimeout(() => {}, 30000);\n`,
-      );
-      await chmod(join(bin, "npx"), 0o755);
+      await standIn(bin, "npx", `require("fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\nsetTimeout(() => {}, 30000);\n`);
       const { pool, rec } = makePool();
       const controller = new AbortController();
       const connecting = pool.connect(
@@ -415,16 +412,16 @@ describe("AgentPool — stopping", () => {
   // A stand-in launcher that fails its install the way npm does: the
   // connect fails with the launcher's own words on the card, and the agent
   // is never spawned onto the failure.
-  it.skipIf(process.platform === "win32")(
+  it(
     "a launcher that can't install its package fails the connect in its own words",
     async () => {
       const bin = await tempDir("patchbay-warm-");
       const runs = join(bin, "runs");
-      await writeFile(
-        join(bin, "npx"),
-        `#!${process.execPath}\nrequire("fs").appendFileSync(${JSON.stringify(runs)}, "run\\n");\nprocess.stderr.write("npm error code ENOENT\\nnpm error enoent Could not read package.json\\n");\nprocess.exitCode = 1;\n`,
+      await standIn(
+        bin,
+        "npx",
+        `require("fs").appendFileSync(${JSON.stringify(runs)}, "run\\n");\nprocess.stderr.write("npm error code ENOENT\\nnpm error enoent Could not read package.json\\n");\nprocess.exitCode = 1;\n`,
       );
-      await chmod(join(bin, "npx"), 0o755);
       const { pool, rec } = makePool();
       await expect(
         pool.connect({ patchbayAgentId: "broken" as PatchbayAgentId, name: "Broken", command: join(bin, "npx"), args: ["-y", "fake-pkg@1.0.0"], env: { PATH: bin }, cwd }),
