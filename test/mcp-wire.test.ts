@@ -1,79 +1,31 @@
-// P7 gate: the real bundled MCP server subprocess (out/mcp-server.js) speaks
-// correct MCP JSON-RPC over stdio and correctly forwards every tool call
-// over the IPC bridge. Stands in a plain net server for EditorStateHost
-// (which needs real vscode data — that half is covered by manual/test-
-// electron smoke) so this proves the wire protocol and routing without it.
+// The real bundled MCP server subprocess (out/mcp-server.js) speaks MCP
+// JSON-RPC over stdio and forwards every tool call over the IPC bridge to
+// the window's orchestrator. It is spawned from the very entry an attach
+// hands the agent, under that attach's token; only the editor's reads —
+// what VS Code alone can answer — are stood in for, with canned data.
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { createServer, type Server } from "node:net";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  encodeLine,
-  ipcAddress,
-  parseLines,
-  type IpcRequest,
-  type IpcResponse,
-} from "../src/mcp/ipc-protocol";
-import type { ElicitationAnswer } from "../src/shared/protocol";
+import type { McpServerStdio } from "@agentclientprotocol/sdk";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mergeEnv } from "../src/orchestrator/spawn-resolve";
+import type { EditorReads } from "../src/orchestrator/ipc-host";
+import type { Orchestrator } from "../src/orchestrator/orchestrator";
+import type { ChatBlock, ElicitationAnswer } from "../src/shared/protocol";
+import type { PatchbayAgentId, PatchbaySessionId } from "../src/shared/ids";
 import { version as packageVersion } from "../package.json";
+import { fakeAgent } from "./support/fake-agent";
+import { orchestratorHarness, type OrchestratorHarness } from "./support/orchestrator-harness";
+import { atTestEnd, tempDir } from "./support/teardown";
+import { waitFor } from "./support/wait-for";
 
-const MCP_SERVER = join(process.cwd(), "out", "mcp-server.js");
-
-/** A minimal stand-in for EditorStateHost: same wire protocol, canned data. */
-class FakeIpcHost {
-  server: Server;
-  socketPath: string;
-  requests: IpcRequest[] = [];
-  elicitationAnswer: ElicitationAnswer = { action: "accept", content: { confirmed: true } };
-
-  constructor(id: string) {
-    this.socketPath = ipcAddress(`patchbay-test-ipc-${id}`);
-    this.server = createServer((socket) => {
-      let buffer = "";
-      socket.setEncoding("utf8");
-      socket.on("data", (chunk: string) => {
-        buffer += chunk;
-        const { messages, rest } = parseLines(buffer);
-        buffer = rest;
-        for (const message of messages) {
-          const req = message as IpcRequest;
-          this.requests.push(req);
-          const response: IpcResponse = { id: req.id, result: this.answer(req) };
-          socket.write(encodeLine(response));
-        }
-      });
-    });
-  }
-
-  private answer(req: IpcRequest): unknown {
-    switch (req.method) {
-      case "getSelection":
-        return { file: "/ws/a.ts", startLine: 1, endLine: 2, text: "const x = 1;" };
-      case "getCurrentFile":
-        return { file: "/ws/a.ts", content: "const x = 1;\n" };
-      case "getDiagnostics":
-        return [{ file: "/ws/a.ts", line: 1, severity: "error", message: "boom" }];
-      case "getOpenEditors":
-        return [{ file: "/ws/a.ts", dirty: false }];
-      case "getWorkspaceState":
-        return { openEditors: [], diagnostics: [], selection: null };
-      case "getRoots":
-        return { roots: ["/ws", "/ws/backend"] };
-      case "requestUserInput":
-        return this.elicitationAnswer;
-      default:
-        return null;
-    }
-  }
-
-  listen(): Promise<void> {
-    return new Promise((resolve) => this.server.listen(this.socketPath, resolve));
-  }
-
-  close(): void {
-    this.server.close();
-  }
-}
+/** The editor as the server's tools read it. */
+const editor = {
+  getSelection: vi.fn(() => ({ file: "/ws/a.ts", startLine: 1, endLine: 2, text: "const x = 1;" })),
+  getCurrentFile: vi.fn(() => ({ file: "/ws/a.ts", content: "const x = 1;\n" })),
+  getDiagnostics: vi.fn(() => [{ file: "/ws/a.ts", line: 1, severity: "error" as const, message: "boom" }]),
+  getOpenEditors: vi.fn(() => [{ file: "/ws/a.ts", dirty: false }]),
+} satisfies EditorReads;
 
 /** Minimal MCP JSON-RPC client — mirrors what a real agent's MCP client does. */
 class McpTestClient {
@@ -82,11 +34,12 @@ class McpTestClient {
   private nextId = 1;
   private waiters = new Map<number, (msg: { result?: unknown; error?: { message: string } }) => void>();
 
-  constructor(socketPath: string, contextToken: string) {
-    this.child = spawn(process.execPath, [MCP_SERVER], {
-      env: { ...process.env, ACP_PATCHBAY_IPC: socketPath, ACP_PATCHBAY_CONTEXT_TOKEN: contextToken },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+  /** Spawns `entry` as an agent does: its command, args, and env over the
+   * agent's own. */
+  constructor(entry: McpServerStdio) {
+    const env = mergeEnv(process.env, Object.fromEntries(entry.env.map((v) => [v.name, v.value])));
+    this.child = spawn(entry.command, entry.args, { env, stdio: ["pipe", "pipe", "pipe"] });
+    atTestEnd(() => void this.child.kill());
     this.child.stdout.setEncoding("utf8");
     this.child.stdout.on("data", (chunk: string) => {
       this.buffer += chunk;
@@ -129,9 +82,6 @@ class McpTestClient {
     return resp.result;
   }
 
-  kill(): void {
-    this.child.kill();
-  }
 }
 
 interface ToolCallResult {
@@ -144,17 +94,35 @@ async function toolText(client: McpTestClient, name: string, args?: Record<strin
   return result.content[0]!.text;
 }
 
-let host: FakeIpcHost;
+let dir: string;
+let h: OrchestratorHarness;
+let o: Orchestrator;
+let patchbaySessionId: PatchbaySessionId;
+/** The editor server as the session's attach handed it to the agent. */
+let entry: McpServerStdio;
 let client: McpTestClient;
 beforeEach(async () => {
-  host = new FakeIpcHost(`${process.pid}-${Date.now()}`);
-  await host.listen();
-  client = new McpTestClient(host.socketPath, "session-1");
+  dir = await tempDir("patchbay-mcp-wire-");
+  const backend = join(dir, "backend");
+  await mkdir(backend);
+  h = orchestratorHarness(dir, { workspaceRoots: [dir, backend], ports: { editor } });
+  o = h.orchestrator;
+  const composed = vi.spyOn(o.mcpServers, "mcpServersFor");
+  await o.pool.connect(fakeAgent({}, "wire", dir));
+  patchbaySessionId = await o.sessions.createSession("wire" as PatchbayAgentId, "Fake Agent", dir);
+  entry = (await composed.mock.results.at(-1)!.value).servers[0] as McpServerStdio;
+  client = new McpTestClient(entry);
 });
-afterEach(() => {
-  client.kill();
-  host.close();
-});
+
+/** The user answers the next form a tool puts in the session. */
+async function answerForm(answer: ElicitationAnswer): Promise<void> {
+  const card = await waitFor(() =>
+    h.agentView.state().transcripts[patchbaySessionId]?.find(
+      (b): b is Extract<ChatBlock, { kind: "elicitation" }> => b.kind === "elicitation" && b.resolution === null,
+    ),
+  );
+  o.asks.answerQuestion(card.id, answer);
+}
 
 describe("local MCP server (real bundled subprocess)", () => {
   it("initializes with tools capability", async () => {
@@ -191,15 +159,21 @@ describe("local MCP server (real bundled subprocess)", () => {
   it("get_roots reads the session's root list over IPC, for its own session", async () => {
     await client.initialize();
     const roots = JSON.parse(await toolText(client, "get_roots"));
-    expect(roots).toEqual(["/ws", "/ws/backend"]);
-    expect(host.requests.some((r) => r.method === "getRoots" && r.contextToken === "session-1")).toBe(true);
+    expect(roots).toEqual([dir, join(dir, "backend")]);
+    // a token no attach was given reaches nothing
+    const forged = new McpTestClient({
+      ...entry,
+      env: entry.env.map((v) => (v.name === "ACP_PATCHBAY_CONTEXT_TOKEN" ? { ...v, value: "forged" } : v)),
+    });
+    await forged.initialize();
+    await expect(forged.callTool("get_roots")).rejects.toThrow("unknown session token");
   });
 
   it("get_selection forwards over IPC and returns real-shaped data", async () => {
     await client.initialize();
     const parsed = JSON.parse(await toolText(client, "get_selection"));
     expect(parsed).toEqual({ file: "/ws/a.ts", startLine: 1, endLine: 2, text: "const x = 1;" });
-    expect(host.requests.some((r) => r.method === "getSelection" && r.contextToken === "session-1")).toBe(true);
+    expect(editor.getSelection).toHaveBeenCalled();
   });
 
   it("get_current_file, get_diagnostics, get_open_editors, get_workspace_state all round-trip", async () => {
@@ -219,17 +193,21 @@ describe("local MCP server (real bundled subprocess)", () => {
 
   it("request_user_input returns the answer when not cancelled", async () => {
     await client.initialize();
-    const result = (await client.callTool("request_user_input", {
-      message: "Confirm?",
-      properties: [{ name: "confirmed", type: "boolean", required: true }],
-    })) as { content: { text: string }[]; isError?: boolean };
+    const [result] = (await Promise.all([
+      client.callTool("request_user_input", {
+        message: "Confirm?",
+        properties: [{ name: "confirmed", type: "boolean", required: true }],
+      }),
+      answerForm({ action: "accept", content: { confirmed: true } }),
+    ])) as [{ content: { text: string }[]; isError?: boolean }, void];
     expect(result.isError).toBeFalsy();
     expect(JSON.parse(result.content[0]!.text)).toEqual({ confirmed: true });
   });
 
   it("request_user_input forwards its fields as the elicitation schema, defaults included", async () => {
     await client.initialize();
-    await client.callTool("request_user_input", {
+    const forwarded = vi.spyOn(o, "requestUserInput");
+    const asked = client.callTool("request_user_input", {
       message: "Setup?",
       properties: [
         { name: "who", type: "string", title: "Name", required: true, default: "hello" },
@@ -237,8 +215,9 @@ describe("local MCP server (real bundled subprocess)", () => {
         { name: "on", type: "boolean", default: true },
       ],
     });
-    const forwarded = host.requests.find((r) => r.method === "requestUserInput");
-    expect(forwarded?.params).toEqual({
+    await answerForm({ action: "cancel" });
+    await asked;
+    expect(forwarded.mock.calls[0]?.[1]).toEqual({
       message: "Setup?",
       requestedSchema: {
         type: "object",
@@ -254,20 +233,20 @@ describe("local MCP server (real bundled subprocess)", () => {
 
   it("request_user_input with no fields forwards no schema", async () => {
     await client.initialize();
-    await client.callTool("request_user_input", { message: "Confirm?" });
-    expect(host.requests.find((r) => r.method === "requestUserInput")?.params).toEqual({ message: "Confirm?" });
+    const forwarded = vi.spyOn(o, "requestUserInput");
+    await Promise.all([client.callTool("request_user_input", { message: "Confirm?" }), answerForm({ action: "cancel" })]);
+    expect(forwarded.mock.calls[0]?.[1]).toEqual({ message: "Confirm?" });
   });
 
   it.each([
     ["decline", "declined"],
     ["cancel", "cancelled"],
   ] as const)("request_user_input reports a %s by name, as an error result rather than a thrown exception", async (action, text) => {
-    host.elicitationAnswer = { action };
     await client.initialize();
-    const result = (await client.callTool("request_user_input", { message: "Confirm?" })) as {
-      content: { text: string }[];
-      isError?: boolean;
-    };
+    const [result] = (await Promise.all([client.callTool("request_user_input", { message: "Confirm?" }), answerForm({ action })])) as [
+      { content: { text: string }[]; isError?: boolean },
+      void,
+    ];
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toBe(text);
   });

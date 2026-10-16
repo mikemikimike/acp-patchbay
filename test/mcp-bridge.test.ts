@@ -4,13 +4,12 @@
 // out/mcp-bridge.js as its own subprocess from the mcpServers entry
 // session/new gave it. The bridge forwards to a fake remote HTTP MCP server
 // standing in for a real registry/custom-http endpoint, fetching its token
-// from a fake IPC host standing in for the orchestrator's real
-// EditorStateHost. Only two things are stood in for: the remote provider
-// (no network access here) and the token source (needs real vscode
-// SecretStorage) — the wire protocol and the bridge process itself are real.
+// over IPC from the window's orchestrator. Only the remote provider is
+// stood in for (no network access here) — the orchestrator, its secret
+// store, the wire protocol and the bridge process itself are real.
 import { spawn } from "node:child_process";
 import { createServer, type Server as HttpServer } from "node:http";
-import { createServer as createNetServer, type Server as NetServer, type Socket } from "node:net";
+import { createServer as createNetServer, type Socket } from "node:net";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { McpServer } from "@agentclientprotocol/sdk";
@@ -23,7 +22,7 @@ import { bridgeServer } from "../src/orchestrator/mcp-servers-store";
 import { mkdir } from "node:fs/promises";
 import { SETTLE } from "./support/wait-for";
 import { IpcClient } from "../src/mcp/ipc-client";
-import { encodeLine, ipcAddress, parseLines, type IpcRequest, type IpcResponse } from "../src/mcp/ipc-protocol";
+import { ipcAddress } from "../src/mcp/ipc-protocol";
 import { type LaunchSpec } from "../src/orchestrator/pool";
 import type { FakeAgentScript } from "./fake-agent/main";
 import type { PatchbayAgentId } from "../src/shared/ids";
@@ -37,58 +36,15 @@ async function folders<N extends string[]>(...names: N): Promise<{ [K in keyof N
 
 const BRIDGE = join(process.cwd(), "out", "mcp-bridge.js");
 
-/** Stands in for the orchestrator's IPC host, serving only
- * `getMcpServerToken` — everything else P7 already covers. `tokens` is a
- * queue: each call to `currentToken()` in the bridge pops the next one,
- * letting a test script an expired-then-fresh sequence. */
-class FakeMcpServerTokenHost {
-  server: NetServer;
-  socketPath: string;
-  tokens: string[];
-  requests = 0;
-
-  constructor(id: string, tokens: string[]) {
-    this.socketPath = ipcAddress(`patchbay-bridge-test-${id}`);
-    this.tokens = tokens;
-    this.server = createNetServer((socket) => {
-      let buffer = "";
-      socket.setEncoding("utf8");
-      socket.on("data", (chunk: string) => {
-        buffer += chunk;
-        const { messages, rest } = parseLines(buffer);
-        buffer = rest;
-        for (const message of messages) {
-          const req = message as IpcRequest;
-          // the bridge also subscribes to root changes at start — only
-          // token fetches walk the queue
-          if (req.method !== "getMcpServerToken") {
-            socket.write(encodeLine({ id: req.id, result: {} } satisfies IpcResponse));
-            continue;
-          }
-          this.requests++;
-          const accessToken = this.tokens[Math.min(this.requests - 1, this.tokens.length - 1)];
-          const response: IpcResponse = { id: req.id, result: { accessToken } };
-          socket.write(encodeLine(response));
-        }
-      });
-    });
-  }
-
-  listen(): Promise<void> {
-    return new Promise((resolve) => this.server.listen(this.socketPath, resolve));
-  }
-  close(): void {
-    this.server.close();
-  }
-}
-
 /** Fake remote MCP HTTP server — the plain request/response flavor the
- * bridge speaks (v1 scope, see bridge-main.ts). Rejects a configurable set
- * of tokens with 401 so the bridge's retry-once path is genuinely exercised. */
+ * bridge speaks (v1 scope, see bridge-main.ts). A tool call carrying one of
+ * `rejectTokens` is refused with 401 — after `onReject` has run, so the
+ * bridge's retry-once path is genuinely exercised. */
 class FakeRemoteMcpServer {
   server: HttpServer;
   url = "";
   authHeadersSeen: string[] = [];
+  onReject: () => Promise<void> = async () => {};
   private readonly rejectTokens: Set<string>;
 
   constructor(rejectTokens: string[] = []) {
@@ -100,12 +56,14 @@ class FakeRemoteMcpServer {
         const auth = req.headers.authorization ?? "";
         this.authHeadersSeen.push(auth);
         const token = auth.replace(/^Bearer /, "");
-        if (this.rejectTokens.has(token)) {
-          res.statusCode = 401;
-          res.end(JSON.stringify({ error: "unauthorized" }));
+        const message = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { id?: number; method?: string };
+        if (message.method === "tools/call" && this.rejectTokens.has(token)) {
+          void this.onReject().then(() => {
+            res.statusCode = 401;
+            res.end(JSON.stringify({ error: "unauthorized" }));
+          });
           return;
         }
-        const message = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { id?: number; method?: string };
         res.setHeader("content-type", "application/json");
         if (message.method === "tools/call") {
           res.end(
@@ -301,29 +259,22 @@ describe("MCP bridge — real agent, real bridge subprocess, fake remote MCP ser
     await h.pool.stop("e1" as PatchbayAgentId);
   });
 
-  // The bridge's own retry: a 401 asks its IPC peer once more for a token.
-  // The orchestrator mints a fresh one only when the stored one expires, so
-  // here a peer of the test's own scripts the stale-then-fresh sequence.
+  // The bridge's own retry: a 401 asks the orchestrator once more for the
+  // credential. What it exists for: the stored key replaced while a request
+  // was out — the user reconnecting the server in another window, which
+  // writes the same secret storage.
   it("retries once with a fresh token when the remote endpoint returns 401", async () => {
     const remote = new FakeRemoteMcpServer(["stale-token"]);
     await remote.listen();
     atTestEnd(() => remote.close());
-    const tokenHost = new FakeMcpServerTokenHost(`${process.pid}-b`, ["stale-token", "fresh-token"]);
-    await tokenHost.listen();
-    atTestEnd(() => tokenHost.close());
-    const peer = spawnBridge(
-      bridgeServer({ bridgeScript: BRIDGE, socketPath: () => tokenHost.socketPath }, "ctx-retry", {
-        id: "github",
-        name: "github",
-        url: remote.url,
-        header: { headerName: "Authorization", valuePrefix: "Bearer " },
-      }),
-    );
-    await peer.request("initialize", INITIALIZE);
-    peer.send({ method: "notifications/initialized" });
-    const result = (await peer.request("tools/call", { name: "list_issues", arguments: {} })) as { content: { text: string }[] };
+    const h = await withRemote(remote, { name: "github", header: { headerName: "Authorization", valuePrefix: "Bearer ", token: "stale-token" } });
+    remote.onReject = () => h.orchestrator.mcpServerTokens.set(h.id, { accessToken: "fresh-token" });
+    await h.pool.connect(spec({ turn: [{ type: "callMcpTool", tool: "list_issues", server: "github" }] }, "e2" as PatchbayAgentId));
+    const patchbaySessionId = await h.sessions.createSession("e2" as PatchbayAgentId, "Fake Agent", dir);
+    await h.gates.prompt(patchbaySessionId, { text: "any open issues?" });
 
-    expect(result.content[0]!.text).toBe("issue #1: fix the thing");
+    const text = h.state().transcripts[patchbaySessionId]!.find((b) => b.kind === "text");
+    expect(text?.kind === "text" && text.text).toBe("issue #1: fix the thing");
     // the stale token was tried and rejected at least once, and every
     // request eventually got through on the fresh one
     expect(remote.authHeadersSeen).toContain("Bearer stale-token");
