@@ -2770,7 +2770,9 @@ describe("session history (list / resume / delete)", () => {
     const shown = await h.sessions.createSession("sh10" as PatchbayAgentId, "Fake Agent", cwd); // takes the view
 
     await h.idlePasses(); // the reaper releases it
-    await vi.waitFor(() => expect(h.sessions.isLive(patchbaySessionId), "reaper never fired").toBe(false), SETTLE);
+    // released, and the release's own work done — its close answered
+    const busy = () => h.state().sessions.find((s) => s.id === patchbaySessionId)?.busy;
+    await vi.waitFor(() => expect([h.sessions.isLive(patchbaySessionId), busy()], "reaper never finished").toEqual([false, []]), SETTLE);
     expect(h.capabilityTracker.matrix("sh10" as PatchbayAgentId)?.["session.close"]).toMatchObject({ declared: true, used: true });
     // the row survives — release frees resources, it never closes the chat
     expect(h.state().sessions.map((s) => s.id)).toEqual([patchbaySessionId, shown]);
