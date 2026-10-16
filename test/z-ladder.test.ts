@@ -4,10 +4,11 @@
 // layer at ≥ 50 paints over an open menu while Radix's modal lock still
 // routes every pointer event to it: the menu is invisible, clicks fire
 // blind, and the rest of the UI plays dead. This scan is the chokepoint.
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { filesUnder } from "./support/source-files";
 
 const WEBVIEW_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "webview");
 const PORTAL_BAND = 50;
@@ -23,13 +24,6 @@ const RUNGS = new Map([
   [46, "the toast"],
 ]);
 
-function walk(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) return walk(path);
-    return /\.(css|tsx|ts)$/.test(entry.name) ? [path] : [];
-  });
-}
 
 /** z values a file authors: CSS `z-index: N` plus Tailwind `z-N` / `z-[N]`. */
 function authoredZ(source: string): number[] {
@@ -42,7 +36,7 @@ function authoredZ(source: string): number[] {
 
 /** App files with the z values each authors. */
 const appLayers = () =>
-  walk(WEBVIEW_ROOT)
+  filesUnder(WEBVIEW_ROOT, /\.(css|tsx|ts)$/)
     .filter((path) => !relative(WEBVIEW_ROOT, path).split(sep).slice(0, 2).join("/").startsWith("components/ui"))
     .flatMap((path) => authoredZ(readFileSync(path, "utf8")).map((z) => ({ where: relative(WEBVIEW_ROOT, path), z })));
 

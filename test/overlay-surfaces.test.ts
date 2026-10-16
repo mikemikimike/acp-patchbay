@@ -8,24 +8,18 @@
 // scan is a tripwire for the shapes a hand-made overlay takes, not a proof
 // that none exists; the z ladder's closed rung set (z-ladder.test.ts) is the
 // other half, and the ui-gate drives the overlays themselves.
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { filesUnder } from "./support/source-files";
 
 const WEBVIEW_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "webview");
 const UI = join(WEBVIEW_ROOT, "components", "ui");
 
-function walk(dir: string, ext: RegExp): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) return walk(path, ext);
-    return ext.test(entry.name) ? [path] : [];
-  });
-}
 
 /** App files: everything outside the shared overlay layer. */
-const appFiles = (ext: RegExp) => walk(WEBVIEW_ROOT, ext).filter((path) => !path.startsWith(UI));
+const appFiles = (ext: RegExp) => filesUnder(WEBVIEW_ROOT, ext).filter((path) => !path.startsWith(UI));
 
 const hits = (ext: RegExp, pattern: RegExp) =>
   appFiles(ext).flatMap((path) =>

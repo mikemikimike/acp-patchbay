@@ -5,10 +5,11 @@
 // a max-width, so a wider minimum would push the overlay past the panel's
 // edge again, its last controls with it. The ui-gate's narrow sweep proves
 // the surfaces it opens; this scan holds every call site, opened or not.
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { filesUnder } from "./support/source-files";
 
 const WEBVIEW_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "webview");
 const UI = join(WEBVIEW_ROOT, "components", "ui");
@@ -22,13 +23,6 @@ const ANCHORED = [
   { file: "tooltip.tsx", content: "TooltipContent", radix: "tooltip" },
 ];
 
-function walk(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) return walk(path);
-    return entry.name.endsWith(".tsx") ? [path] : [];
-  });
-}
 
 describe("overlay bounds", () => {
   it("each anchored overlay is capped by the width Radix measures for it", () => {
@@ -41,7 +35,7 @@ describe("overlay bounds", () => {
 
   it("no call site gives an overlay a minimum width that could outgrow its space", () => {
     const tag = new RegExp(`<(${ANCHORED.map((a) => a.content).join("|")})\\b[^>]*?className=(?:"([^"]*)"|\\{\`([^\`]*)\`\\})`, "gs");
-    const violations = walk(WEBVIEW_ROOT)
+    const violations = filesUnder(WEBVIEW_ROOT, /\.tsx$/)
       .filter((path) => !path.startsWith(UI))
       .flatMap((path) =>
         [...readFileSync(path, "utf8").matchAll(tag)].flatMap((m) => {
