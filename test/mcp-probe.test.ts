@@ -6,9 +6,9 @@
 // a real session would have hit. The store-level tests (mcp-servers-store.test.ts)
 // prove the cwd handed in is the workspace's; this proves the handed-in cwd
 // is where the command actually runs.
-import { rm, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { tempDir } from "./support/teardown";
 import { probeMcpServer } from "../src/orchestrator/mcp-probe";
 
@@ -20,10 +20,6 @@ beforeEach(async () => {
   withMarker = await tempDir("patchbay-probe-marker-");
   bare = await tempDir("patchbay-probe-bare-");
   await writeFile(join(withMarker, "probe-marker"), "hello-from-workspace\n");
-});
-afterEach(async () => {
-  await rm(withMarker, { recursive: true, force: true });
-  await rm(bare, { recursive: true, force: true });
 });
 
 const target = (cwd: string) =>

@@ -2,13 +2,13 @@
 // agent named — cursor on that line's first non-blank character — clamped
 // into the file, and a directory location never opens as a folder.
 import * as assert from "node:assert";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as vscode from "vscode";
 import { Patchbay } from "./patchbay";
 import { focusNote } from "./focus-note";
 import { WINDOW_SETTLE, waitFor } from "../support/wait-for";
+import { tempDir } from "./temp-dir";
 
 /** Waits for the active editor to show `path` with the cursor at
  * [line, character]. `vscode.open` makes the editor active before it
@@ -35,11 +35,10 @@ async function assertCursor(path: string, line: number, character: number): Prom
 suite("open a tool-call location (issue #41)", () => {
   let dir: string;
   setup(async () => {
-    dir = await mkdtemp(join(tmpdir(), "patchbay-open-location-"));
+    dir = await tempDir("patchbay-open-location-");
   });
   teardown(async () => {
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
-    await rm(dir, { recursive: true, force: true });
   });
 
   test("a line lands the cursor on that line's first non-blank character", async () => {

@@ -6,10 +6,11 @@
 // a POSIX-quoted command line produces (issue #4); on POSIX it pins the
 // same contract.
 import * as assert from "node:assert";
-import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { readFile, realpath } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { internals } from "./patchbay";
+import { runTempDir } from "./temp-dir";
 
 /** The login executor is this suite's subject: it is the one thing the
  * suite reaches behind the views. */
@@ -23,10 +24,7 @@ interface Internal {
 suite("login task executor", () => {
   let dir: string;
   suiteSetup(async () => {
-    dir = await mkdtemp(join(tmpdir(), "patchbay-login-task-"));
-  });
-  suiteTeardown(async () => {
-    await rm(dir, { recursive: true, force: true });
+    dir = await runTempDir("patchbay-login-task-");
   });
 
   test("args reach the process verbatim and the exit code is the process's own", async () => {

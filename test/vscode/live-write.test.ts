@@ -5,18 +5,18 @@
 // the user's next save. The no-editor disk path stays covered by
 // verification.test.ts.
 import * as assert from "node:assert";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as vscode from "vscode";
 import { fakeAgentConfig } from "./fake-agent-config";
 import { fakeAgentPath, Patchbay } from "./patchbay";
+import { tempDir } from "./temp-dir";
 
 suite("live-buffer write (W1)", () => {
   test("agent write to an open dirty editor lands in the buffer and saves — no divergence window", async function () {
     this.timeout(30000);
     const pb = await Patchbay.open();
-    const dir = await mkdtemp(join(tmpdir(), "patchbay-live-write-"));
+    const dir = await tempDir("patchbay-live-write-");
     const target = join(dir, "shared.txt");
     await writeFile(target, "on disk\n", "utf8");
 
@@ -48,7 +48,6 @@ suite("live-buffer write (W1)", () => {
       assert.strictEqual(await readFile(target, "utf8"), "from agent\n", "disk matches the buffer");
     } finally {
       await pb.removeAdded();
-      await rm(dir, { recursive: true, force: true });
     }
   });
 
@@ -57,7 +56,7 @@ suite("live-buffer write (W1)", () => {
     // the real extension host produces.
     this.timeout(30000);
     const pb = await Patchbay.open();
-    const dir = await mkdtemp(join(tmpdir(), "patchbay-live-read-"));
+    const dir = await tempDir("patchbay-live-read-");
     const missing = join(dir, "missing.txt");
     try {
       const patchbayAgentId = await pb.addAgent(
@@ -72,7 +71,6 @@ suite("live-buffer write (W1)", () => {
       assert.strictEqual(pb.text(patchbaySessionId), `read: failed (-32002 Resource not found: ${missing})`);
     } finally {
       await pb.removeAdded();
-      await rm(dir, { recursive: true, force: true });
     }
   });
 });

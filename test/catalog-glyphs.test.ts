@@ -2,26 +2,14 @@
 // decides what data/icons/<id>.svg may contain, and the shipped directory
 // passing it against the shipped catalog — so `npm test` catches a bad
 // icon before the build does.
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { tempDir } from "./support/teardown";
 // @ts-expect-error — plain-JS script, no declaration; vitest transforms it.
 import { foldCatalog, loadGlyphs, parseGlyph } from "../scripts/catalog-glyphs.mjs";
 
 const ok = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M1 1h2v2H1z"/></svg>';
-
-/** Scratch icon directories, removed however the test ends — a suite that
- * litters the temp dir is its own kind of leftover. */
-const scratch: string[] = [];
-const scratchDir = () => {
-  const dir = mkdtempSync(join(tmpdir(), "glyphs-"));
-  scratch.push(dir);
-  return dir;
-};
-afterEach(() => {
-  for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
 
 describe("catalog glyph gate", () => {
   it("accepts one path in a viewBox'd svg, with comments and a title around it, either quote style", () => {
@@ -45,8 +33,8 @@ describe("catalog glyph gate", () => {
     for (const [svg, why] of cases) expect(() => parseGlyph(svg, "x.svg"), svg).toThrow(why);
   });
 
-  it("OS noise is skipped, a real stray file is not", () => {
-    const dir = scratchDir();
+  it("OS noise is skipped, a real stray file is not", async () => {
+    const dir = await tempDir("glyphs-");
     writeFileSync(join(dir, "acme.svg"), ok);
     writeFileSync(join(dir, ".DS_Store"), "\0");
     expect(Object.keys(loadGlyphs(dir, ["acme"]))).toEqual(["acme"]);

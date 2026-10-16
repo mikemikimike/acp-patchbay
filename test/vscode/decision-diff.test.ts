@@ -3,14 +3,14 @@
 // request alike — and the tab it opened closes once the ask is answered: it
 // shows a change that is no longer proposed.
 import * as assert from "node:assert";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import { join, sep } from "node:path";
 import * as vscode from "vscode";
 import { diffDir } from "../../src/orchestrator/diff-files";
 import { fakeAgentConfig } from "./fake-agent-config";
 import { fakeAgentPath, Patchbay } from "./patchbay";
 import { WINDOW_SETTLE, waitFor } from "../support/wait-for";
+import { tempDir } from "./temp-dir";
 
 /** Where one ask's diff texts live — under its own id. */
 const askDir = (patchbayAskId: string) => `${diffDir(patchbayAskId)}${sep}`;
@@ -36,11 +36,10 @@ function askDiffShown(patchbayAskId: string): Promise<true> {
 suite("decision diffs open and close with their ask (issue #90)", () => {
   let dir: string;
   setup(async () => {
-    dir = await mkdtemp(join(tmpdir(), "patchbay-decision-diff-"));
+    dir = await tempDir("patchbay-decision-diff-");
   });
   teardown(async () => {
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
-    await rm(dir, { recursive: true, force: true });
   });
 
   test("a proposed write's diff tab closes when the write is answered", async function () {

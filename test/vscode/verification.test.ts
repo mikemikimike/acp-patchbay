@@ -3,17 +3,17 @@
 // patchbay's gates earns used on those rows — the matrix's honest
 // data-plane record.
 import * as assert from "node:assert";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fakeAgentConfig } from "./fake-agent-config";
 import { fakeAgentPath, Patchbay } from "./patchbay";
+import { tempDir } from "./temp-dir";
 
 suite("opportunistic fs/terminal verification", () => {
   test("fs read+write and terminal get used when exercised; rows start declared-not-used", async function () {
     this.timeout(30000);
     const pb = await Patchbay.open();
-    const dir = await mkdtemp(join(tmpdir(), "patchbay-verify-e2e-"));
+    const dir = await tempDir("patchbay-verify-e2e-");
     const readTarget = join(dir, "read-me.txt");
     const writeTarget = join(dir, "written.txt");
     await writeFile(readTarget, "hello", "utf8");
@@ -53,7 +53,6 @@ suite("opportunistic fs/terminal verification", () => {
     } finally {
       await pb.removeAdded();
       await pb.removeMachineRule("node -e ok");
-      await rm(dir, { recursive: true, force: true });
     }
   });
 });

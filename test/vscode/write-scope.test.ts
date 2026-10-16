@@ -5,17 +5,17 @@
 // cwd standing in for an absent folder is never the workspace — this suite
 // runs with no folder open, so that state is live here.
 import * as assert from "node:assert";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fakeAgentConfig } from "./fake-agent-config";
 import { fakeAgentPath, Patchbay } from "./patchbay";
+import { tempDir } from "./temp-dir";
 
 suite("write scope (issues #56, #102)", () => {
   test("a root added to the session asks until Session roots is on, then auto-accepts; a `..` out of it asks; the fallback cwd is not the workspace", async function () {
     this.timeout(45000);
     const pb = await Patchbay.open();
-    const dir = await mkdtemp(join(tmpdir(), "patchbay-write-scope-"));
+    const dir = await tempDir("patchbay-write-scope-");
     const root = join(dir, "root");
     await mkdir(root);
     const inside = join(root, "inside.txt");
@@ -68,7 +68,6 @@ suite("write scope (issues #56, #102)", () => {
     } finally {
       await pb.setMachineWriteSwitch("sessionRoots", false);
       await pb.removeAdded();
-      await rm(dir, { recursive: true, force: true });
     }
   });
 });
